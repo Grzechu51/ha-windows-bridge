@@ -5,7 +5,7 @@
 <h1 align="center">HA Windows Bridge</h1>
 
 <p align="center">
-  Integracja komputera z Windows z Home Assistant przez lokalny broker MQTT.
+  Integracja komputera z Home Assistant przez lokalny broker MQTT.
 </p>
 
 <p align="center">
@@ -15,12 +15,9 @@
 </p>
 
 HA Windows Bridge udostępnia Home Assistantowi sterowanie dźwiękiem, stan programów,
-dane systemowe i aktywną sesję multimediów komputera z Windows 10/11. Aplikacja Windows
+dane systemowe i aktywną sesję multimediów komputera z Windows 10/11. Aplikacja
 komunikuje się lokalnie przez MQTT, a instalowana przez HACS integracja tworzy wszystkie
 encje pod jednym urządzeniem **HA Windows Bridge**.
-
-Instalator zawiera środowisko uruchomieniowe i wymagane biblioteki. Użytkownik końcowy
-nie musi instalować Pythona ani ręcznie kopiować katalogów programu.
 
 ## Najważniejsze możliwości
 
@@ -36,23 +33,6 @@ nie musi instalować Pythona ani ręcznie kopiować katalogów programu.
 
 Każda funkcja jest opcjonalna. Dodatkowe dane oraz zdalne uruchamianie i zamykanie
 programów są domyślnie wyłączone.
-
-## Jak działa wersja 1.0
-
-Wersja 1.0 nie tworzy już osobnych encji należących do standardowej integracji MQTT.
-Aplikacja publikuje jedno ograniczone i walidowane ogłoszenie urządzenia pod:
-
-~~~text
-ha-windows-bridge/devices/<device_id>
-~~~
-
-Integracja HA Windows Bridge odbiera ogłoszenie przez skonfigurowaną w Home Assistant
-integrację MQTT i tworzy platformy number, switch, binary_sensor, sensor, button, select
-oraz media_player. Regulatory, sensory i odtwarzacz są widoczne w jednym wpisie
-integracji i pod jednym urządzeniem.
-
-Zmiana włączonych funkcji lub aplikacji aktualizuje ten sam wpis. Stabilne identyfikatory
-zapobiegają tworzeniu kopii encji, a definicje wyłączonych funkcji są usuwane z rejestru.
 
 ## Wymagania
 
@@ -77,16 +57,8 @@ ponownym uruchomieniu Home Assistant.
 
 1. Otwórz [najnowsze wydanie](https://github.com/Grzechu51/ha-windows-bridge/releases/latest).
 2. Pobierz **HA-Windows-Bridge-Setup-1.0.0.exe**.
-3. Porównaj sumę SHA-256 z plikiem **SHA256SUMS-1.0.0.txt**.
-4. Uruchom instalator i opcjonalnie utwórz skrót na pulpicie.
-5. Uruchom **HA Windows Bridge** z menu Start.
-
-Archiwum **HA-Windows-Bridge-1.0.0-win64.zip** jest wersją przenośną. Po rozpakowaniu
-należy zachować cały katalog razem z folderem **_internal**.
-
-Instalator nie jest obecnie podpisany płatnym certyfikatem Code Signing, dlatego
-Windows SmartScreen może pokazać ostrzeżenie. Pobieraj pliki wyłącznie z oficjalnego
-wydania i zawsze sprawdzaj sumę SHA-256.
+3. Uruchom instalator i opcjonalnie utwórz skrót na pulpicie.
+4. Uruchom **HA Windows Bridge** z menu Start.
 
 ## Pierwsza konfiguracja
 
@@ -112,47 +84,6 @@ Pojedynczy obraz jest ograniczony do 1 MB. Akceptowane są wyłącznie dane PNG,
 GIF lub WebP o zgodnym typie MIME i sygnaturze pliku. Brak miniatury nie blokuje
 pozostałych funkcji odtwarzacza.
 
-## Bezpieczeństwo MQTT
-
-Utwórz osobne konto brokera dla każdego komputera. Dla domyślnej konfiguracji 1.0
-wystarczający punkt wyjścia ACL Mosquitto to:
-
-~~~text
-user ha_windows_bridge_pc
-topic read homeassistant/status
-topic readwrite ha-windows-bridge/#
-~~~
-
-Jeżeli zmienisz główny topic, odpowiednio zawęź drugą regułę. Wersja 1.0 nie potrzebuje
-stałego prawa zapisu do homeassistant/#.
-
-Port 1883 bez TLS jest odpowiedni wyłącznie w zaufanej sieci lokalnej. Dla połączeń
-poza taką siecią użyj TLS, zwykle na porcie 8883, VPN i poprawnej weryfikacji
-certyfikatu. Nie wystawiaj niezabezpieczonego brokera bezpośrednio do Internetu.
-
-Hasło MQTT jest szyfrowane przez Windows DPAPI i może je odszyfrować tylko ten sam
-użytkownik Windows. Konfiguracja oraz rotowane logi znajdują się w
-**%LOCALAPPDATA%\HAWindowsBridge**.
-
-## Uruchomienie ze źródeł
-
-Python 3.11 lub nowszy jest wymagany wyłącznie do pracy ze źródłami:
-
-~~~powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -c constraints.txt -e ".[dev]"
-.\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe main.py
-~~~
-
-Budowanie wersji przenośnej, integracji i instalatora:
-
-~~~powershell
-.\build.ps1 -Installer
-~~~
-
-Skrypt uruchamia testy, generuje ikonę, buduje aplikację i tworzy plik sum SHA-256.
-Wymagany jest Inno Setup 7 dostępny jako **iscc.exe** albo w **tools/InnoSetup/7.0.2**.
 
 ## Ograniczenia
 
