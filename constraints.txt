@@ -8,7 +8,7 @@ winrt-Windows.Foundation==3.2.1
 winrt-Windows.Foundation.Collections==3.2.1
 winrt-Windows.Media.Control==3.2.1
 winrt-Windows.Storage.Streams==3.2.1
-PyInstaller==6.22.0
+PyInstaller==6.22.2
 pytest==9.1.1
 ruff==0.16.2
 bandit==1.9.4
