@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from ha_windows_bridge.system_monitor import WindowsSystemMonitor
+
+
+def test_context_snapshot_has_safe_windows_values() -> None:
+    snapshot = WindowsSystemMonitor().context_snapshot()
+    assert snapshot.idle_seconds >= 0
+    assert isinstance(snapshot.locked, bool)
+    assert isinstance(snapshot.fullscreen, bool)
+
+
+def test_missing_application_is_not_started(tmp_path) -> None:
+    assert WindowsSystemMonitor.start_application(str(tmp_path / "missing.exe")) is False
+
+
+def test_store_spotify_path_is_started_through_apps_folder(monkeypatch) -> None:
+    opened = []
+    monkeypatch.setattr(
+        WindowsSystemMonitor,
+        "_shell_open",
+        staticmethod(lambda target: opened.append(target) or True),
+    )
+    path = (
+        r"C:\Program Files\WindowsApps\SpotifyAB.SpotifyMusic_1.2.3.0_x64__zpdnekdrzrea0"
+        r"\Spotify.exe"
+    )
+
+    assert WindowsSystemMonitor.start_application(path, display_name="Spotify") is True
+    assert opened == [r"shell:AppsFolder\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify"]
+
+
+def test_running_process_names_is_case_insensitive(monkeypatch) -> None:
+    processes = [
+        SimpleNamespace(info={"name": "Discord.exe"}),
+        SimpleNamespace(info={"name": "chrome.exe"}),
+    ]
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.psutil.process_iter",
+        lambda _attrs: processes,
+    )
+
+    assert WindowsSystemMonitor.running_process_names(["discord.EXE"]) == {"discord.exe"}
+
+
+def test_close_application_requests_graceful_close_for_matching_windows(monkeypatch) -> None:
+    spotify = SimpleNamespace(info={"pid": 10, "name": "Spotify.exe"})
+    chrome = SimpleNamespace(info={"pid": 20, "name": "chrome.exe"})
+    posted = []
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.psutil.process_iter",
+        lambda _attrs: [spotify, chrome],
+    )
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.win32gui.EnumWindows",
+        lambda callback, extra: [callback(hwnd, extra) for hwnd in (100, 200)],
+    )
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.win32gui.IsWindowVisible",
+        lambda _hwnd: True,
+    )
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.win32process.GetWindowThreadProcessId",
+        lambda hwnd: (1, 10 if hwnd == 100 else 20),
+    )
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.win32gui.PostMessage",
+        lambda hwnd, message, wparam, lparam: posted.append((hwnd, message, wparam, lparam)),
+    )
+
+    assert WindowsSystemMonitor.close_application("spotify.exe") == 1
+    assert len(posted) == 1
+    assert posted[0][0] == 100
+
+
+def test_remote_close_refuses_protected_windows_process(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.psutil.process_iter",
+        lambda _attrs: (_ for _ in ()).throw(AssertionError("process list must not be scanned")),
+    )
+
+    assert WindowsSystemMonitor.close_application("explorer.exe") == -1
+
+
+def test_nvidia_metrics_are_parsed(monkeypatch) -> None:
+    monitor = WindowsSystemMonitor()
+    monitor._nvidia_smi = "nvidia-smi"
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="97, 71, 238.5, 6800, 8192\n"),
+    )
+
+    metrics = monitor._gpu_metrics()
+
+    assert metrics["gpu_percent"] == 97
+    assert metrics["gpu_temperature"] == 71
+    assert metrics["gpu_power_watts"] == 238.5
+    assert metrics["gpu_memory_used_mb"] == 6800
+
+
+def test_gpu_metrics_are_cached_for_ten_seconds(monkeypatch) -> None:
+    monitor = WindowsSystemMonitor()
+    calls = []
+    monkeypatch.setattr(
+        monitor,
+        "_gpu_metrics",
+        lambda: calls.append(True) or {"gpu_percent": 42.0},
+    )
+    moments = iter([20.0, 25.0, 31.0])
+    monkeypatch.setattr("ha_windows_bridge.system_monitor.time.monotonic", lambda: next(moments))
+
+    assert monitor.system_metrics().gpu_percent == 42.0
+    assert monitor.system_metrics().gpu_percent == 42.0
+    assert monitor.system_metrics().gpu_percent == 42.0
+    assert len(calls) == 2

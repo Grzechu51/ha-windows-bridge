@@ -1,0 +1,23 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "To urządzenie jest już skonfigurowane.",
+      "discovery_only": "HA Windows Bridge zostanie wykryty automatycznie po połączeniu aplikacji Windows z MQTT.",
+      "invalid_discovery": "Wiadomość wykrywania MQTT jest nieprawidłowa.",
+      "no_entities": "W aplikacji Windows nie włączono żadnych encji."
+    },
+    "step": {
+      "confirm": {
+        "title": "Dodaj {name}",
+        "description": "Czy chcesz dodać komputer **{name}**? Wszystkie włączone regulatory, przełączniki, sensory i Media Player będą widoczne w jednej integracji HA Windows Bridge."
+      }
+    }
+  },
+  "entity": {
+    "media_player": {
+      "media_player": {
+        "name": "Media Player"
+      }
+    }
+  }
+}
