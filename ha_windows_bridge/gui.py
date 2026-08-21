@@ -360,7 +360,7 @@ class MainWindow(QMainWindow):
             "TLS szyfruje login, hasło i wiadomości przesyłane do brokera. Włącz tę opcję tylko, "
             "jeśli broker obsługuje TLS — zwykle na porcie 8883."
         )
-        # Kept in configuration only to locate and remove legacy 0.9 Discovery topics.
+        # Retained internally for Home Assistant birth-topic compatibility.
         self.discovery_prefix = QLineEdit()
         self.keepalive = QSpinBox()
         self.keepalive.setRange(5, 3600)

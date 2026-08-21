@@ -61,28 +61,6 @@ zapobiegają tworzeniu kopii encji, a definicje wyłączonych funkcji są usuwan
 - HACS do zalecanej instalacji integracji HA Windows Bridge;
 - konto MQTT przeznaczone dla tego komputera.
 
-## Czysta migracja z 0.9 do 1.0
-
-Wersja 1.0 zmienia właściciela encji z integracji MQTT na HA Windows Bridge. Zalecana
-jest jednorazowa czysta migracja:
-
-1. W starej aplikacji Windows otwórz **Ustawienia** i wybierz
-   **Wyczyść MQTT i odinstaluj**. Pozwól aplikacji usunąć retained topiki przed
-   uruchomieniem deinstalatora.
-2. W Home Assistant przejdź do **Ustawienia → Urządzenia i usługi** i usuń istniejący
-   wpis **HA Windows Bridge**, jeśli był dodany.
-3. W HACS usuń starą wersję integracji HA Windows Bridge i uruchom Home Assistant ponownie.
-4. Jeśli w integracji MQTT nadal widać stare urządzenie lub encje, usuń je po zakończeniu
-   czyszczenia brokera.
-5. Dla całkowicie świeżej konfiguracji usuń katalog
-   **%LOCALAPPDATA%\HAWindowsBridge**. Ten krok bezpowrotnie usuwa konfigurację,
-   zaszyfrowane hasło, historię topiców i logi, więc wykonaj wcześniej kopię potrzebnych danych.
-6. Zainstaluj integrację 1.0 przez HACS, uruchom ponownie Home Assistant, a następnie
-   zainstaluj aplikację Windows 1.0 i skonfiguruj ją od początku.
-
-Nie instaluj 1.0 na działającej 0.9 bez wcześniejszego czyszczenia, ponieważ retained
-definicje starego MQTT Discovery mogą pozostać w brokerze jako duplikaty.
-
 ## Instalacja integracji Home Assistant
 
 [![Otwórz repozytorium w HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Grzechu51&repository=ha-windows-bridge&category=integration)

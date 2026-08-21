@@ -48,13 +48,6 @@ aktywną sesję Windows.
 Obraz jest ograniczony do 1 MB i weryfikowany jako PNG, JPEG, GIF albo WebP. Nie każda
 aplikacja przekazuje Windowsowi wszystkie metadane i komendy.
 
-## Aktualizacja z wersji 0.9
-
-Przed instalacją 1.0 użyj w starej aplikacji opcji **Wyczyść MQTT i odinstaluj**.
-Następnie usuń stary wpis integracji w Home Assistant i starą wersję z HACS, uruchom
-Home Assistant ponownie i zainstaluj obie części 1.0. Zapobiega to pozostawieniu
-retained encji należących do standardowej integracji MQTT.
-
 ## Usuwanie
 
 1. W aplikacji Windows wybierz **Wyczyść MQTT i odinstaluj**.
