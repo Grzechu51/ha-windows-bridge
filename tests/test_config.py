@@ -37,6 +37,7 @@ def test_settings_round_trip_keeps_password_out_of_json(tmp_path) -> None:
     store = SettingsStore(tmp_path, secrets)
     config = AppConfig(
         device_name="Gaming PC",
+        theme="light",
         mqtt=MqttConfig(host="192.168.1.2", password="super-secret"),
         apps=[
             AudioAppConfig(
@@ -59,6 +60,7 @@ def test_settings_round_trip_keeps_password_out_of_json(tmp_path) -> None:
     assert store.load().apps[0].executable_path == "C:/Apps/Spotify.exe"
     assert store.load().apps[0].allow_remote_start is True
     assert store.load().apps[0].allow_remote_close is True
+    assert store.load().theme == "light"
 
 
 def test_duplicate_enabled_slugs_are_rejected() -> None:
@@ -101,6 +103,7 @@ def test_first_run_defaults_are_user_friendly() -> None:
     assert config.minimize_to_tray is True
     assert config.auto_connect is True
     assert config.language == "pl"
+    assert config.theme == "dark"
     assert config.control_master_volume is True
     assert config.control_active_app is False
     assert config.publish_initial_state is True
@@ -168,7 +171,7 @@ def test_version_04_optional_features_are_disabled_during_migration() -> None:
         }
     )
 
-    assert legacy.schema_version == 4
+    assert legacy.schema_version == 6
     assert legacy.control_active_app is False
     assert legacy.publish_activity is False
     assert legacy.publish_idle is False

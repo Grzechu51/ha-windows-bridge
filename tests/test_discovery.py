@@ -102,3 +102,20 @@ def test_cleanup_topics_cover_disabled_features_and_removed_default_app() -> Non
     assert "homeassistant/sensor/gaming_pc_123/cpu/config" in stale
     assert "homeassistant/binary_sensor/gaming_pc_123/microphone_active/config" in stale
     assert "homeassistant/number/gaming_pc_123/youtube_music_volume/config" in stale
+
+
+def test_power_actions_and_windows_notifications_are_discovered() -> None:
+    config = sample_config()
+    config.allow_power_actions = True
+    config.enable_windows_notifications = True
+
+    messages = discovery_messages(config)
+    topics = {message.topic for message in messages}
+
+    assert "homeassistant/button/gaming_pc_123/power_lock/config" in topics
+    assert "homeassistant/button/gaming_pc_123/power_shutdown/config" in topics
+    assert "homeassistant/button/gaming_pc_123/power_cancel/config" in topics
+    assert "homeassistant/notify/gaming_pc_123/windows_notification/config" in topics
+    notification = next(message.payload for message in messages if "/notify/" in message.topic)
+    assert notification["command_topic"] == "hawn/gaming-pc/notification/show/set"
+    assert notification["unique_id"] == "gaming_pc_123_windows_notification"

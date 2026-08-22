@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 import subprocess  # nosec B404
 import time
@@ -110,9 +111,9 @@ class WindowsSystemMonitor:
                 return False
             left, top, right, bottom = win32gui.GetWindowRect(hwnd)
             monitor = win32gui.MonitorFromWindow(hwnd, 2)
-            monitor_left, monitor_top, monitor_right, monitor_bottom = win32gui.GetMonitorInfo(monitor)[
-                "Monitor"
-            ]
+            monitor_left, monitor_top, monitor_right, monitor_bottom = win32gui.GetMonitorInfo(
+                monitor
+            )["Monitor"]
             tolerance = 2
             return (
                 left <= monitor_left + tolerance
@@ -247,10 +248,23 @@ class WindowsSystemMonitor:
 
     @staticmethod
     def _find_nvidia_smi() -> str | None:
-        fallback = Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / (
-            "NVIDIA Corporation/NVSMI/nvidia-smi.exe"
-        )
-        return str(fallback) if fallback.is_file() else None
+        """Locate NVIDIA's signed utility in trusted Windows installation folders."""
+        system_root = Path(os.environ.get("SYSTEMROOT", "C:/Windows"))
+        candidates = [system_root / "System32/nvidia-smi.exe"]
+        for variable in ("ProgramW6432", "PROGRAMFILES", "PROGRAMFILES(X86)"):
+            root = os.environ.get(variable)
+            if root:
+                candidates.append(Path(root) / "NVIDIA Corporation/NVSMI/nvidia-smi.exe")
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            normalized = os.path.normcase(os.path.abspath(candidate))
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            if candidate.is_file():
+                return str(candidate)
+        return None
 
     def _gpu_metrics(self) -> dict[str, float]:
         if not self._nvidia_smi:
@@ -271,21 +285,24 @@ class WindowsSystemMonitor:
                 check=True,
                 creationflags=flags,
             )
-            values = [float(value.strip()) for value in completed.stdout.splitlines()[0].split(",")]
-            if len(values) != 5:
-                return {}
-            return dict(
-                zip(
-                    (
-                        "gpu_percent",
-                        "gpu_temperature",
-                        "gpu_power_watts",
-                        "gpu_memory_used_mb",
-                        "gpu_memory_total_mb",
-                    ),
-                    values,
-                    strict=True,
-                )
+            raw_values = completed.stdout.splitlines()[0].split(",")
+            keys = (
+                "gpu_percent",
+                "gpu_temperature",
+                "gpu_power_watts",
+                "gpu_memory_used_mb",
+                "gpu_memory_total_mb",
             )
-        except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+            if len(raw_values) != len(keys):
+                return {}
+            metrics: dict[str, float] = {}
+            for key, raw_value in zip(keys, raw_values, strict=True):
+                try:
+                    value = float(raw_value.strip())
+                except ValueError:
+                    continue
+                if math.isfinite(value):
+                    metrics[key] = value
+            return metrics
+        except (OSError, subprocess.SubprocessError, IndexError):
             return {}

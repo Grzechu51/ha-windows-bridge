@@ -102,6 +102,14 @@ def system_metric_topic(config: AppConfig, metric: str) -> str:
     return f"{config.mqtt.base_topic}/system/{metric}/state"
 
 
+def power_action_topic(config: AppConfig, action: str) -> str:
+    return f"{config.mqtt.base_topic}/system/power/{action}/set"
+
+
+def windows_notification_topic(config: AppConfig) -> str:
+    return f"{config.mqtt.base_topic}/notification/show/set"
+
+
 def _device(config: AppConfig) -> dict:
     return {
         "identifiers": [config.device_id],
@@ -394,7 +402,7 @@ def discovery_messages(
                 "state_topic": pc_active_topic(config),
                 "payload_on": "ON",
                 "payload_off": "OFF",
-                "icon": "mdi:account-keyboard",
+                "icon": "mdi:account-check",
             }
         )
         messages.append(
@@ -553,6 +561,50 @@ def discovery_messages(
             )
         )
 
+    if config.allow_power_actions:
+        power_buttons = (
+            ("lock", "Lock Windows", "mdi:lock"),
+            ("sleep", "Sleep PC", "mdi:power-sleep"),
+            ("restart", "Restart PC", "mdi:restart-alert"),
+            ("shutdown", "Shut Down PC", "mdi:power"),
+            ("cancel", "Cancel Power Action", "mdi:cancel"),
+        )
+        for action, name, icon in power_buttons:
+            power_payload = _base_entity(config, f"{object_root}_power_{action}")
+            power_payload.update(
+                {
+                    "name": name,
+                    "command_topic": power_action_topic(config, action),
+                    "payload_press": "PRESS",
+                    "icon": icon,
+                }
+            )
+            messages.append(
+                DiscoveryMessage(
+                    f"{prefix}/button/{object_root}/power_{action}/config",
+                    power_payload,
+                )
+            )
+
+    if config.enable_windows_notifications:
+        notification_payload = _base_entity(
+            config,
+            f"{object_root}_windows_notification",
+        )
+        notification_payload.update(
+            {
+                "name": "Windows Notification",
+                "command_topic": windows_notification_topic(config),
+                "icon": "mdi:message-badge-outline",
+            }
+        )
+        messages.append(
+            DiscoveryMessage(
+                f"{prefix}/notify/{object_root}/windows_notification/config",
+                notification_payload,
+            )
+        )
+
     return messages
 
 
@@ -574,6 +626,8 @@ def all_possible_discovery_messages(config: AppConfig) -> list[DiscoveryMessage]
     expanded.publish_session_lock = True
     expanded.publish_system_stats = True
     expanded.publish_gpu_stats = True
+    expanded.allow_power_actions = True
+    expanded.enable_windows_notifications = True
     expanded.control_microphone = True
     expanded.control_audio_output = True
     if not any(app.slug == "youtube_music" for app in expanded.apps):

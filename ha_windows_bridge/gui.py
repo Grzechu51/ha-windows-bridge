@@ -5,6 +5,7 @@ import logging
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import psutil
@@ -42,6 +43,12 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .audio import AudioApplication, AudioOutputDevice, WindowsAudioService
 from .config import AppConfig, AudioAppConfig, MqttConfig, SettingsStore, slugify
+from .data_exchange import (
+    build_diagnostic_report,
+    export_configuration,
+    import_configuration,
+    save_diagnostic_report,
+)
 from .discovery import all_possible_mqtt_topics
 from .i18n import LocalizedFormatter, set_active_language, translate
 from .mqtt_bridge import MqttBridge
@@ -58,6 +65,7 @@ from .ui_components import (
     StatusCard,
     TitleBar,
 )
+from .updater import GitHubUpdateChecker, UpdateInfo
 
 
 class UiSignals(QObject):
@@ -69,6 +77,8 @@ class UiSignals(QObject):
     volume_snapshot = Signal(object)
     connection_test = Signal(bool, str)
     cleanup_finished = Signal(object)
+    windows_notification = Signal(str, str)
+    update_checked = Signal(object)
 
 
 class QtLogHandler(logging.Handler):
@@ -93,6 +103,7 @@ class MainWindow(QMainWindow):
         store: SettingsStore,
         startup: WindowsStartupManager,
         logger: logging.Logger,
+        theme_changed: Callable[[str], None] | None = None,
         launch_minimized: bool = False,
     ):
         super().__init__()
@@ -104,11 +115,14 @@ class MainWindow(QMainWindow):
                 f"ha-windows-bridge/{slugify(loaded_config.device_name, 'windows_pc')}"
             )
         suggested_topic = f"ha-windows-bridge/{slugify(loaded_config.device_name, 'windows_pc')}"
-        self._base_topic_is_automatic = legacy_base_topic or loaded_config.mqtt.base_topic == suggested_topic
+        self._base_topic_is_automatic = (
+            legacy_base_topic or loaded_config.mqtt.base_topic == suggested_topic
+        )
         self.current_config = loaded_config
         self.store = store
         self.startup = startup
         self.logger = logger
+        self._theme_changed_callback = theme_changed
         self.pending_uninstaller: Path | None = None
         self._uninstaller_path = self._find_uninstaller()
         self._known_mqtt_topics: set[str] = set()
@@ -123,6 +137,9 @@ class MainWindow(QMainWindow):
         self._tray_notice_shown = False
         self._volume_refresh_running = False
         self._last_status_text = "Zatrzymano"
+        self._cleanup_then_uninstall = False
+        self._latest_release_url = ""
+        self.update_checker = GitHubUpdateChecker()
         self._language = "pl"
         self._self_process = psutil.Process()
         self._cpu_count = max(1, psutil.cpu_count(logical=True) or 1)
@@ -160,6 +177,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(120, self._refresh_existing_app_metadata)
         QTimer.singleShot(180, self._refresh_card_volumes)
         QTimer.singleShot(220, self._refresh_audio_outputs)
+        QTimer.singleShot(5000, self._automatic_update_check)
 
         if self.current_config.auto_connect and not self.current_config.validation_errors():
             QTimer.singleShot(180, self.start_bridge)
@@ -325,7 +343,9 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(30, 24, 30, 28)
         layout.setSpacing(22)
-        header, _ = self._page_header("Połączenie z brokerem MQTT", "Skonfiguruj połączenie z brokerem MQTT.")
+        header, _ = self._page_header(
+            "Połączenie z brokerem MQTT", "Skonfiguruj połączenie z brokerem MQTT."
+        )
         layout.addWidget(header)
 
         form = QFrame()
@@ -502,6 +522,25 @@ class MainWindow(QMainWindow):
             "Utwórz w Home Assistant odtwarzacz aktywnej sesji multimediów Windows. Wymaga integracji HA Windows Bridge.",
         )
         layout.addWidget(self.media_player_row)
+        remote_title = QLabel("Zdalne sterowanie")
+        remote_title.setObjectName("sectionTitle")
+        layout.addWidget(remote_title)
+        self.power_actions_row = SettingRow(
+            "Bezpieczne akcje systemowe",
+            "Dodaj przyciski blokady, uśpienia, restartu i wyłączenia. Restart i wyłączenie można anulować przez 30 sekund.",
+        )
+        self.windows_notifications_row = SettingRow(
+            "Powiadomienia Windows",
+            "Pozwól Home Assistant wyświetlać kontrolowane powiadomienia w zasobniku Windows.",
+        )
+        remote_group = QFrame()
+        remote_group.setObjectName("settingsGroup")
+        remote_layout = QVBoxLayout(remote_group)
+        remote_layout.setContentsMargins(0, 0, 0, 0)
+        remote_layout.setSpacing(12)
+        remote_layout.addWidget(self.power_actions_row)
+        remote_layout.addWidget(self.windows_notifications_row)
+        layout.addWidget(remote_group)
 
         features_title = QLabel("Dodatkowe sensory")
         features_title.setObjectName("sectionTitle")
@@ -572,7 +611,9 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
-        header, header_layout = self._page_header("Logi", "Podgląd zdarzeń aplikacji, MQTT i Windows Core Audio.")
+        header, header_layout = self._page_header(
+            "Logi", "Podgląd zdarzeń aplikacji, MQTT i Windows Core Audio."
+        )
         clear_button = QPushButton("Wyczyść")
         clear_button.setObjectName("outlineButton")
         clear_button.clicked.connect(self.logs_clear)
@@ -595,7 +636,9 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(30, 24, 30, 28)
         layout.setSpacing(18)
-        header, _ = self._page_header("Ustawienia", "Uruchamianie, synchronizacja i dane aplikacji.")
+        header, _ = self._page_header(
+            "Ustawienia", "Uruchamianie, synchronizacja i dane aplikacji."
+        )
         layout.addWidget(header)
 
         status_title = QLabel("Status")
@@ -663,7 +706,7 @@ class MainWindow(QMainWindow):
         self.poll_interval.setDecimals(1)
         self.poll_interval.setSuffix(" s")
         self.poll_interval.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.poll_interval.setFixedWidth(125)
+        self.poll_interval.setFixedWidth(96)
         poll_layout.addWidget(self.poll_interval)
 
         sync_group = QFrame()
@@ -678,6 +721,24 @@ class MainWindow(QMainWindow):
         general_title = QLabel("Ogólne")
         general_title.setObjectName("sectionTitle")
         layout.addWidget(general_title)
+
+        theme_card = QFrame()
+        theme_card.setObjectName("settingRow")
+        theme_layout = QHBoxLayout(theme_card)
+        theme_layout.setContentsMargins(16, 14, 16, 14)
+        theme_text = QVBoxLayout()
+        theme_title = QLabel("Motyw")
+        theme_title.setObjectName("settingTitle")
+        theme_description = QLabel("Wybierz ciemny lub jasny wygląd aplikacji.")
+        theme_description.setObjectName("settingDescription")
+        theme_text.addWidget(theme_title)
+        theme_text.addWidget(theme_description)
+        theme_layout.addLayout(theme_text, 1)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Ciemny", "dark")
+        self.theme_combo.addItem("Jasny", "light")
+        self.theme_combo.setFixedWidth(112)
+        theme_layout.addWidget(self.theme_combo)
 
         language_card = QFrame()
         language_card.setObjectName("settingRow")
@@ -696,12 +757,14 @@ class MainWindow(QMainWindow):
         self.language_combo = QComboBox()
         self.language_combo.addItem("Polski", "pl")
         self.language_combo.addItem("English", "en")
-        self.language_combo.setFixedWidth(150)
+        self.language_combo.setFixedWidth(112)
         language_layout.addWidget(self.language_combo)
 
         data_card = QFrame()
         data_card.setObjectName("dataCard")
-        data_layout = QHBoxLayout(data_card)
+        data_layout = QVBoxLayout(data_card)
+        data_layout.setContentsMargins(16, 14, 16, 14)
+        data_layout.setSpacing(10)
         data_text = QVBoxLayout()
         data_title = QLabel("Dane aplikacji")
         data_title.setObjectName("settingTitle")
@@ -710,11 +773,27 @@ class MainWindow(QMainWindow):
         self.config_path_label.setWordWrap(True)
         data_text.addWidget(data_title)
         data_text.addWidget(self.config_path_label)
-        data_layout.addLayout(data_text, 1)
+        data_layout.addLayout(data_text)
+        data_buttons = QHBoxLayout()
+        data_buttons.setSpacing(8)
+        data_buttons.addStretch()
         open_data = QPushButton("Otwórz folder")
         open_data.setObjectName("outlineButton")
         open_data.clicked.connect(self._open_data_folder)
-        data_layout.addWidget(open_data)
+        self.import_button = QPushButton("Importuj")
+        self.import_button.setObjectName("outlineButton")
+        self.export_button = QPushButton("Eksportuj")
+        self.export_button.setObjectName("outlineButton")
+        self.diagnostics_button = QPushButton("Raport diagnostyczny")
+        self.diagnostics_button.setObjectName("outlineButton")
+        for button in (
+            open_data,
+            self.import_button,
+            self.export_button,
+            self.diagnostics_button,
+        ):
+            data_buttons.addWidget(button)
+        data_layout.addLayout(data_buttons)
 
         license_card = QFrame()
         license_card.setObjectName("dataCard")
@@ -722,9 +801,7 @@ class MainWindow(QMainWindow):
         license_text = QVBoxLayout()
         license_title = QLabel("Kod źródłowy i licencja")
         license_title.setObjectName("settingTitle")
-        license_description = QLabel(
-            "GNU AGPL-3.0. Program jest dostarczany bez gwarancji."
-        )
+        license_description = QLabel("GNU AGPL-3.0. Program jest dostarczany bez gwarancji.")
         license_description.setObjectName("settingDescription")
         license_text.addWidget(license_title)
         license_text.addWidget(license_description)
@@ -732,11 +809,27 @@ class MainWindow(QMainWindow):
         open_source = QPushButton("Otwórz GitHub")
         open_source.setObjectName("outlineButton")
         open_source.clicked.connect(
-            lambda: QDesktopServices.openUrl(
-                QUrl("https://github.com/Grzechu51/ha-windows-bridge")
-            )
+            lambda: QDesktopServices.openUrl(QUrl("https://github.com/Grzechu51/ha-windows-bridge"))
         )
         license_layout.addWidget(open_source)
+        self.auto_update_row = SettingRow(
+            "Automatycznie sprawdzaj aktualizacje",
+            "Aplikacja sprawdzi oficjalne wydania GitHub i poinformuje o dostępnej wersji.",
+        )
+        update_card = QFrame()
+        update_card.setObjectName("dataCard")
+        update_layout = QHBoxLayout(update_card)
+        update_layout.setContentsMargins(16, 14, 16, 14)
+        self.update_status_label = QLabel("Nie sprawdzono aktualizacji.")
+        self.update_status_label.setObjectName("settingDescription")
+        update_layout.addWidget(self.update_status_label, 1)
+        self.check_update_button = QPushButton("Sprawdź teraz")
+        self.check_update_button.setObjectName("outlineButton")
+        self.open_update_button = QPushButton("Otwórz wydanie")
+        self.open_update_button.setObjectName("outlineButton")
+        self.open_update_button.setEnabled(False)
+        update_layout.addWidget(self.check_update_button)
+        update_layout.addWidget(self.open_update_button)
 
         general_group = QFrame()
         general_group.setObjectName("settingsGroup")
@@ -744,9 +837,34 @@ class MainWindow(QMainWindow):
         general_layout.setContentsMargins(0, 0, 0, 0)
         general_layout.setSpacing(12)
         general_layout.addWidget(language_card)
+        general_layout.addWidget(theme_card)
+        general_layout.addWidget(self.auto_update_row)
+        general_layout.addWidget(update_card)
         general_layout.addWidget(data_card)
         general_layout.addWidget(license_card)
         layout.addWidget(general_group)
+        maintenance_title = QLabel("Konserwacja")
+        maintenance_title.setObjectName("sectionTitle")
+        layout.addWidget(maintenance_title)
+        mqtt_cleanup_card = QFrame()
+        mqtt_cleanup_card.setObjectName("dataCard")
+        mqtt_cleanup_layout = QHBoxLayout(mqtt_cleanup_card)
+        mqtt_cleanup_layout.setContentsMargins(16, 14, 16, 14)
+        mqtt_cleanup_text = QVBoxLayout()
+        mqtt_cleanup_name = QLabel("Dane MQTT")
+        mqtt_cleanup_name.setObjectName("settingTitle")
+        mqtt_cleanup_description = QLabel(
+            "Usuń zachowane topiki utworzone przez HA Windows Bridge bez odinstalowywania aplikacji."
+        )
+        mqtt_cleanup_description.setObjectName("settingDescription")
+        mqtt_cleanup_description.setWordWrap(True)
+        mqtt_cleanup_text.addWidget(mqtt_cleanup_name)
+        mqtt_cleanup_text.addWidget(mqtt_cleanup_description)
+        mqtt_cleanup_layout.addLayout(mqtt_cleanup_text, 1)
+        self.mqtt_cleanup_button = QPushButton("Wyczyść dane MQTT")
+        self.mqtt_cleanup_button.setObjectName("outlineButton")
+        mqtt_cleanup_layout.addWidget(self.mqtt_cleanup_button)
+        layout.addWidget(mqtt_cleanup_card)
 
         uninstall_title = QLabel("Odinstalowanie")
         uninstall_title.setObjectName("sectionTitle")
@@ -759,14 +877,14 @@ class MainWindow(QMainWindow):
         uninstall_name = QLabel("Odinstalowanie")
         uninstall_name.setObjectName("settingTitle")
         uninstall_description = QLabel(
-            "Usuń aplikację oraz znane topiki MQTT zapisane przez HA Windows Bridge."
+            "Usuń aplikację z tego komputera. W następnym kroku wybierzesz, czy wyczyścić także dane MQTT."
         )
         uninstall_description.setObjectName("settingDescription")
         uninstall_description.setWordWrap(True)
         uninstall_text.addWidget(uninstall_name)
         uninstall_text.addWidget(uninstall_description)
         uninstall_layout.addLayout(uninstall_text, 1)
-        self.uninstall_button = QPushButton("Wyczyść MQTT i odinstaluj")
+        self.uninstall_button = QPushButton("Odinstaluj aplikację")
         self.uninstall_button.setObjectName("dangerButton")
         self.uninstall_button.setEnabled(self._uninstaller_path is not None)
         if self._uninstaller_path is None:
@@ -806,6 +924,8 @@ class MainWindow(QMainWindow):
         self.signals.volume_snapshot.connect(self._apply_volume_snapshot)
         self.signals.connection_test.connect(self._show_test_result)
         self.signals.cleanup_finished.connect(self._mqtt_cleanup_finished)
+        self.signals.windows_notification.connect(self._show_windows_notification)
+        self.signals.update_checked.connect(self._update_check_finished)
         self.title_bar.menu_clicked.connect(self._toggle_sidebar)
         self.show_password.toggled.connect(
             lambda checked: self.password.setEchoMode(
@@ -834,18 +954,31 @@ class MainWindow(QMainWindow):
         self.test_button.clicked.connect(self.test_mqtt_connection)
         self.discovery_button.clicked.connect(self._republish_discovery)
         self.language_combo.currentIndexChanged.connect(self._language_changed)
+        self.theme_combo.currentIndexChanged.connect(self._theme_changed)
         self.save_button.clicked.connect(self.save_and_apply)
         self.start_button.clicked.connect(self._toggle_bridge)
         self.uninstall_button.clicked.connect(self._uninstall_application)
+        self.mqtt_cleanup_button.clicked.connect(self._cleanup_mqtt_only)
+        self.import_button.clicked.connect(self._import_configuration)
+        self.export_button.clicked.connect(self._export_configuration)
+        self.diagnostics_button.clicked.connect(self._save_diagnostics)
+        self.check_update_button.clicked.connect(self._check_for_updates)
+        self.open_update_button.clicked.connect(self._open_latest_release)
 
     def _language_changed(self, _index: int) -> None:
         self._apply_language(str(self.language_combo.currentData() or "pl"))
+
+    def _theme_changed(self, _index: int) -> None:
+        if self._theme_changed_callback:
+            self._theme_changed_callback(str(self.theme_combo.currentData() or "dark"))
 
     def _apply_language(self, language: str) -> None:
         self._language = language if language in {"pl", "en"} else "pl"
         set_active_language(self._language)
         for button in self.nav_buttons:
             button.set_language(self._language)
+        self.theme_combo.setItemText(0, "Dark" if self._language == "en" else "Ciemny")
+        self.theme_combo.setItemText(1, "Light" if self._language == "en" else "Jasny")
         self._translate_widget_tree(self, self._language)
         self.status_card.set_language(self._language)
         displayed = "Połączono" if self.bridge and self.bridge.connected else self._last_status_text
@@ -887,7 +1020,9 @@ class MainWindow(QMainWindow):
 
     def _install_log_handler(self) -> None:
         handler = QtLogHandler(self.signals)
-        handler.setFormatter(LocalizedFormatter("%(asctime)s  %(levelname)s  %(message)s", "%H:%M:%S"))
+        handler.setFormatter(
+            LocalizedFormatter("%(asctime)s  %(levelname)s  %(message)s", "%H:%M:%S")
+        )
         self.logger.addHandler(handler)
 
     def _switch_page(self, index: int) -> None:
@@ -924,6 +1059,9 @@ class MainWindow(QMainWindow):
         self.publish_gpu_stats_row.switch.setChecked(config.publish_gpu_stats)
         self.publish_gpu_stats_row.switch.setEnabled(config.publish_system_stats)
         self.media_player_row.switch.setChecked(config.media_player_enabled)
+        self.power_actions_row.switch.setChecked(config.allow_power_actions)
+        self.windows_notifications_row.switch.setChecked(config.enable_windows_notifications)
+        self.auto_update_row.switch.setChecked(config.auto_check_updates)
         self.master_volume_card.set_feature_enabled(config.control_master_volume)
         self.microphone_card.set_feature_enabled(config.control_microphone)
         self.audio_output_card.set_feature_enabled(config.control_audio_output)
@@ -931,6 +1069,12 @@ class MainWindow(QMainWindow):
         language_index = self.language_combo.findData(config.language)
         self.language_combo.blockSignals(True)
         self.language_combo.setCurrentIndex(max(0, language_index))
+        theme_index = self.theme_combo.findData(config.theme)
+        self.theme_combo.blockSignals(True)
+        self.theme_combo.setCurrentIndex(max(0, theme_index))
+        self.theme_combo.blockSignals(False)
+        if self._theme_changed_callback:
+            self._theme_changed_callback(config.theme)
         self.language_combo.blockSignals(False)
         for card in list(self.app_cards):
             self._remove_app_card(card)
@@ -963,6 +1107,7 @@ class MainWindow(QMainWindow):
             control_active_app=self.control_active_row.switch.isChecked(),
             publish_initial_state=self.publish_initial_row.switch.isChecked(),
             poll_interval=self.poll_interval.value(),
+            theme=str(self.theme_combo.currentData() or "dark"),
             publish_activity=self.publish_activity_row.switch.isChecked(),
             publish_idle=self.publish_idle_row.switch.isChecked(),
             idle_threshold=self.idle_threshold.value(),
@@ -972,6 +1117,9 @@ class MainWindow(QMainWindow):
             control_microphone=self.microphone_card.enabled_switch.isChecked(),
             control_audio_output=self.audio_output_card.enabled_switch.isChecked(),
             media_player_enabled=self.media_player_row.switch.isChecked(),
+            allow_power_actions=self.power_actions_row.switch.isChecked(),
+            enable_windows_notifications=self.windows_notifications_row.switch.isChecked(),
+            auto_check_updates=self.auto_update_row.switch.isChecked(),
         )
 
     def save_and_apply(self) -> bool:
@@ -1026,6 +1174,9 @@ class MainWindow(QMainWindow):
                 audio=self.audio,
                 logger=self.logger,
                 status_callback=lambda text, connected: self.signals.status.emit(text, connected),
+                notification_callback=lambda title, message: self.signals.windows_notification.emit(
+                    title, message
+                ),
             )
             self.bridge.start()
             self.start_button.setText(self._t("Zatrzymaj usługę"))
@@ -1063,7 +1214,9 @@ class MainWindow(QMainWindow):
         threading.Thread(target=worker, name="audio-scan", daemon=True).start()
 
     def add_executable(self) -> None:
-        file_name, _ = QFileDialog.getOpenFileName(self, "Wybierz aplikację", "", "Programy Windows (*.exe)")
+        file_name, _ = QFileDialog.getOpenFileName(
+            self, "Wybierz aplikację", "", "Programy Windows (*.exe)"
+        )
         if not file_name:
             return
         path = Path(file_name)
@@ -1075,7 +1228,8 @@ class MainWindow(QMainWindow):
         for application in applications:
             if application.process_name.lower() in existing:
                 card = next(
-                    card for card in self.app_cards
+                    card
+                    for card in self.app_cards
                     if card.config.process_name.lower() == application.process_name.lower()
                 )
                 if application.executable_path:
@@ -1248,7 +1402,9 @@ class MainWindow(QMainWindow):
 
     def test_mqtt_connection(self) -> None:
         config = self._config_from_form()
-        basic_errors = [error for error in config.validation_errors() if "aplikac" not in error.lower()]
+        basic_errors = [
+            error for error in config.validation_errors() if "aplikac" not in error.lower()
+        ]
         if basic_errors:
             QMessageBox.warning(self, "Niepełna konfiguracja", "\n".join(basic_errors))
             return
@@ -1282,7 +1438,13 @@ class MainWindow(QMainWindow):
 
     def _set_status(self, text: str, connected: bool) -> None:
         self._last_status_text = text
-        color = "#49c483" if connected else "#dfa64d" if "Łącz" in text or "ponaw" in text else "#7c8c92"
+        color = (
+            "#49c483"
+            if connected
+            else "#dfa64d"
+            if "Łącz" in text or "ponaw" in text
+            else "#7c8c92"
+        )
         self.title_bar.status_dot.setStyleSheet(f"color: {color};")
         self.title_bar.status_label.setText(self._t("Połączono" if connected else text))
         self.footer_status_dot.setStyleSheet(f"color: {color};")
@@ -1343,6 +1505,139 @@ class MainWindow(QMainWindow):
     def _open_logs_folder(self) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.store.data_dir / "logs")))
 
+    def _show_windows_notification(self, title: str, message: str) -> None:
+        self.tray.showMessage(
+            title[:128] or "Home Assistant",
+            message[:2048],
+            QSystemTrayIcon.MessageIcon.Information,
+            10000,
+        )
+
+    def _automatic_update_check(self) -> None:
+        if self.auto_update_row.switch.isChecked():
+            self._check_for_updates(silent=True)
+
+    def _check_for_updates(self, _checked: bool = False, *, silent: bool = False) -> None:
+        if not self.check_update_button.isEnabled():
+            return
+        self.check_update_button.setEnabled(False)
+        if not silent:
+            self.update_status_label.setText(self._t("Sprawdzanie aktualizacji…"))
+
+        def worker() -> None:
+            self.signals.update_checked.emit(self.update_checker.check(__version__))
+
+        threading.Thread(target=worker, name="update-check", daemon=True).start()
+
+    def _update_check_finished(self, result: UpdateInfo) -> None:
+        self.check_update_button.setEnabled(True)
+        if result.error:
+            self.update_status_label.setText(self._t("Nie udało się sprawdzić aktualizacji."))
+            self.logger.info("Nie udało się sprawdzić aktualizacji: %s", result.error)
+            return
+        if result.available and result.release_url:
+            self._latest_release_url = result.release_url
+            self.open_update_button.setEnabled(True)
+            self.update_status_label.setText(
+                self._t("Dostępna jest wersja {version}.").format(version=result.latest_version)
+            )
+            self._show_windows_notification(
+                "HA Windows Bridge",
+                self._t("Dostępna jest wersja {version}.").format(version=result.latest_version),
+            )
+            return
+        self._latest_release_url = ""
+        self.open_update_button.setEnabled(False)
+        self.update_status_label.setText(self._t("Masz najnowszą wersję."))
+
+    def _open_latest_release(self) -> None:
+        if self._latest_release_url:
+            QDesktopServices.openUrl(QUrl(self._latest_release_url))
+
+    def _export_configuration(self) -> None:
+        file_name, _ = QFileDialog.getSaveFileName(
+            self,
+            self._t("Eksport konfiguracji"),
+            str(self.store.data_dir / "ha-windows-bridge-config.json"),
+            "JSON (*.json)",
+        )
+        if not file_name:
+            return
+        try:
+            export_configuration(Path(file_name), self._config_from_form())
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, self._t("Eksport konfiguracji"), str(exc))
+            return
+        QMessageBox.information(
+            self,
+            self._t("Eksport konfiguracji"),
+            self._t("Zapisano konfigurację bez hasła MQTT."),
+        )
+
+    def _import_configuration(self) -> None:
+        file_name, _ = QFileDialog.getOpenFileName(
+            self,
+            self._t("Import konfiguracji"),
+            str(self.store.data_dir),
+            "JSON (*.json)",
+        )
+        if not file_name:
+            return
+        try:
+            imported = import_configuration(Path(file_name), self.password.text())
+        except (OSError, ValueError) as exc:
+            message = "\n".join(self._t(line) for line in str(exc).splitlines())
+            QMessageBox.warning(self, self._t("Import konfiguracji"), message)
+            return
+        answer = QMessageBox.question(
+            self,
+            self._t("Import konfiguracji"),
+            self._t(
+                "Zaimportować ustawienia i zastosować je teraz? Hasło MQTT pozostanie bez zmian."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._load_config(imported)
+        self.save_and_apply()
+
+    def _save_diagnostics(self) -> None:
+        file_name, _ = QFileDialog.getSaveFileName(
+            self,
+            self._t("Raport diagnostyczny"),
+            str(self.store.data_dir / "ha-windows-bridge-diagnostics.json"),
+            "JSON (*.json)",
+        )
+        if not file_name:
+            return
+        bridge = self.bridge
+        report = build_diagnostic_report(
+            self._config_from_form(),
+            connected=bool(bridge and bridge.connected),
+            messages_processed=bridge.messages_processed if bridge else 0,
+            log_path=self.store.data_dir / "logs" / "bridge.log",
+            extra={
+                "selected_applications": len(
+                    [card for card in self.app_cards if card.enabled_switch.isChecked()]
+                ),
+                "nvidia_smi_available": bool(
+                    bridge and getattr(bridge.system, "_nvidia_smi", None)
+                ),
+            },
+        )
+        try:
+            save_diagnostic_report(Path(file_name), report)
+        except OSError as exc:
+            QMessageBox.warning(self, self._t("Raport diagnostyczny"), str(exc))
+            return
+        QMessageBox.information(
+            self,
+            self._t("Raport diagnostyczny"),
+            self._t("Zapisano raport bez hasła i tokenów."),
+        )
+
     def _open_data_folder(self) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.store.data_dir)))
 
@@ -1368,26 +1663,51 @@ class MainWindow(QMainWindow):
         except OSError:
             self.logger.warning("Nie można zapisać historii topiców MQTT")
 
+    def _cleanup_mqtt_only(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            self._t("Wyczyścić dane MQTT?"),
+            self._t(
+                "Usunąć zachowane topiki utworzone przez HA Windows Bridge? Aplikacja pozostanie zainstalowana."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._start_mqtt_cleanup(uninstall_after=False)
+
     def _uninstall_application(self) -> None:
         if self._uninstaller_path is None or not self._uninstaller_path.is_file():
-            QMessageBox.warning(self, self._t("Odinstalowanie"), self._t("Nie znaleziono deinstalatora."))
+            QMessageBox.warning(
+                self, self._t("Odinstalowanie"), self._t("Nie znaleziono deinstalatora.")
+            )
             return
         answer = QMessageBox.question(
             self,
             self._t("Odinstalować HA Windows Bridge?"),
             self._t(
-                "Program zatrzyma usługę, usunie znane zachowane topiki MQTT utworzone przez "
-                "HA Windows Bridge i uruchomi deinstalator."
+                "Czy przed odinstalowaniem wyczyścić zachowane dane MQTT? Wybierz „Nie”, aby odinstalować bez czyszczenia."
             ),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        if answer == QMessageBox.StandardButton.Cancel:
             return
+        if answer == QMessageBox.StandardButton.No:
+            self.stop_bridge()
+            self._start_uninstaller()
+            return
+        self._start_mqtt_cleanup(uninstall_after=True)
+
+    def _start_mqtt_cleanup(self, *, uninstall_after: bool) -> None:
         config = self._config_from_form()
         self.stop_bridge()
+        self._cleanup_then_uninstall = uninstall_after
+        self.mqtt_cleanup_button.setEnabled(False)
         self.uninstall_button.setEnabled(False)
-        self.uninstall_button.setText(self._t("Czyszczenie MQTT…"))
+        self.mqtt_cleanup_button.setText(self._t("Czyszczenie MQTT…"))
         remembered = set(self._known_mqtt_topics)
 
         def worker() -> None:
@@ -1397,37 +1717,52 @@ class MainWindow(QMainWindow):
         threading.Thread(target=worker, name="mqtt-cleanup", daemon=True).start()
 
     def _mqtt_cleanup_finished(self, result: MqttCleanupResult) -> None:
-        self.uninstall_button.setText(self._t("Wyczyść MQTT i odinstaluj"))
+        uninstall_after = self._cleanup_then_uninstall
+        self._cleanup_then_uninstall = False
+        self.mqtt_cleanup_button.setText(self._t("Wyczyść dane MQTT"))
+        self.mqtt_cleanup_button.setEnabled(True)
+        self.uninstall_button.setText(self._t("Odinstaluj aplikację"))
         self.uninstall_button.setEnabled(self._uninstaller_path is not None)
-        proceed = False
         if result.publish_success:
             if hasattr(self.store, "clear_mqtt_topic_history"):
                 self.store.clear_mqtt_topic_history()
             self._known_mqtt_topics.clear()
             self.logger.info(
-                "Usunięto %s zachowanych topiców MQTT przed odinstalowaniem",
+                "Usunięto %s zachowanych topiców MQTT",
                 result.removed_topics,
             )
+            message = self._t("Usunięto {count} zachowanych topiców MQTT.").format(
+                count=result.removed_topics
+            )
+            if uninstall_after:
+                message += " " + self._t("Zostanie uruchomiony deinstalator.")
             QMessageBox.information(
                 self,
                 self._t("Wyczyszczono dane MQTT"),
-                self._t(
-                    "Usunięto {count} zachowanych topiców MQTT. Zostanie uruchomiony deinstalator."
-                ).format(count=result.removed_topics),
+                message,
             )
-            proceed = True
-        else:
-            answer = QMessageBox.warning(
+            if uninstall_after:
+                self._start_uninstaller()
+            return
+
+        error = self._t(result.error or "Nieznany błąd")
+        if not uninstall_after:
+            QMessageBox.warning(
                 self,
                 self._t("Nie udało się wyczyścić MQTT"),
-                self._t("Nie udało się usunąć danych MQTT: {error}\n\nOdinstalować mimo to?").format(
-                    error=self._t(result.error or "Nieznany błąd")
-                ),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                self._t("Nie udało się usunąć danych MQTT: {error}").format(error=error),
             )
-            proceed = answer == QMessageBox.StandardButton.Yes
-        if proceed:
+            return
+        answer = QMessageBox.warning(
+            self,
+            self._t("Nie udało się wyczyścić MQTT"),
+            self._t("Nie udało się usunąć danych MQTT: {error}\n\nOdinstalować mimo to?").format(
+                error=error
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
             self._start_uninstaller()
 
     def _start_uninstaller(self) -> None:
@@ -1444,7 +1779,9 @@ class MainWindow(QMainWindow):
 
     def _show_window(self) -> None:
         self.show()
-        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized | Qt.WindowState.WindowActive)
+        self.setWindowState(
+            self.windowState() & ~Qt.WindowState.WindowMinimized | Qt.WindowState.WindowActive
+        )
         self.raise_()
         self.activateWindow()
         self._refresh_runtime_status()
@@ -1452,11 +1789,18 @@ class MainWindow(QMainWindow):
         self._refresh_card_volumes()
 
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
             self._show_window()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if not self._force_close and self.minimize_to_tray_row.switch.isChecked() and self.tray.isVisible():
+        if (
+            not self._force_close
+            and self.minimize_to_tray_row.switch.isChecked()
+            and self.tray.isVisible()
+        ):
             event.ignore()
             self.hide()
             if not self._tray_notice_shown:

@@ -30,10 +30,13 @@ from .discovery import (
     microphone_mute_topics,
     microphone_volume_topics,
     pc_active_topic,
+    power_action_topic,
     session_locked_topic,
     status_topic,
     system_metric_topic,
+    windows_notification_topic,
 )
+from .i18n import translate
 from .integration_protocol import integration_announcement_payload
 from .media import WindowsMediaService
 from .media_protocol import (
@@ -43,9 +46,11 @@ from .media_protocol import (
     media_thumbnail_topic,
     media_topics,
 )
+from .system_actions import WindowsPowerActions
 from .system_monitor import PcContext, WindowsSystemMonitor
 
 StatusCallback = Callable[[str, bool], None]
+NotificationCallback = Callable[[str, str], None]
 MAX_COMMAND_PAYLOAD = 8 * 1024
 
 
@@ -58,6 +63,8 @@ class MqttBridge:
         status_callback: StatusCallback | None = None,
         system_monitor: WindowsSystemMonitor | None = None,
         media_service: WindowsMediaService | None = None,
+        power_actions: WindowsPowerActions | None = None,
+        notification_callback: NotificationCallback | None = None,
     ):
         self.config = config
         self.audio = audio or WindowsAudioService()
@@ -65,6 +72,8 @@ class MqttBridge:
         self.media = media_service or WindowsMediaService(logger)
         self.log = logger or logging.getLogger(__name__)
         self.status_callback = status_callback
+        self.power_actions = power_actions or WindowsPowerActions()
+        self.notification_callback = notification_callback
         self.client: mqtt.Client | None = None
         self._stop_event = threading.Event()
         self._connected = threading.Event()
@@ -95,6 +104,8 @@ class MqttBridge:
         self._microphone_mute_command = ""
         self._audio_output_command = ""
         self._media_command = ""
+        self._power_action_commands: dict[str, str] = {}
+        self._notification_command = ""
         self.started_at: float | None = None
         self.messages_processed = 0
 
@@ -153,7 +164,9 @@ class MqttBridge:
         self._stop_event.set()
         if self._connected.is_set():
             try:
-                client.publish(status_topic(self.config), "offline", qos=1, retain=True).wait_for_publish(1)
+                client.publish(
+                    status_topic(self.config), "offline", qos=1, retain=True
+                ).wait_for_publish(1)
             except Exception:
                 self.log.debug("Nie udało się potwierdzić stanu offline MQTT", exc_info=True)
         try:
@@ -175,10 +188,7 @@ class MqttBridge:
         client = self.client
         if client is None or not self._connected.is_set():
             return False
-        pending = [
-            client.publish(topic, "", qos=1, retain=True)
-            for topic in dict.fromkeys(topics)
-        ]
+        pending = [client.publish(topic, "", qos=1, retain=True) for topic in dict.fromkeys(topics)]
         confirmed = True
         deadline = time.monotonic() + 2.0
         for publication in pending:
@@ -264,6 +274,19 @@ class MqttBridge:
         self._microphone_mute_command, _ = microphone_mute_topics(self.config)
         self._audio_output_command, _ = audio_output_topics(self.config)
         self._media_command, _ = media_topics(self.config)
+        self._power_action_commands = (
+            {
+                power_action_topic(self.config, action): action
+                for action in ("lock", "sleep", "restart", "shutdown", "cancel")
+            }
+            if self.config.allow_power_actions
+            else {}
+        )
+        self._notification_command = (
+            windows_notification_topic(self.config)
+            if self.config.enable_windows_notifications
+            else ""
+        )
         for app in self.config.apps:
             if not app.enabled:
                 continue
@@ -285,6 +308,7 @@ class MqttBridge:
             *self._command_apps,
             *self._app_mute_commands,
             *self._app_action_commands,
+            *self._power_action_commands,
         }
         if self.config.control_master_volume:
             topics.update((self._master_command, self._master_mute_command))
@@ -296,6 +320,8 @@ class MqttBridge:
             topics.add(self._audio_output_command)
         if self.config.media_player_enabled:
             topics.add(self._media_command)
+        if self._notification_command:
+            topics.add(self._notification_command)
         return {topic for topic in topics if topic}
 
     def _on_connect(self, client, _userdata, _flags, reason_code, _properties) -> None:
@@ -345,13 +371,20 @@ class MqttBridge:
             self.log.warning("Zignorowano retained command: %s", message.topic)
             return
 
+        if message.topic == self._notification_command:
+            self._handle_windows_notification(message.payload)
+            return
+        power_action = self._power_action_commands.get(message.topic)
+        if power_action:
+            self._handle_power_action(power_action, message.payload)
+            return
         if message.topic == self._media_command:
             self._handle_media_command(message.payload)
             return
 
         action = self._app_action_commands.get(message.topic)
         if action:
-            self._handle_app_action(*action)
+            self._handle_app_action(*action, message.payload)
             return
         if message.topic == self._audio_output_command:
             self._handle_audio_output(message.payload)
@@ -379,6 +412,41 @@ class MqttBridge:
             self._handle_microphone_volume(volume)
             return
         self._handle_application_volume(message.topic, volume)
+
+    def _handle_windows_notification(self, payload: bytes) -> None:
+        try:
+            value = json.loads(payload.decode("utf-8", errors="strict"))
+            title = str(value.get("title", "Home Assistant")).strip()
+            message = str(value.get("message", "")).strip()
+        except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+            self.log.warning("Nieprawidłowe powiadomienie Windows")
+            return
+        if not message or len(title) > 128 or len(message) > 2048:
+            self.log.warning("Nieprawidłowe powiadomienie Windows")
+            return
+        if self.notification_callback:
+            self.notification_callback(title or "Home Assistant", message)
+        self.log.info("Wyświetlono powiadomienie Windows z Home Assistant")
+
+    @staticmethod
+    def _is_button_press(payload: bytes) -> bool:
+        try:
+            return payload.decode("utf-8", errors="strict").strip().upper() == "PRESS"
+        except UnicodeDecodeError:
+            return False
+
+    def _handle_power_action(self, action: str, payload: bytes) -> None:
+        if not self._is_button_press(payload):
+            self.log.warning("Zignorowano nieprawidłowe naciśnięcie przycisku MQTT")
+            return
+        ok, detail = self.power_actions.execute(action)
+        detail = translate(detail, self.config.language)
+        if ok:
+            self.log.warning("Wykonano akcję systemową z Home Assistant: %s", action)
+            if self.notification_callback:
+                self.notification_callback("HA Windows Bridge", detail)
+        else:
+            self.log.error("Nie udało się wykonać akcji systemowej %s: %s", action, detail)
 
     def _handle_master_volume(self, volume: float) -> None:
         current = self.audio.get_master_volume()
@@ -451,20 +519,25 @@ class MqttBridge:
         self._publish_text_state(state, name)
         self.log.info("Przełączono wyjście audio na %s", name)
 
-    def _handle_app_action(self, action: str, app: AudioAppConfig) -> None:
+    def _handle_app_action(self, action: str, app: AudioAppConfig, payload: bytes) -> None:
+        if not self._is_button_press(payload):
+            self.log.warning("Zignorowano nieprawidłowe naciśnięcie przycisku MQTT")
+            return
         if action == "start":
             ok = self.system.start_application(
                 app.executable_path,
                 app.process_name,
                 app.display_name,
             )
-            self.log.info("Uruchomiono %s z Home Assistant", app.display_name) if ok else self.log.warning(
-                "Nie można uruchomić %s", app.display_name
-            )
+            self.log.info(
+                "Uruchomiono %s z Home Assistant", app.display_name
+            ) if ok else self.log.warning("Nie można uruchomić %s", app.display_name)
             return
         closed = self.system.close_application(app.process_name)
         if closed < 0:
-            self.log.warning("Zablokowano zdalne zamknięcie chronionego procesu %s", app.process_name)
+            self.log.warning(
+                "Zablokowano zdalne zamknięcie chronionego procesu %s", app.process_name
+            )
         elif closed:
             self.log.info("Wysłano zamknięcie do %s procesów %s", closed, app.display_name)
         else:
@@ -739,7 +812,9 @@ class MqttBridge:
         if self.config.publish_activity and (
             previous is None or previous.window_title != context.window_title
         ):
-            self._publish_text_state(active_window_topic(self.config), context.window_title or "Brak")
+            self._publish_text_state(
+                active_window_topic(self.config), context.window_title or "Brak"
+            )
         if self.config.publish_activity and (
             previous is None or previous.fullscreen != context.fullscreen
         ):

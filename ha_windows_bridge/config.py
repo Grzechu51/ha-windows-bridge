@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 APP_NAME = "HA Windows Bridge"
-CONFIG_SCHEMA_VERSION = 4
+CONFIG_SCHEMA_VERSION = 6
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_SECRET_BYTES = 64 * 1024
@@ -125,6 +125,7 @@ class AppConfig:
     auto_connect: bool = True
     language: str = "pl"
     control_master_volume: bool = True
+    theme: str = "dark"
     control_active_app: bool = False
     publish_initial_state: bool = True
     poll_interval: float = 0.5
@@ -137,17 +138,25 @@ class AppConfig:
     control_microphone: bool = False
     control_audio_output: bool = False
     media_player_enabled: bool = False
+    allow_power_actions: bool = False
+    enable_windows_notifications: bool = False
+    auto_check_updates: bool = True
 
     def __post_init__(self) -> None:
         self.language = self.language.strip().lower()
         if self.language not in {"pl", "en"}:
             self.language = "pl"
         self.device_name = self.device_name.strip() or "Windows PC"
+        self.theme = self.theme.strip().lower()
+        if self.theme not in {"dark", "light"}:
+            self.theme = "dark"
         self.device_id = slugify(self.device_id, default_device_id())
         self.mqtt.base_topic = self.mqtt.base_topic.strip().strip("/")
         if not self.mqtt.base_topic:
             self.mqtt.base_topic = f"ha-windows-bridge/{slugify(self.device_name, 'windows_pc')}"
-        self.mqtt.discovery_prefix = self.mqtt.discovery_prefix.strip().strip("/") or "homeassistant"
+        self.mqtt.discovery_prefix = (
+            self.mqtt.discovery_prefix.strip().strip("/") or "homeassistant"
+        )
 
     @classmethod
     def from_dict(cls, data: dict) -> AppConfig:
@@ -170,6 +179,7 @@ class AppConfig:
             minimize_to_tray=bool(data.get("minimize_to_tray", True)),
             auto_connect=bool(data.get("auto_connect", True)),
             language=str(data.get("language", "pl")),
+            theme=str(data.get("theme", "dark")),
             control_master_volume=bool(data.get("control_master_volume", True)),
             control_active_app=(
                 False
@@ -184,9 +194,7 @@ class AppConfig:
                 else bool(data.get("publish_activity", False))
             ),
             publish_idle=(
-                False
-                if reset_legacy_optional_features
-                else bool(data.get("publish_idle", False))
+                False if reset_legacy_optional_features else bool(data.get("publish_idle", False))
             ),
             idle_threshold=int(data.get("idle_threshold", 300)),
             publish_session_lock=(
@@ -215,6 +223,9 @@ class AppConfig:
                 else bool(data.get("control_audio_output", False))
             ),
             media_player_enabled=bool(data.get("media_player_enabled", False)),
+            allow_power_actions=bool(data.get("allow_power_actions", False)),
+            enable_windows_notifications=bool(data.get("enable_windows_notifications", False)),
+            auto_check_updates=bool(data.get("auto_check_updates", True)),
         )
 
     def to_dict(self) -> dict:
@@ -361,7 +372,9 @@ class SettingsStore:
 
     def remember_mqtt_topics(self, topics: Iterable[str]) -> None:
         remembered = self.load_mqtt_topic_history()
-        remembered.update(topic.strip() for topic in topics if isinstance(topic, str) and topic.strip())
+        remembered.update(
+            topic.strip() for topic in topics if isinstance(topic, str) and topic.strip()
+        )
         if len(remembered) > MAX_REMEMBERED_TOPICS:
             raise OSError("Historia MQTT przekroczyła bezpieczny limit topiców.")
         self.data_dir.mkdir(parents=True, exist_ok=True)

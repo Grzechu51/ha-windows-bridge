@@ -16,6 +16,7 @@ from .gui import MainWindow
 from .i18n import LocalizedFormatter, set_active_language
 from .single_instance import SingleInstance
 from .startup import WindowsStartupManager
+from .theme import normalize_theme, style_for_theme
 
 STYLE = """
 QWidget {
@@ -516,8 +517,13 @@ class BridgeProxyStyle(QProxyStyle):
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
         enabled = bool(option.state & QStyle.StateFlag.State_Enabled)
 
-        border = QColor("#62d49a" if hovered or checked else "#65747a")
-        fill = QColor("#319866" if checked else "#15181b")
+        light = QApplication.instance().property("bridgeTheme") == "light"
+        if light:
+            border = QColor("#299968" if hovered or checked else "#788680")
+            fill = QColor("#319866" if checked else "#ffffff")
+        else:
+            border = QColor("#62d49a" if hovered or checked else "#65747a")
+            fill = QColor("#319866" if checked else "#15181b")
         if not enabled:
             border.setAlpha(105)
             fill.setAlpha(105)
@@ -572,11 +578,19 @@ def main(argv: list[str] | None = None) -> int:
     bridge_style = BridgeProxyStyle(app.style())
     app.setStyle(bridge_style)
     app._bridge_style = bridge_style
-    app.setStyleSheet(STYLE)
+
+    def apply_theme(theme: str) -> None:
+        selected = normalize_theme(theme)
+        app.setProperty("bridgeTheme", selected)
+        app.setStyleSheet(style_for_theme(STYLE, selected))
+
+    apply_theme("dark")
 
     instance = SingleInstance()
     if instance.already_running:
-        QMessageBox.information(None, "HA Windows Bridge", "Program jest już uruchomiony w zasobniku systemowym.")
+        QMessageBox.information(
+            None, "HA Windows Bridge", "Program jest już uruchomiony w zasobniku systemowym."
+        )
         instance.close()
         return 0
 
@@ -586,11 +600,14 @@ def main(argv: list[str] | None = None) -> int:
         config = store.load()
     except RuntimeError as exc:
         logger.exception("Błąd konfiguracji")
-        QMessageBox.warning(None, "Błąd konfiguracji", f"{exc}\n\nZostaną użyte ustawienia domyślne.")
+        QMessageBox.warning(
+            None, "Błąd konfiguracji", f"{exc}\n\nZostaną użyte ustawienia domyślne."
+        )
         from .config import AppConfig
 
         config = AppConfig()
 
+    apply_theme(config.theme)
     set_active_language(config.language)
 
     configured = not config.validation_errors()
@@ -600,6 +617,7 @@ def main(argv: list[str] | None = None) -> int:
         store,
         WindowsStartupManager(),
         logger,
+        theme_changed=apply_theme,
         launch_minimized=launch_minimized,
     )
     if not launch_minimized:

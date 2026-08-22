@@ -84,6 +84,16 @@ def test_remote_close_refuses_protected_windows_process(monkeypatch) -> None:
     assert WindowsSystemMonitor.close_application("explorer.exe") == -1
 
 
+def test_nvidia_smi_is_found_in_system32(monkeypatch, tmp_path) -> None:
+    system_root = tmp_path / "Windows"
+    executable = system_root / "System32" / "nvidia-smi.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"MZ")
+    monkeypatch.setenv("SYSTEMROOT", str(system_root))
+
+    assert WindowsSystemMonitor._find_nvidia_smi() == str(executable)
+
+
 def test_nvidia_metrics_are_parsed(monkeypatch) -> None:
     monitor = WindowsSystemMonitor()
     monitor._nvidia_smi = "nvidia-smi"
@@ -98,6 +108,21 @@ def test_nvidia_metrics_are_parsed(monkeypatch) -> None:
     assert metrics["gpu_temperature"] == 71
     assert metrics["gpu_power_watts"] == 238.5
     assert metrics["gpu_memory_used_mb"] == 6800
+
+
+def test_nvidia_metrics_keep_supported_values_when_one_field_is_unavailable(monkeypatch) -> None:
+    monitor = WindowsSystemMonitor()
+    monitor._nvidia_smi = "nvidia-smi"
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="42, 65, [N/A], 1024, 8192\n"),
+    )
+
+    metrics = monitor._gpu_metrics()
+
+    assert metrics["gpu_percent"] == 42
+    assert metrics["gpu_temperature"] == 65
+    assert "gpu_power_watts" not in metrics
 
 
 def test_gpu_metrics_are_cached_for_ten_seconds(monkeypatch) -> None:

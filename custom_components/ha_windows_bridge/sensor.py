@@ -27,9 +27,7 @@ class BridgeSensor(BridgeMqttEntity, SensorEntity):
     def __init__(self, entry: ConfigEntry, definition: dict[str, Any]) -> None:
         BridgeMqttEntity.__init__(self, entry, definition)
         self._attr_native_unit_of_measurement = definition.get("unit_of_measurement")
-        self._numeric = bool(
-            self._attr_native_unit_of_measurement or definition.get("state_class")
-        )
+        self._numeric = bool(self._attr_native_unit_of_measurement or definition.get("state_class"))
         device_class = definition.get("device_class")
         if isinstance(device_class, str):
             with suppress(ValueError):

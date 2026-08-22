@@ -9,7 +9,9 @@ MAX_ANNOUNCEMENT_PAYLOAD = 256 * 1024
 MAX_ENTITIES = 256
 _DEVICE_ID = re.compile(r"[a-z0-9_]{1,128}")
 _UNIQUE_ID = re.compile(r"[A-Za-z0-9_-]{1,256}")
-_PLATFORMS = frozenset({"binary_sensor", "button", "number", "select", "sensor", "switch"})
+_PLATFORMS = frozenset(
+    {"binary_sensor", "button", "notify", "number", "select", "sensor", "switch"}
+)
 _TOPIC_FIELDS = frozenset({"availability_topic", "command_topic", "state_topic"})
 _TEXT_FIELDS = frozenset(
     {
@@ -32,6 +34,7 @@ _TEXT_FIELDS = frozenset(
 _REQUIRED_FIELDS = {
     "binary_sensor": frozenset({"state_topic", "payload_on", "payload_off"}),
     "button": frozenset({"command_topic", "payload_press"}),
+    "notify": frozenset({"command_topic"}),
     "number": frozenset({"state_topic", "command_topic", "min", "max", "step"}),
     "select": frozenset({"state_topic", "command_topic", "options"}),
     "sensor": frozenset({"state_topic"}),

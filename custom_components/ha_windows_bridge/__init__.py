@@ -4,6 +4,7 @@ from homeassistant.components import mqtt
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_DEVICE_ID, CONF_ENTITIES, CONF_MEDIA_PLAYER, DOMAIN
@@ -12,6 +13,7 @@ PLATFORMS = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
     Platform.MEDIA_PLAYER,
+    Platform.NOTIFY,
     Platform.NUMBER,
     Platform.SELECT,
     Platform.SENSOR,
@@ -22,7 +24,7 @@ PLATFORMS = [
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up every entity announced by one Windows bridge."""
     if not await mqtt.async_wait_for_mqtt_client(hass):
-        return False
+        raise ConfigEntryNotReady("Configure and enable the Home Assistant MQTT integration first")
 
     valid_unique_ids = {
         str(definition["unique_id"])

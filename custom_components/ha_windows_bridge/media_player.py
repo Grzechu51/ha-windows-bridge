@@ -37,6 +37,7 @@ _CAPABILITY_FEATURES = {
     "seek": MediaPlayerEntityFeature.SEEK,
 }
 
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -68,6 +69,7 @@ class HAWindowsMediaPlayer(MediaPlayerEntity):
         self._attr_available = False
         self._attr_state = MediaPlayerState.IDLE
         self._bridge_online = False
+        self._mqtt_connected = False
         self._media_supported = True
         self._media_image: bytes | None = None
         self._media_image_content_type: str | None = None
@@ -84,6 +86,13 @@ class HAWindowsMediaPlayer(MediaPlayerEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        self._mqtt_connected = mqtt.is_connected(self.hass)
+        self._unsubscribers.append(
+            mqtt.async_subscribe_connection_status(
+                self.hass,
+                self._mqtt_connection_received,
+            )
+        )
         self._unsubscribers.extend(
             (
                 await mqtt.async_subscribe(
@@ -100,6 +109,7 @@ class HAWindowsMediaPlayer(MediaPlayerEntity):
                     self.hass, self._thumbnail_topic, self._thumbnail_received, qos=1
                 )
             )
+        self._update_availability()
 
     async def async_will_remove_from_hass(self) -> None:
         for unsubscribe in self._unsubscribers:
@@ -110,7 +120,18 @@ class HAWindowsMediaPlayer(MediaPlayerEntity):
     @callback
     def _availability_received(self, message: ReceiveMessage) -> None:
         self._bridge_online = message_text(message).strip().lower() == "online"
-        self._attr_available = self._bridge_online and self._media_supported
+        self._update_availability()
+
+    @callback
+    def _mqtt_connection_received(self, connected: bool) -> None:
+        self._mqtt_connected = connected
+        self._update_availability()
+
+    @callback
+    def _update_availability(self) -> None:
+        self._attr_available = (
+            self._mqtt_connected and self._bridge_online and self._media_supported
+        )
         self.async_write_ha_state()
 
     @callback
@@ -119,7 +140,7 @@ class HAWindowsMediaPlayer(MediaPlayerEntity):
         if payload is None:
             return
         self._media_supported = payload["supported"]
-        self._attr_available = self._bridge_online and self._media_supported
+        self._update_availability()
         self._attr_state = _STATE_MAP[payload["state"]]
         self._attr_media_title = payload["title"]
         self._attr_media_artist = payload["artist"]

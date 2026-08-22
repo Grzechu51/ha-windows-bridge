@@ -63,9 +63,7 @@ def parse_media_state(raw: str | bytes) -> dict[str, Any] | None:
         position = min(position, duration)
 
     volume = payload.get("volume")
-    normalized_volume = (
-        None if volume is None else _finite_number(volume, minimum=0.0, maximum=1.0)
-    )
+    normalized_volume = None if volume is None else _finite_number(volume, minimum=0.0, maximum=1.0)
     muted = payload.get("muted")
     capabilities = payload.get("capabilities")
     normalized_capabilities: list[str] = []
@@ -79,7 +77,9 @@ def parse_media_state(raw: str | bytes) -> dict[str, Any] | None:
         )
 
     return {
-        "supported": payload.get("supported") if isinstance(payload.get("supported"), bool) else True,
+        "supported": payload.get("supported")
+        if isinstance(payload.get("supported"), bool)
+        else True,
         "state": state,
         "title": _text(payload.get("title"), 1024),
         "artist": _text(payload.get("artist"), 1024),

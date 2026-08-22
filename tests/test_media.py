@@ -27,12 +27,11 @@ from ha_windows_bridge.media_protocol import (
 )
 
 _PAYLOAD_MODULE_PATH = (
-    Path(__file__).parents[1]
-    / "custom_components"
-    / "ha_windows_bridge"
-    / "media_payload.py"
+    Path(__file__).parents[1] / "custom_components" / "ha_windows_bridge" / "media_payload.py"
 )
-_PAYLOAD_SPEC = importlib.util.spec_from_file_location("ha_windows_bridge_media_payload", _PAYLOAD_MODULE_PATH)
+_PAYLOAD_SPEC = importlib.util.spec_from_file_location(
+    "ha_windows_bridge_media_payload", _PAYLOAD_MODULE_PATH
+)
 assert _PAYLOAD_SPEC is not None and _PAYLOAD_SPEC.loader is not None
 _PAYLOAD_MODULE = importlib.util.module_from_spec(_PAYLOAD_SPEC)
 _PAYLOAD_SPEC.loader.exec_module(_PAYLOAD_MODULE)
@@ -42,10 +41,7 @@ parse_media_artwork = _PAYLOAD_MODULE.parse_media_artwork
 parse_media_state = _PAYLOAD_MODULE.parse_media_state
 
 _ANNOUNCEMENT_MODULE_PATH = (
-    Path(__file__).parents[1]
-    / "custom_components"
-    / "ha_windows_bridge"
-    / "announcement.py"
+    Path(__file__).parents[1] / "custom_components" / "ha_windows_bridge" / "announcement.py"
 )
 _ANNOUNCEMENT_SPEC = importlib.util.spec_from_file_location(
     "ha_windows_bridge_announcement", _ANNOUNCEMENT_MODULE_PATH
@@ -119,9 +115,7 @@ def test_artwork_parser_accepts_known_raster_and_rejects_svg_or_mime_mismatch() 
     svg = b"<svg xmlns='http://www.w3.org/2000/svg'></svg>"
     assert (
         parse_media_artwork(
-            json.dumps(
-                {"content_type": "image/svg+xml", "data": base64.b64encode(svg).decode()}
-            )
+            json.dumps({"content_type": "image/svg+xml", "data": base64.b64encode(svg).decode()})
         )
         is None
     )
@@ -230,6 +224,7 @@ def test_legacy_schema_one_announcement_remains_readable_during_migration() -> N
     assert parsed is not None
     assert parsed["entities"] == []
 
+
 def test_media_state_contains_metadata_controls_and_master_volume() -> None:
     snapshot = MediaSnapshot(
         state="playing",
@@ -316,7 +311,7 @@ def test_home_assistant_integration_files_are_valid_json() -> None:
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["dependencies"] == ["mqtt"]
     assert manifest["mqtt"] == ["ha-windows-bridge/devices/+"]
-    assert manifest["version"] == "1.0.0"
+    assert manifest["version"] == "1.1.0"
     assert manifest["codeowners"] == ["@Grzechu51"]
     assert manifest["documentation"] == "https://github.com/Grzechu51/ha-windows-bridge"
     assert manifest["issue_tracker"].endswith("/Grzechu51/ha-windows-bridge/issues")

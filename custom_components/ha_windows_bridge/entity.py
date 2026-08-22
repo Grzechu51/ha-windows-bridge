@@ -56,11 +56,20 @@ class BridgeMqttEntity:
         self._availability_topic = str(definition.get("availability_topic", ""))
         self._payload_available = str(definition.get("payload_available", "online"))
         self._payload_not_available = str(definition.get("payload_not_available", "offline"))
-        self._attr_available = not self._availability_topic
+        self._bridge_online = not bool(self._availability_topic)
+        self._mqtt_connected = False
+        self._attr_available = False
         self._unsubscribers: list[Any] = []
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        self._mqtt_connected = mqtt.is_connected(self.hass)
+        self._unsubscribers.append(
+            mqtt.async_subscribe_connection_status(
+                self.hass,
+                self._mqtt_connection_received,
+            )
+        )
         if self._availability_topic:
             self._unsubscribers.append(
                 await mqtt.async_subscribe(
@@ -80,6 +89,8 @@ class BridgeMqttEntity:
                 )
             )
 
+        self._update_availability()
+
     async def async_will_remove_from_hass(self) -> None:
         for unsubscribe in self._unsubscribers:
             unsubscribe()
@@ -90,9 +101,19 @@ class BridgeMqttEntity:
     def _availability_received(self, message: ReceiveMessage) -> None:
         payload = message_text(message).strip()
         if payload == self._payload_available:
-            self._attr_available = True
+            self._bridge_online = True
         elif payload == self._payload_not_available:
-            self._attr_available = False
+            self._bridge_online = False
+        self._update_availability()
+
+    @callback
+    def _mqtt_connection_received(self, connected: bool) -> None:
+        self._mqtt_connected = connected
+        self._update_availability()
+
+    @callback
+    def _update_availability(self) -> None:
+        self._attr_available = self._mqtt_connected and self._bridge_online
         self.async_write_ha_state()
 
     @callback

@@ -1,6 +1,7 @@
 param(
     [switch]$SkipInstall,
-    [switch]$Installer
+    [switch]$Installer,
+    [string]$SigningThumbprint = $env:HAWB_SIGNING_THUMBPRINT
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +14,29 @@ function Assert-NativeCommandSucceeded {
         throw "$Step failed (exit code $LASTEXITCODE)."
     }
 }
+function Invoke-CodeSigning {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($SigningThumbprint)) {
+        Write-Warning "Artifacts are unsigned. Set HAWB_SIGNING_THUMBPRINT for a public release."
+        return
+    }
+    $NormalizedThumbprint = ($SigningThumbprint -replace "\s", "").ToUpperInvariant()
+    if ($NormalizedThumbprint -notmatch "^[0-9A-F]{40}$") {
+        throw "HAWB_SIGNING_THUMBPRINT must be a 40-character SHA-1 certificate thumbprint."
+    }
+    $SignTool = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if (-not $SignTool) {
+        throw "signtool.exe was not found. Install the Windows SDK."
+    }
+    & $SignTool.Source sign /sha1 $NormalizedThumbprint /fd SHA256 /tr "http://timestamp.digicert.com" /td SHA256 $Path
+    Assert-NativeCommandSucceeded "Podpisywanie $Path"
+    $Signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+        throw "Authenticode verification failed for $Path ($($Signature.Status))."
+    }
+}
+
 
 $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $VenvPython)) {
@@ -39,12 +63,26 @@ if (Test-Path -LiteralPath $BuiltExe) {
     }
 }
 
-& $VenvPython -m pytest
-Assert-NativeCommandSucceeded "Testy"
+$ProjectRootPrefix = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\') + '\'
+$TestTemp = Join-Path $ProjectRoot (".build-test-temp-" + [System.Guid]::NewGuid().ToString("N"))
+$ResolvedTestTemp = [System.IO.Path]::GetFullPath($TestTemp)
+if (-not $ResolvedTestTemp.StartsWith($ProjectRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to use a test directory outside the project: $ResolvedTestTemp"
+}
+try {
+    & $VenvPython -m pytest -p no:cacheprovider --basetemp $ResolvedTestTemp
+    Assert-NativeCommandSucceeded "Testy"
+}
+finally {
+    if (Test-Path -LiteralPath $ResolvedTestTemp) {
+        Remove-Item -LiteralPath $ResolvedTestTemp -Recurse -Force
+    }
+}
 & $VenvPython "tools\create_icon.py"
 Assert-NativeCommandSucceeded "Generowanie ikony"
 & $VenvPython -m PyInstaller --noconfirm --clean "HAWindowsBridge.spec"
 Assert-NativeCommandSucceeded "Budowanie PyInstaller"
+Invoke-CodeSigning -Path $BuiltExe
 
 $AppVersion = (& $VenvPython -c "from ha_windows_bridge import __version__; print(__version__)").Trim()
 Assert-NativeCommandSucceeded "Odczyt wersji aplikacji"
@@ -85,6 +123,8 @@ if ($Installer) {
     }
     & $IsccPath "/DMyAppVersion=$AppVersion" "installer\HAWindowsBridge.iss"
     Assert-NativeCommandSucceeded "Budowanie instalatora"
+    $InstallerPath = Join-Path $ProjectRoot "dist\HA-Windows-Bridge-Setup-$AppVersion.exe"
+    Invoke-CodeSigning -Path $InstallerPath
 }
 
 $ReleaseArtifacts = @(

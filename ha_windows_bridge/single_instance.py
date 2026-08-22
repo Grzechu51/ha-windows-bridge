@@ -15,4 +15,3 @@ class SingleInstance:
         if self._handle:
             self._kernel32.CloseHandle(self._handle)
             self._handle = None
-

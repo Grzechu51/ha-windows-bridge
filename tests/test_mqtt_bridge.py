@@ -354,7 +354,10 @@ def test_running_state_uses_process_even_without_audio_session() -> None:
 
     bridge._monitor_apps([app], {}, {"discord.exe"})
 
-    assert any(topic.endswith("/app/discord/running") and payload == "ON" for topic, payload, *_ in bridge.client.published)
+    assert any(
+        topic.endswith("/app/discord/running") and payload == "ON"
+        for topic, payload, *_ in bridge.client.published
+    )
 
 
 def test_microphone_activity_is_held_long_enough_to_be_visible(monkeypatch) -> None:
@@ -378,7 +381,11 @@ def test_microphone_activity_is_held_long_enough_to_be_visible(monkeypatch) -> N
     bridge._monitor_microphone()
     bridge._monitor_microphone()
 
-    active_states = [payload for topic, payload, *_ in bridge.client.published if topic.endswith("/microphone/active")]
+    active_states = [
+        payload
+        for topic, payload, *_ in bridge.client.published
+        if topic.endswith("/microphone/active")
+    ]
     assert active_states == ["ON", "OFF"]
 
 
@@ -409,9 +416,7 @@ def test_discovery_cleanup_publishes_empty_retained_definitions() -> None:
     bridge._connected.set()
 
     assert bridge.remove_discovery(["homeassistant/sensor/pc/cpu/config"]) is True
-    assert bridge.client.published == [
-        ("homeassistant/sensor/pc/cpu/config", "", 1, True)
-    ]
+    assert bridge.client.published == [("homeassistant/sensor/pc/cpu/config", "", 1, True)]
 
 
 def test_media_player_command_is_dispatched_and_retained_command_is_ignored() -> None:
@@ -470,3 +475,54 @@ def test_media_player_publishes_announcement_and_changed_state() -> None:
     assert json.loads(announcement[0][1])["media_player"]["enabled"] is True
     assert json.loads(states[0][1])["title"] == "Test track"
     assert json.loads(thumbnails[0][1])["content_type"] == "image/png"
+
+
+def test_power_action_and_notification_commands_are_dispatched() -> None:
+    from ha_windows_bridge.discovery import power_action_topic, windows_notification_topic
+
+    class FakePowerActions:
+        def __init__(self):
+            self.actions = []
+
+        def execute(self, action):
+            self.actions.append(action)
+            return True, "Action accepted"
+
+    config = AppConfig(
+        mqtt=MqttConfig(host="broker"),
+        apps=[],
+        allow_power_actions=True,
+        enable_windows_notifications=True,
+    )
+    power = FakePowerActions()
+    notifications = []
+    bridge = MqttBridge(
+        config,
+        audio=FakeAudio(),
+        power_actions=power,
+        notification_callback=lambda title, message: notifications.append((title, message)),
+    )
+    bridge.client = FakeClient()
+    bridge._connected.set()
+    bridge._build_command_map()
+
+    bridge._on_message(
+        None,
+        None,
+        FakeMessage(power_action_topic(config, "restart"), b"", False),
+    )
+
+    bridge._on_message(
+        None,
+        None,
+        FakeMessage(power_action_topic(config, "restart"), b"PRESS", False),
+    )
+    bridge._on_message(
+        None,
+        None,
+        FakeMessage(
+            windows_notification_topic(config),
+            b'{"title":"HA","message":"Front door is open"}',
+            False,
+        ),
+    )

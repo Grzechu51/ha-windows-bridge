@@ -26,6 +26,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QApplication,
     QComboBox,
     QFileDialog,
     QFileIconProvider,
@@ -107,16 +108,24 @@ class ToggleSwitch(QAbstractButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         track = self.rect().adjusted(1, 2, -1, -2)
-        if not self.isEnabled():
-            track_color = QColor("#20282c")
-            knob_color = QColor("#59656a")
-        elif self.isChecked():
+        light = QApplication.instance().property("bridgeTheme") == "light"
+        if self.isChecked():
             track_color = QColor("#287d57")
-            knob_color = QColor("#eefaf4")
+            knob_color = QColor("#ffffff")
+            border_color = QColor("#246f50")
+        elif light:
+            track_color = QColor("#d7dee1")
+            knob_color = QColor("#64716c")
+            border_color = QColor("#95a19c")
         else:
             track_color = QColor("#253238")
             knob_color = QColor("#9aa7ac")
-        painter.setPen(QPen(QColor("#4b5c62"), 1))
+            border_color = QColor("#4b5c62")
+        if not self.isEnabled():
+            track_color.setAlpha(115)
+            knob_color.setAlpha(115)
+            border_color.setAlpha(115)
+        painter.setPen(QPen(border_color, 1))
         painter.setBrush(track_color)
         painter.drawRoundedRect(track, track.height() / 2, track.height() / 2)
         diameter = track.height() - 4
@@ -161,7 +170,7 @@ class TitleBar(QFrame):
         title_layout.setContentsMargins(0, 1, 0, 1)
         self.title = QLabel("HA Windows Bridge")
         self.title.setObjectName("windowTitle")
-        self.subtitle = QLabel("Integracja Windows z Home Assistant przez MQTT")
+        self.subtitle = QLabel("Integracja Windows z Home Assistant")
         self.subtitle.setObjectName("windowSubtitle")
         subtitle_font = self.subtitle.font()
         subtitle_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.35)
@@ -177,10 +186,8 @@ class TitleBar(QFrame):
         self.status_dot.setObjectName("topStatusDot")
         self.status_label = QLabel("Zatrzymano")
         self.status_label.setObjectName("topStatusLabel")
-        layout.addWidget(self.status_dot)
-        layout.addSpacing(7)
-        layout.addWidget(self.status_label)
-        layout.addSpacing(18)
+        self.status_dot.hide()
+        self.status_label.hide()
 
         self.minimize_button = self._window_button("—", "Minimalizuj")
         self.maximize_button = self._window_button("□", "Maksymalizuj")

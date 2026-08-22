@@ -154,7 +154,9 @@ class WindowsAudioService:
                 )
                 return sorted(
                     (
-                        AudioOutputDevice(device.id, device.FriendlyName or device.id, device.id == default_id)
+                        AudioOutputDevice(
+                            device.id, device.FriendlyName or device.id, device.id == default_id
+                        )
                         for device in devices
                     ),
                     key=lambda item: item.name.lower(),

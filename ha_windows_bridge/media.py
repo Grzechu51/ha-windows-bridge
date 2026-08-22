@@ -203,7 +203,9 @@ class WindowsMediaService:
         source_app = str(session.source_app_user_model_id or "")
         artwork = await self._artwork_async(properties, source_app)
         duration = max(_seconds(timeline.end_time), _seconds(timeline.max_seek_time))
-        position = min(_seconds(timeline.position), duration) if duration else _seconds(timeline.position)
+        position = (
+            min(_seconds(timeline.position), duration) if duration else _seconds(timeline.position)
+        )
         return MediaSnapshot(
             state=_playback_state(playback.playback_status),
             title=str(getattr(properties, "title", "") or ""),

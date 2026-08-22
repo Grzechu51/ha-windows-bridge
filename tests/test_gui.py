@@ -80,6 +80,7 @@ def test_gui_defaults_and_minimum_size() -> None:
         assert window.idle_threshold.value() == 300
         assert window.publish_initial_row.parentWidget().layout().spacing() == 12
         assert window.language_combo.parentWidget().parentWidget().layout().spacing() == 12
+        assert window.theme_combo.currentData() == "dark"
         assert window.resource_label.text().startswith("CPU ")
         assert window.port.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.NoButtons
         assert window.keepalive.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.NoButtons
@@ -100,7 +101,9 @@ def test_detected_audio_application_is_added_unchecked() -> None:
     window = make_window()
     try:
         window._merge_audio_apps([AudioApplication("NewPlayer.exe", "New Player")])
-        card = next(card for card in window.app_cards if card.config.process_name == "NewPlayer.exe")
+        card = next(
+            card for card in window.app_cards if card.config.process_name == "NewPlayer.exe"
+        )
         assert card.enabled_switch.isChecked() is False
         assert card.to_config().display_name == "New Player"
         assert card.more_button.menu() is None
@@ -160,6 +163,26 @@ def test_language_can_switch_without_rebuilding_the_window() -> None:
         window.language_combo.setCurrentIndex(window.language_combo.findData("pl"))
         QApplication.processEvents()
         assert "Aplikacje" in window.nav_buttons[1].text()
+    finally:
+        close_window(window)
+
+
+def test_theme_can_switch_without_rebuilding_the_window() -> None:
+    app = QApplication.instance() or QApplication([])
+    changes: list[str] = []
+    window = MainWindow(
+        AppConfig(theme="light"),
+        FakeStore(),
+        FakeStartup(),
+        logging.getLogger("gui-theme-test"),
+        theme_changed=changes.append,
+    )
+    try:
+        assert window.theme_combo.currentData() == "light"
+        assert changes[-1] == "light"
+        window.theme_combo.setCurrentIndex(window.theme_combo.findData("dark"))
+        app.processEvents()
+        assert changes[-1] == "dark"
     finally:
         close_window(window)
 
@@ -246,5 +269,24 @@ def test_resource_indicator_matches_total_cpu_and_private_memory() -> None:
         assert window.resource_bar.value() == 2
         assert window.resource_label.text() == "CPU 2,0% · RAM 64 MB"
         assert window.resource_bar.width() == 34
+    finally:
+        close_window(window)
+
+
+def test_compact_settings_and_remote_features_are_localized() -> None:
+    window = make_window(AppConfig(language="en", theme="light"))
+    try:
+        assert window.title_bar.status_dot.isHidden()
+        assert window.title_bar.status_label.isHidden()
+        assert window.language_combo.width() == 112
+        assert window.theme_combo.width() == 112
+        assert window.poll_interval.width() == 96
+        assert not window.power_actions_row.switch.isChecked()
+        assert not window.windows_notifications_row.switch.isChecked()
+        assert window.pages.widget(window.FEATURES_PAGE).isAncestorOf(window.power_actions_row)
+        assert window.power_actions_row.title_label.text() == "Safe system actions"
+        assert window.windows_notifications_row.title_label.text() == "Windows notifications"
+        assert window.mqtt_cleanup_button.text() == "Clean MQTT data"
+        assert window.uninstall_button.text() == "Uninstall application"
     finally:
         close_window(window)
