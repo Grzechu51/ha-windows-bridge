@@ -55,9 +55,7 @@ sam wpis, a stabilne identyfikatory zapobiegają powstawaniu kopii encji.
 
 - Windows 10 lub Windows 11 x64;
 - Home Assistant z aktywną integracją MQTT;
-- lokalny broker MQTT, np. oficjalna aplikacja Mosquitto Broker dla Home Assistant;
 - HACS do zalecanej instalacji integracji HA Windows Bridge;
-- osobne konto MQTT dla komputera.
 
 ## Przygotowanie MQTT w Home Assistant
 
@@ -166,48 +164,7 @@ tego samego użytkownika Windows. Dane aplikacji są przechowywane w
 
 Aplikacja może automatycznie sprawdzać oficjalne wydania GitHub i otworzyć stronę
 nowszej wersji. Nie pobiera ani nie uruchamia instalatora bez zgody użytkownika.
-
-Skrypt `build.ps1` obsługuje podpis Authenticode dla EXE i instalatora. Publiczne
-wydanie będzie podpisane tylko wtedy, gdy autor skonfiguruje własny zaufany certyfikat
-Code Signing. Certyfikat i klucz prywatny nie są częścią repozytorium.
-
-```powershell
-$env:HAWB_SIGNING_THUMBPRINT = "40_ZNAKOWY_ODCISK_CERTYFIKATU"
-.\build.ps1 -Installer
-Get-AuthenticodeSignature ".\dist\HA-Windows-Bridge-Setup-1.1.0.exe"
-```
-
-Bez certyfikatu pliki nadal można zbudować, ale Windows SmartScreen może wyświetlić
-ostrzeżenie. Zawsze publikuj również sumy SHA-256.
-
-## Integracja z limitami Codex
-
-Integracja limitów konta Codex nie jest częścią tego wydania. Sprawdzony projekt
-`ofilis/codex-ha-bridge` korzysta z prywatnego tokenu logowania i nieudokumentowanego
-endpointu ChatGPT. HA Windows Bridge celowo nie odczytuje pliku logowania Codex ani nie
-wysyła takiego tokenu do niepublicznego API. Funkcja może zostać dodana, gdy OpenAI
-udostępni stabilny, oficjalny interfejs do odczytu limitów.
-
-## Uruchomienie ze źródeł
-
-Python 3.11 lub nowszy jest wymagany wyłącznie do pracy ze źródłami:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -c constraints.txt -e ".[dev]"
-.\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe main.py
-```
-
-Budowanie wersji przenośnej, integracji i instalatora:
-
-```powershell
-.\build.ps1 -Installer
-```
-
-Skrypt uruchamia testy, tworzy ikonę, buduje aplikację, integrację, instalator i plik
-sum SHA-256. Wymaga Inno Setup 7 dostępnego jako `iscc.exe` albo w
-`tools/InnoSetup/7.0.2`.
+\
 
 ## Rozwiązywanie problemów
 
