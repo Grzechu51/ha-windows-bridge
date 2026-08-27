@@ -62,6 +62,12 @@ show_overlay:
             - small
             - medium
             - large
+    layout:
+      selector:
+        select:
+          options:
+            - default
+            - media
     opacity:
       selector:
         number:

@@ -50,6 +50,7 @@ _OVERLAY_OPTIONS = {
     ),
     vol.Optional("monitor"): vol.All(vol.Coerce(int), vol.Range(min=0, max=15)),
     vol.Optional("size"): vol.In({"small", "medium", "large"}),
+    vol.Optional("layout"): vol.In({"default", "media"}),
     vol.Optional("opacity"): vol.All(
         vol.Coerce(float), vol.Range(min=0.35, max=1.0)
     ),

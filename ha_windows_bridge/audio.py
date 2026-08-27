@@ -355,7 +355,7 @@ class WindowsAudioService:
                 return None
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
             return psutil.Process(pid).name()
-        except (psutil.Error, OSError):
+        except (psutil.Error, OSError, TypeError, ValueError):
             return None
 
     @staticmethod

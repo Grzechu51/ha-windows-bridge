@@ -168,6 +168,38 @@ def test_windows_update_status_is_derived_without_blocking(monkeypatch) -> None:
     assert health.power_plan == "Balanced"
 
 
+def test_active_power_plan_handles_missing_command_output(monkeypatch, tmp_path) -> None:
+    system_root = tmp_path / "Windows"
+    executable = system_root / "System32" / "powercfg.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"MZ")
+    monkeypatch.setenv("SYSTEMROOT", str(system_root))
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout=None),
+    )
+
+    assert WindowsSystemMonitor._active_power_plan() == ""
+
+
+def test_active_power_plan_decodes_windows_oem_output(monkeypatch, tmp_path) -> None:
+    system_root = tmp_path / "Windows"
+    executable = system_root / "System32" / "powercfg.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"MZ")
+    monkeypatch.setenv("SYSTEMROOT", str(system_root))
+    output = (
+        b"Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  "
+        b"(Wysoka wydajno\x98\x86)"
+    )
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout=output),
+    )
+
+    assert WindowsSystemMonitor._active_power_plan() == "Wysoka wydajność"
+
+
 def test_zero_physical_disk_health_status_means_healthy(monkeypatch) -> None:
     import win32com.client
 

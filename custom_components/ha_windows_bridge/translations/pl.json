@@ -37,6 +37,7 @@
         "corner": {"name": "Narożnik"},
         "monitor": {"name": "Monitor"},
         "size": {"name": "Rozmiar"},
+        "layout": {"name": "Układ", "description": "Media umieszcza przekazany obraz obok tytułu i wiadomości."},
         "opacity": {"name": "Przezroczystość"},
         "preset": {"name": "Styl"}
       }

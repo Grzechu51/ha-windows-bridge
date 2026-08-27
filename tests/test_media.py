@@ -311,8 +311,9 @@ def test_home_assistant_integration_files_are_valid_json() -> None:
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["dependencies"] == ["mqtt"]
     assert manifest["mqtt"] == ["ha-windows-bridge/devices/+"]
-    assert manifest["version"] == "1.2.0"
+    assert manifest["version"] == "1.2.1"
     assert manifest["codeowners"] == ["@Grzechu51"]
     assert manifest["documentation"] == "https://github.com/Grzechu51/ha-windows-bridge"
     assert manifest["issue_tracker"].endswith("/Grzechu51/ha-windows-bridge/issues")
-    assert (root / "brand" / "icon.png").read_bytes().startswith(b"\x89PNG")
+    for brand_file in ("icon.png", "dark_icon.png", "logo.png", "dark_logo.png"):
+        assert (root / "brand" / brand_file).read_bytes().startswith(b"\x89PNG")

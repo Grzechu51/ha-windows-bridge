@@ -869,30 +869,30 @@ class MqttBridge:
                     or self.config.publish_idle
                     or self.config.publish_session_lock
                 ):
-                    self._monitor_context()
                     next_context = now + 1.0
+                    self._monitor_context()
                 if now >= next_system and (
                     self.config.publish_system_stats
                     or self.config.publish_cpu_stats
                     or self.config.publish_gpu_stats
                 ):
-                    self._monitor_system()
                     next_system = now + 5.0
+                    self._monitor_system()
                 if now >= next_health and self.config.publish_windows_health:
-                    self._monitor_windows_health()
                     next_health = now + 30.0
+                    self._monitor_windows_health()
                 if now >= next_disk and self.config.publish_disk_stats:
-                    self._monitor_disks()
                     next_disk = now + 5.0
+                    self._monitor_disks()
                 if now >= next_devices and self.config.publish_devices:
-                    self._monitor_devices()
                     next_devices = now + 10.0
+                    self._monitor_devices()
                 if now >= next_output and self.config.control_audio_output:
-                    self._monitor_audio_output()
                     next_output = now + 3.0
+                    self._monitor_audio_output()
                 if now >= next_media and self.config.media_player_enabled:
-                    self._monitor_media()
                     next_media = now + 1.0
+                    self._monitor_media()
             except Exception:
                 self.log.exception("Błąd podczas odczytu stanu Windows")
 

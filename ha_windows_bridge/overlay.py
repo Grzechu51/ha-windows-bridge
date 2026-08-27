@@ -8,9 +8,16 @@ import re
 from collections import deque
 from typing import Any
 
-from PySide6.QtCore import QObject, Qt, QTimer
-from PySide6.QtGui import QGuiApplication, QPixmap
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout
+from PySide6.QtCore import QObject, QRect, Qt, QTimer
+from PySide6.QtGui import QColor, QGuiApplication, QPixmap
+from PySide6.QtWidgets import (
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QVBoxLayout,
+)
 
 from .system_monitor import WindowsSystemMonitor
 
@@ -22,6 +29,13 @@ _PRESET_COLORS = {
     "warning": "#f2b84b",
     "error": "#e4656a",
     "info": "#5aa9e6",
+}
+_PRESET_ICONS = {
+    "default": "⌂",
+    "success": "✓",
+    "warning": "!",
+    "error": "×",
+    "info": "i",
 }
 
 
@@ -36,8 +50,11 @@ class OverlayManager(QObject):
         self._queue: deque[dict[str, Any]] = deque(maxlen=20)
         self._current: dict[str, Any] | None = None
         self._window: QFrame | None = None
+        self._card: QFrame | None = None
         self._icon: QLabel | None = None
+        self._title: QLabel | None = None
         self._label: QLabel | None = None
+        self._cover: QLabel | None = None
         self._image: QLabel | None = None
         self._progress: QProgressBar | None = None
         self._timer: QTimer | None = None
@@ -111,8 +128,11 @@ class OverlayManager(QObject):
             self._window.close()
             self._window.deleteLater()
         self._window = None
+        self._card = None
         self._icon = None
+        self._title = None
         self._label = None
+        self._cover = None
         self._image = None
         self._progress = None
         self._timer = None
@@ -133,8 +153,11 @@ class OverlayManager(QObject):
             item is None
             for item in (
                 self._window,
+                self._card,
                 self._icon,
+                self._title,
                 self._label,
+                self._cover,
                 self._image,
                 self._progress,
                 self._timer,
@@ -144,23 +167,43 @@ class OverlayManager(QObject):
 
         safe_title = html.escape(request["title"])
         safe_message = html.escape(request["message"]).replace("\n", "<br>")
-        self._label.setText(f"<b>{safe_title}</b><br>{safe_message}")
-        self._icon.setText(request["icon"])
-        self._icon.setVisible(bool(request["icon"]))
+        self._title.setText(safe_title)
+        self._label.setText(safe_message)
+        self._label.setVisible(bool(request["message"]))
+        self._icon.setText(request["icon"] or _PRESET_ICONS[request["preset"]])
         pixmap = self._decode_qr(request.get("qr", "")) or self._decode_image(
             request.get("image", "")
         )
+        widths = {"small": 320, "medium": 400, "large": 520}
+        card_width = widths[request["size"]]
         if pixmap is not None:
-            self._image.setPixmap(
-                pixmap.scaled(
-                    440,
-                    220,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
+            if request["layout"] == "media":
+                self._cover.setPixmap(
+                    pixmap.scaled(
+                        104,
+                        104,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
                 )
-            )
-            self._image.setVisible(True)
+                self._cover.setVisible(True)
+                self._image.clear()
+                self._image.setVisible(False)
+            else:
+                self._image.setPixmap(
+                    pixmap.scaled(
+                        card_width - 48,
+                        240,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+                self._image.setVisible(True)
+                self._cover.clear()
+                self._cover.setVisible(False)
         else:
+            self._cover.clear()
+            self._cover.setVisible(False)
             self._image.clear()
             self._image.setVisible(False)
         progress = request.get("progress")
@@ -169,17 +212,34 @@ class OverlayManager(QObject):
             self._progress.setValue(progress)
 
         accent = _PRESET_COLORS[request["preset"]]
+        accent_color = QColor(accent)
+        icon_background = (
+            f"rgba({accent_color.red()}, {accent_color.green()}, "
+            f"{accent_color.blue()}, 36)"
+        )
         opacity = request["opacity"]
         self._window.setStyleSheet(
-            "QFrame#windowsOverlay { background: rgba(10, 13, 15, 235); "
-            f"border: 1px solid {accent}; border-radius: 12px; }} "
-            "QLabel { color: #f4f7f6; font-size: 14px; background: transparent; } "
-            f"QProgressBar {{ background: #293236; border: none; border-radius: 3px; }} "
-            f"QProgressBar::chunk {{ background: {accent}; border-radius: 3px; }}"
+            "QFrame#windowsOverlay { background: transparent; border: none; } "
+            "QFrame#overlayCard { background-color: rgba(13, 16, 18, 247); "
+            f"border: 1px solid {accent}; border-radius: 16px; }} "
+            "QLabel { background: transparent; } "
+            "QLabel#overlayTitle { color: #f5f8f7; font-size: 15px; "
+            "font-weight: 700; } "
+            "QLabel#overlayMessage { color: #b9c3c7; font-size: 13px; } "
+            "QLabel#overlayCover { background-color: #171d20; border: 1px solid #334044; "
+            "border-radius: 12px; padding: 3px; } "
+            f"QLabel#overlayIcon {{ color: {accent}; background-color: {icon_background}; "
+            f"border: 1px solid {accent}; border-radius: 18px; font-size: 18px; "
+            "font-weight: 700; } "
+            "QProgressBar#overlayProgress { background: #273034; border: none; "
+            "border-radius: 3px; } "
+            f"QProgressBar#overlayProgress::chunk {{ background: {accent}; "
+            "border-radius: 3px; }"
         )
         self._window.setWindowOpacity(opacity)
-        widths = {"small": 300, "medium": 420, "large": 580}
-        self._window.setFixedWidth(widths[request["size"]])
+        self._card.setFixedWidth(card_width)
+        self._window.setFixedWidth(card_width + 20)
+        self._window.ensurePolished()
         self._window.adjustSize()
         self._position(request["monitor"], request["corner"])
         self._window.show()
@@ -198,16 +258,32 @@ class OverlayManager(QObject):
             return
         screen = screens[max(0, min(len(screens) - 1, monitor))]
         area = screen.availableGeometry()
-        margin = 28
-        x = area.x() + margin
-        y = area.y() + margin
-        if corner in {"top_right", "bottom_right"}:
-            x = area.right() - self._window.width() - margin
-        elif corner == "top_center":
-            x = area.x() + (area.width() - self._window.width()) // 2
-        if corner in {"bottom_left", "bottom_right"}:
-            y = area.bottom() - self._window.height() - margin
+        x, y = self._position_for_geometry(
+            area,
+            self._window.width(),
+            self._window.height(),
+            corner,
+        )
         self._window.move(x, y)
+
+    @staticmethod
+    def _position_for_geometry(
+        area: QRect,
+        width: int,
+        height: int,
+        corner: str,
+        margin: int = 4,
+    ) -> tuple[int, int]:
+        """Position the transparent shadow window; the visible card adds 8 px."""
+        x = area.left() + margin
+        y = area.top() + margin
+        if corner in {"top_right", "bottom_right"}:
+            x = area.right() + 1 - width - margin
+        elif corner == "top_center":
+            x = area.left() + (area.width() - width) // 2
+        if corner in {"bottom_left", "bottom_right"}:
+            y = area.bottom() + 1 - height - margin
+        return x, y
 
     def _ensure_window(self) -> None:
         if self._window is not None:
@@ -223,32 +299,73 @@ class OverlayManager(QObject):
         window.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         window.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        layout = QVBoxLayout(window)
-        layout.setContentsMargins(18, 14, 18, 14)
+        outer = QHBoxLayout(window)
+        outer.setContentsMargins(8, 8, 8, 12)
+
+        card = QFrame()
+        card.setObjectName("overlayCard")
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(24)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(0, 0, 0, 175))
+        card.setGraphicsEffect(shadow)
+        card_layout = QHBoxLayout(card)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(0)
+
+        content = QVBoxLayout()
+        content.setContentsMargins(15, 14, 16, 14)
+        content.setSpacing(10)
+        body = QHBoxLayout()
+        body.setSpacing(14)
+        cover = QLabel()
+        cover.setObjectName("overlayCover")
+        cover.setFixedSize(112, 112)
+        cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cover.setVisible(False)
+        body.addWidget(cover, 0, Qt.AlignmentFlag.AlignTop)
+        text = QVBoxLayout()
+        text.setSpacing(8)
         top = QHBoxLayout()
+        top.setSpacing(12)
         icon = QLabel()
-        icon.setStyleSheet("font-size: 24px")
-        icon.setAlignment(Qt.AlignmentFlag.AlignTop)
+        icon.setObjectName("overlayIcon")
+        icon.setFixedSize(36, 36)
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title = QLabel()
+        title.setObjectName("overlayTitle")
+        title.setWordWrap(True)
+        top.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+        top.addWidget(title, 1, Qt.AlignmentFlag.AlignVCenter)
         label = QLabel()
+        label.setObjectName("overlayMessage")
         label.setWordWrap(True)
         label.setTextFormat(Qt.TextFormat.RichText)
-        top.addWidget(icon)
-        top.addWidget(label, 1)
         image = QLabel()
         image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         progress = QProgressBar()
+        progress.setObjectName("overlayProgress")
         progress.setRange(0, 100)
         progress.setTextVisible(False)
         progress.setFixedHeight(6)
-        layout.addLayout(top)
-        layout.addWidget(image)
-        layout.addWidget(progress)
+        text.addLayout(top)
+        text.addWidget(label)
+        text.addStretch()
+        body.addLayout(text, 1)
+        content.addLayout(body)
+        content.addWidget(image)
+        content.addWidget(progress)
+        card_layout.addLayout(content, 1)
+        outer.addWidget(card)
         timer = QTimer(window)
         timer.setSingleShot(True)
         timer.timeout.connect(lambda: self.hide(show_next=True))
         self._window = window
+        self._card = card
         self._icon = icon
+        self._title = title
         self._label = label
+        self._cover = cover
         self._image = image
         self._progress = progress
         self._timer = timer
@@ -273,6 +390,9 @@ class OverlayManager(QObject):
         size = str(options.get("size", "medium")).strip().lower()
         if size not in {"small", "medium", "large"}:
             size = "medium"
+        layout = str(options.get("layout", "default")).strip().lower()
+        if layout not in {"default", "media"}:
+            layout = "default"
         progress = options.get("progress")
         try:
             progress = max(0, min(100, round(float(progress)))) if progress is not None else None
@@ -283,9 +403,9 @@ class OverlayManager(QObject):
         except (TypeError, ValueError):
             duration = self.duration_seconds
         try:
-            opacity = max(0.35, min(1.0, float(options.get("opacity", 0.96))))
+            opacity = max(0.35, min(1.0, float(options.get("opacity", 0.92))))
         except (TypeError, ValueError):
-            opacity = 0.96
+            opacity = 0.92
         try:
             monitor = max(0, min(15, int(options.get("monitor", 0))))
         except (TypeError, ValueError):
@@ -303,6 +423,7 @@ class OverlayManager(QObject):
             "pinned": bool(options.get("pinned", False)),
             "corner": corner,
             "size": size,
+            "layout": layout,
             "opacity": opacity,
             "preset": preset,
             "monitor": monitor,

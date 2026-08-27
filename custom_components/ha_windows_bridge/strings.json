@@ -37,6 +37,7 @@
         "corner": {"name": "Corner"},
         "monitor": {"name": "Monitor"},
         "size": {"name": "Size"},
+        "layout": {"name": "Layout", "description": "Media places a supplied image next to the title and message."},
         "opacity": {"name": "Opacity"},
         "preset": {"name": "Preset"}
       }

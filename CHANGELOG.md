@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.1
+
+- przeprojektowana nakładka Windows z widoczną ramką, cieniem, kolorowym obramowaniem i
+  mniejszym odstępem od wybranego rogu ekranu;
+- usunięty boczny pasek nakładki, lekko zwiększona przezroczystość i dodany układ Media;
+- komplet lokalnych ikon i logo integracji dla jasnego oraz ciemnego interfejsu HA;
+- naprawiony odczyt aktywnego planu zasilania na Windows używającym kodowania OEM;
+- pojedynczy błąd opcjonalnego monitora nie powoduje już odpytywania go w każdej iteracji;
+- zabezpieczony odczyt baterii i sporadyczne nieprawidłowe PID aktywnego okna.
+
 ## 1.2.0
 
 - nowa, przełączana sekcja **System i dyski** ze stanem Windows Update, zasilania,
@@ -7,7 +17,8 @@
 - osobne, automatycznie wykrywane moduły telemetrii CPU i GPU bez pustych encji;
 - **Audio** z obsługą wielu sesji, balansem, profilami i duckingiem z regulacją czułości;
 - wybrane urządzenia Plug and Play jako encje obecności;
-- bezpieczna nakładka Windows z kolejką, aktualizacją po ID, obrazem, QR i postępem;
+- bezpieczna, obramowana nakładka Windows z kolejką, aktualizacją po ID, obrazem, QR
+  i postępem;
 - osobne zakładki i przełączniki wszystkich nowych modułów w interfejsie PL/EN;
 - dodatkowa walidacja MQTT, obrazów i poleceń oraz testy regresji nowych funkcji;
 - poprawione pakowanie bibliotek Qt na Windows oraz automatyczny test startu gotowego EXE;

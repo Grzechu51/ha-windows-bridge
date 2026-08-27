@@ -764,9 +764,15 @@ class MainWindow(QMainWindow):
         devices.addStretch()
 
         overlay = add_tab("Nakładka")
+        overlay_info = QLabel(
+            "Home Assistant może wyświetlać tytuł, treść, postęp, kod QR oraz obraz. Układ Media pokazuje okładkę obok tytułu i opisu."
+        )
+        overlay_info.setObjectName("settingDescription")
+        overlay_info.setWordWrap(True)
+        overlay.addWidget(overlay_info)
         self.overlay_enabled_row = SettingRow(
             "Wiadomości na ekranie",
-            "Dodaj encję do wyświetlania krótkich wiadomości nad zwykłymi oknami Windows.",
+            "Dodaj w Home Assistant encję i akcje do wyświetlania wiadomości na tym komputerze.",
         )
         self.overlay_fullscreen_row = SettingRow(
             "Zezwalaj w pełnym ekranie",
@@ -785,7 +791,7 @@ class MainWindow(QMainWindow):
             )
         )
         warning = QLabel(
-            "Wyłączenie modułu usuwa okno nakładki. Nie używa on hooków ani pamięci gry, ale zgodność zależy od regulaminu konkretnego anty-cheata."
+            "Obraz jest pojedynczą grafiką PNG, JPEG, GIF lub WebP do 512 KiB, a nie transmisją wideo. Nakładka nie używa hooków ani pamięci gry, ale zgodność zależy od regulaminu konkretnego anty-cheata."
         )
         warning.setObjectName("settingDescription")
         warning.setWordWrap(True)

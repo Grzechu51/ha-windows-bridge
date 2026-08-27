@@ -111,12 +111,12 @@ Home Assistant.
 ## Instalacja aplikacji Windows
 
 1. Otwórz [najnowsze wydanie](https://github.com/Grzechu51/ha-windows-bridge/releases/latest).
-2. Pobierz **HA-Windows-Bridge-Setup-1.2.0.exe**.
-3. Porównaj sumę SHA-256 z plikiem **SHA256SUMS-1.2.0.txt**.
+2. Pobierz **HA-Windows-Bridge-Setup-1.2.1.exe**.
+3. Porównaj sumę SHA-256 z plikiem **SHA256SUMS-1.2.1.txt**.
 4. Uruchom instalator i opcjonalnie utwórz skrót na pulpicie.
 5. Uruchom **HA Windows Bridge** z menu Start.
 
-Archiwum **HA-Windows-Bridge-1.2.0-win64.zip** jest wersją przenośną. Po rozpakowaniu
+Archiwum **HA-Windows-Bridge-1.2.1-win64.zip** jest wersją przenośną. Po rozpakowaniu
 trzeba zachować cały katalog wraz z folderem `_internal`.
 
 ## Pierwsza konfiguracja
@@ -142,7 +142,7 @@ obrazu Home Assistant.
 Pojedynczy obraz jest ograniczony do 1 MB. Akceptowane są PNG, JPEG, GIF i WebP o
 zgodnym typie MIME oraz sygnaturze pliku. Brak miniatury nie blokuje odtwarzacza.
 
-## Moduły 1.2.0
+## Moduły rozszerzone
 
 Zakładka **Funkcje** jest podzielona na **Ogólne**, **System i dyski**, **Audio**,
 **Urządzenia** i **Nakładka**. Każdą grupę można włączyć niezależnie.
@@ -180,8 +180,10 @@ commands są ignorowane, a wiadomość pojawia się jako powiadomienie zasobnika
 Po włączeniu nakładki dostępna jest druga encja `notify` do prostych komunikatów oraz
 cztery akcje integracji: `show_overlay`, `update_overlay`, `remove_overlay` i
 `clear_overlay`. Akcje udostępniają ID, ikonę, obraz, QR, postęp, czas, przypięcie,
-narożnik, monitor, rozmiar, przezroczystość i styl. Obraz musi być poprawnym PNG, JPEG,
-GIF lub WebP jako `data:image/...;base64` i nie może przekraczać 512 KiB.
+narożnik, monitor, rozmiar, układ, przezroczystość i styl. Obraz musi być poprawnym PNG,
+JPEG, GIF lub WebP jako `data:image/...;base64` i nie może przekraczać 512 KiB. Jest to
+pojedyncza grafika, nie podgląd wideo. Dane są wysyłane przez MQTT tylko przy wywołaniu
+akcji i nie są zachowywane przez brokera.
 
 ```yaml
 action: ha_windows_bridge.show_overlay
@@ -197,10 +199,47 @@ data:
   preset: info
 ```
 
+Układ `media` umieszcza przekazaną okładkę po lewej stronie oraz tytuł, opis i postęp po
+prawej. Tytuł i wykonawcę można pobierać z dowolnej encji odtwarzacza za pomocą szablonu:
+
+```yaml
+action: ha_windows_bridge.show_overlay
+target:
+  entity_id: notify.pc_windows_overlay
+data:
+  title: "{{ state_attr('media_player.spotify', 'media_title') or 'Media Player' }}"
+  message: "{{ state_attr('media_player.spotify', 'media_artist') or '' }}"
+  image: "data:image/jpeg;base64,TUTAJ_DANE_OBRAZU"
+  layout: media
+  size: large
+  preset: info
+```
+
+Pole `image` nie przyjmuje adresu URL ani identyfikatora encji. Dzięki temu aplikacja
+Windows nie otrzymuje tokenu Home Assistant i nie pobiera dowolnych adresów sieciowych.
+Aktualnie obraz kamery lub zmieniającą się okładkę musi przygotować automatyzacja albo
+zewnętrzny skrypt jako URI danych. Bezpośredni wybór encji kamery nie jest jeszcze
+włączony, ponieważ oznaczałby przesyłanie prywatnej klatki przez MQTT.
+
+Do jednorazowego przygotowania URI obrazu w PowerShell można użyć:
+
+```powershell
+$bytes = [IO.File]::ReadAllBytes("C:\Obrazy\okladka.jpg")
+"data:image/jpeg;base64,$([Convert]::ToBase64String($bytes))"
+```
+
 `ha_windows_bridge.update_overlay` z tym samym `notification_id` aktualizuje komunikat,
 `remove_overlay` usuwa wskazany, a `clear_overlay` czyści całą kolejkę. Kolejka jest
 ograniczona do 20 pozycji. Wszystkie akcje sprawdzają uprawnienia do wskazanej encji i
 publikują wyłącznie do topicu przypisanego do tego komputera.
+
+## Ikona integracji
+
+Integracja zawiera lokalne warianty `icon.png`, `dark_icon.png`, `logo.png` i
+`dark_logo.png`. Home Assistant 2026.3 lub nowszy pobiera je bezpośrednio z katalogu
+integracji. Po aktualizacji przez HACS uruchom Home Assistant ponownie; przy zachowanym
+starym symbolu wykonaj także pełne odświeżenie strony w przeglądarce, ponieważ obrazy
+marki są buforowane.
 
 ## Konfiguracja, diagnostyka i czyszczenie
 
@@ -226,7 +265,7 @@ Code Signing. Certyfikat i klucz prywatny nie są częścią repozytorium.
 ```powershell
 $env:HAWB_SIGNING_THUMBPRINT = "40_ZNAKOWY_ODCISK_CERTYFIKATU"
 .\build.ps1 -Installer
-Get-AuthenticodeSignature ".\dist\HA-Windows-Bridge-Setup-1.2.0.exe"
+Get-AuthenticodeSignature ".\dist\HA-Windows-Bridge-Setup-1.2.1.exe"
 ```
 
 Bez certyfikatu pliki nadal można zbudować, ale Windows SmartScreen może wyświetlić

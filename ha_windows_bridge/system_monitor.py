@@ -210,7 +210,23 @@ class WindowsSystemMonitor:
 
     def windows_health(self) -> WindowsHealth:
         self._schedule_windows_update_check()
-        battery = psutil.sensors_battery()
+        try:
+            battery = psutil.sensors_battery()
+        except (AttributeError, OSError, RuntimeError):
+            battery = None
+        battery_percent: float | None = None
+        on_ac_power: bool | None = None
+        if battery is not None:
+            try:
+                raw_percent = getattr(battery, "percent", None)
+                if raw_percent is not None:
+                    battery_percent = float(raw_percent)
+                raw_power = getattr(battery, "power_plugged", None)
+                if raw_power is not None:
+                    on_ac_power = bool(raw_power)
+            except (TypeError, ValueError):
+                battery_percent = None
+                on_ac_power = None
         pending_restart = self._pending_restart()
         if pending_restart:
             update_status = "Restart required"
@@ -221,8 +237,8 @@ class WindowsSystemMonitor:
         else:
             update_status = "Up to date"
         return WindowsHealth(
-            battery_percent=float(battery.percent) if battery else None,
-            on_ac_power=bool(battery.power_plugged) if battery else None,
+            battery_percent=battery_percent,
+            on_ac_power=on_ac_power,
             pending_restart=pending_restart,
             power_plan=self._active_power_plan(),
             windows_update_status=update_status,
@@ -429,12 +445,20 @@ class WindowsSystemMonitor:
             completed = subprocess.run(  # nosec B603
                 [str(powercfg), "/getactivescheme"],
                 capture_output=True,
-                text=True,
                 timeout=2,
                 check=True,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            text = completed.stdout.strip()
+            raw_output = completed.stdout or b""
+            if isinstance(raw_output, bytes):
+                if raw_output.startswith((b"\xff\xfe", b"\xfe\xff")) or b"\x00" in raw_output:
+                    text = raw_output.decode("utf-16", errors="replace").strip()
+                else:
+                    text = raw_output.decode("oem", errors="replace").strip()
+            else:
+                text = str(raw_output).strip()
+            if not text:
+                return ""
             if "(" in text and ")" in text:
                 return text.rsplit("(", 1)[-1].split(")", 1)[0].strip()[:120]
             return text[:120]
