@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from ha_windows_bridge.config import AppConfig, AudioAppConfig, MqttConfig
+from ha_windows_bridge.config import (
+    AppConfig,
+    AudioAppConfig,
+    AudioProfileConfig,
+    MqttConfig,
+    TrackedDeviceConfig,
+)
 from ha_windows_bridge.discovery import (
     all_possible_discovery_topics,
     discovery_messages,
@@ -82,6 +88,7 @@ def test_optional_feature_entities_can_be_disabled() -> None:
     config.publish_idle = False
     config.publish_session_lock = False
     config.publish_system_stats = False
+    config.publish_gpu_stats = False
     config.control_microphone = False
     config.control_audio_output = False
     config.control_master_volume = False
@@ -119,3 +126,50 @@ def test_power_actions_and_windows_notifications_are_discovered() -> None:
     notification = next(message.payload for message in messages if "/notify/" in message.topic)
     assert notification["command_topic"] == "hawn/gaming-pc/notification/show/set"
     assert notification["unique_id"] == "gaming_pc_123_windows_notification"
+
+
+def test_modular_system_audio_device_and_overlay_entities_are_capability_filtered() -> None:
+    config = sample_config()
+    config.publish_windows_health = True
+    config.publish_disk_stats = True
+    config.publish_cpu_stats = True
+    config.publish_gpu_stats = True
+    config.audio_enhancements_enabled = True
+    config.control_channel_balance = True
+    config.publish_audio_sessions = True
+    config.audio_profiles_enabled = True
+    config.audio_profiles = [AudioProfileConfig("Gaming", master_volume=70)]
+    config.publish_devices = True
+    config.tracked_devices = [TrackedDeviceConfig("USB\\PAD", "Controller", "HIDClass")]
+    config.overlay_enabled = True
+
+    capabilities = {
+        "cpu_frequency",
+        "cpu_vendor",
+        "gpu_usage",
+        "gpu_vendor",
+        "pending_restart",
+        "power_plan",
+        "windows_update",
+        "disk_used",
+        "disk_free",
+        "disk_read",
+        "disk_write",
+        "disk_health",
+    }
+    topics = {
+        message.topic
+        for message in discovery_messages(config, ["Speakers"], capabilities)
+    }
+
+    assert "homeassistant/number/gaming_pc_123/master_balance/config" in topics
+    assert "homeassistant/sensor/gaming_pc_123/spotify_sessions/config" in topics
+    assert "homeassistant/select/gaming_pc_123/audio_profile/config" in topics
+    assert "homeassistant/sensor/gaming_pc_123/disk_health/config" in topics
+    assert "homeassistant/binary_sensor/gaming_pc_123/pending_restart/config" in topics
+    assert "homeassistant/sensor/gaming_pc_123/windows_update/config" in topics
+    assert "homeassistant/binary_sensor/gaming_pc_123/device_controller/config" in topics
+    assert "homeassistant/notify/gaming_pc_123/windows_overlay/config" in topics
+    assert "homeassistant/sensor/gaming_pc_123/gpu_usage/config" in topics
+    assert "homeassistant/sensor/gaming_pc_123/gpu_temperature/config" not in topics
+    assert "homeassistant/sensor/gaming_pc_123/battery/config" not in topics

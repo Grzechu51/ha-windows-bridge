@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 APP_NAME = "HA Windows Bridge"
-CONFIG_SCHEMA_VERSION = 6
+CONFIG_SCHEMA_VERSION = 8
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_SECRET_BYTES = 64 * 1024
@@ -62,6 +62,69 @@ class AudioAppConfig:
             executable_path=str(data.get("executable_path", "")),
             allow_remote_start=bool(data.get("allow_remote_start", False)),
             allow_remote_close=bool(data.get("allow_remote_close", False)),
+        )
+
+
+@dataclass(slots=True)
+class TrackedDeviceConfig:
+    """A Windows Plug and Play device selected for Home Assistant."""
+
+    instance_id: str
+    display_name: str
+    category: str = "Device"
+    slug: str = ""
+    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        self.instance_id = self.instance_id.strip()
+        self.display_name = self.display_name.strip() or self.instance_id
+        self.category = self.category.strip() or "Device"
+        self.slug = slugify(self.slug or self.display_name or self.instance_id)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> TrackedDeviceConfig:
+        return cls(
+            instance_id=str(data.get("instance_id", "")),
+            display_name=str(data.get("display_name", "")),
+            category=str(data.get("category", "Device")),
+            slug=str(data.get("slug", "")),
+            enabled=bool(data.get("enabled", True)),
+        )
+
+
+@dataclass(slots=True)
+class AudioProfileConfig:
+    name: str
+    slug: str = ""
+    master_volume: int = 50
+    output_device: str = ""
+    app_volumes: dict[str, int] = field(default_factory=dict)
+    trigger_process: str = ""
+    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        self.name = self.name.strip() or "Audio profile"
+        self.slug = slugify(self.slug or self.name)
+        self.master_volume = max(0, min(100, int(self.master_volume)))
+        self.output_device = self.output_device.strip()
+        self.trigger_process = self.trigger_process.strip()
+        self.app_volumes = {
+            str(process).strip(): max(0, min(100, int(volume)))
+            for process, volume in self.app_volumes.items()
+            if str(process).strip()
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AudioProfileConfig:
+        volumes = data.get("app_volumes", {})
+        return cls(
+            name=str(data.get("name", "")),
+            slug=str(data.get("slug", "")),
+            master_volume=int(data.get("master_volume", 50)),
+            output_device=str(data.get("output_device", "")),
+            app_volumes=dict(volumes) if isinstance(volumes, dict) else {},
+            trigger_process=str(data.get("trigger_process", "")),
+            enabled=bool(data.get("enabled", True)),
         )
 
 
@@ -134,6 +197,7 @@ class AppConfig:
     idle_threshold: int = 300
     publish_session_lock: bool = False
     publish_system_stats: bool = False
+    publish_cpu_stats: bool = False
     publish_gpu_stats: bool = False
     control_microphone: bool = False
     control_audio_output: bool = False
@@ -141,6 +205,22 @@ class AppConfig:
     allow_power_actions: bool = False
     enable_windows_notifications: bool = False
     auto_check_updates: bool = True
+    publish_windows_health: bool = False
+    publish_disk_stats: bool = False
+    audio_enhancements_enabled: bool = False
+    control_channel_balance: bool = False
+    automatic_ducking: bool = False
+    ducking_volume: int = 35
+    ducking_sensitivity: int = 50
+    publish_audio_sessions: bool = False
+    audio_profiles_enabled: bool = False
+    automatic_audio_profiles: bool = False
+    audio_profiles: list[AudioProfileConfig] = field(default_factory=list)
+    publish_devices: bool = False
+    tracked_devices: list[TrackedDeviceConfig] = field(default_factory=list)
+    overlay_enabled: bool = False
+    overlay_allow_fullscreen: bool = False
+    overlay_duration: int = 8
 
     def __post_init__(self) -> None:
         self.language = self.language.strip().lower()
@@ -207,10 +287,20 @@ class AppConfig:
                 if reset_legacy_optional_features
                 else bool(data.get("publish_system_stats", False))
             ),
+            publish_cpu_stats=(
+                False
+                if reset_legacy_optional_features
+                else bool(
+                    data.get("publish_cpu_stats", data.get("publish_hardware_stats", False))
+                )
+            ),
             publish_gpu_stats=(
                 False
                 if reset_legacy_optional_features
-                else bool(data.get("publish_gpu_stats", False))
+                else bool(
+                    data.get("publish_gpu_stats", False)
+                    or data.get("publish_hardware_stats", False)
+                )
             ),
             control_microphone=(
                 False
@@ -226,6 +316,30 @@ class AppConfig:
             allow_power_actions=bool(data.get("allow_power_actions", False)),
             enable_windows_notifications=bool(data.get("enable_windows_notifications", False)),
             auto_check_updates=bool(data.get("auto_check_updates", True)),
+            publish_windows_health=bool(data.get("publish_windows_health", False)),
+            publish_disk_stats=bool(data.get("publish_disk_stats", False)),
+            audio_enhancements_enabled=bool(data.get("audio_enhancements_enabled", False)),
+            control_channel_balance=bool(data.get("control_channel_balance", False)),
+            automatic_ducking=bool(data.get("automatic_ducking", False)),
+            ducking_volume=int(data.get("ducking_volume", 35)),
+            ducking_sensitivity=int(data.get("ducking_sensitivity", 50)),
+            publish_audio_sessions=bool(data.get("publish_audio_sessions", False)),
+            audio_profiles_enabled=bool(data.get("audio_profiles_enabled", False)),
+            automatic_audio_profiles=bool(data.get("automatic_audio_profiles", False)),
+            audio_profiles=[
+                AudioProfileConfig.from_dict(item)
+                for item in data.get("audio_profiles", [])
+                if isinstance(item, dict)
+            ],
+            publish_devices=bool(data.get("publish_devices", False)),
+            tracked_devices=[
+                TrackedDeviceConfig.from_dict(item)
+                for item in data.get("tracked_devices", [])
+                if isinstance(item, dict)
+            ],
+            overlay_enabled=bool(data.get("overlay_enabled", False)),
+            overlay_allow_fullscreen=bool(data.get("overlay_allow_fullscreen", False)),
+            overlay_duration=int(data.get("overlay_duration", 8)),
         )
 
     def to_dict(self) -> dict:
@@ -259,6 +373,12 @@ class AppConfig:
             errors.append("Interwał odczytu musi mieścić się w zakresie 0,2–10 sekund.")
         if not 30 <= self.idle_threshold <= 7200:
             errors.append("Próg bezczynności musi mieścić się w zakresie 30–7200 sekund.")
+        if not 1 <= self.ducking_volume <= 100:
+            errors.append("Poziom wyciszenia rozmowy musi mieścić się w zakresie 1–100%.")
+        if not 1 <= self.ducking_sensitivity <= 100:
+            errors.append("Czułość mikrofonu musi mieścić się w zakresie 1–100%.")
+        if not 2 <= self.overlay_duration <= 60:
+            errors.append("Czas nakładki musi mieścić się w zakresie 2–60 sekund.")
 
         enabled = [app for app in self.apps if app.enabled]
         slugs = [app.slug for app in enabled]
@@ -267,6 +387,17 @@ class AppConfig:
         for app in enabled:
             if not app.process_name:
                 errors.append(f"Aplikacja „{app.display_name}” nie ma nazwy procesu.")
+        devices = [device for device in self.tracked_devices if device.enabled]
+        device_slugs = [device.slug for device in devices]
+        if len(device_slugs) != len(set(device_slugs)):
+            errors.append("Identyfikatory aktywnych urządzeń muszą być unikalne.")
+        for device in devices:
+            if not device.instance_id:
+                errors.append(f"Urządzenie „{device.display_name}” nie ma identyfikatora Windows.")
+        profiles = [profile for profile in self.audio_profiles if profile.enabled]
+        profile_slugs = [profile.slug for profile in profiles]
+        if len(profile_slugs) != len(set(profile_slugs)):
+            errors.append("Identyfikatory profili audio muszą być unikalne.")
         return errors
 
 

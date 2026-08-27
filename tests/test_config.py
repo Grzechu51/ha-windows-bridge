@@ -112,7 +112,9 @@ def test_first_run_defaults_are_user_friendly() -> None:
     assert config.idle_threshold == 300
     assert config.publish_session_lock is False
     assert config.publish_system_stats is False
+    assert config.publish_cpu_stats is False
     assert config.publish_gpu_stats is False
+    assert config.ducking_sensitivity == 50
     assert config.control_microphone is False
     assert config.control_audio_output is False
     assert config.media_player_enabled is False
@@ -171,7 +173,7 @@ def test_version_04_optional_features_are_disabled_during_migration() -> None:
         }
     )
 
-    assert legacy.schema_version == 6
+    assert legacy.schema_version == 8
     assert legacy.control_active_app is False
     assert legacy.publish_activity is False
     assert legacy.publish_idle is False
@@ -180,3 +182,17 @@ def test_version_04_optional_features_are_disabled_during_migration() -> None:
     assert legacy.publish_gpu_stats is False
     assert legacy.control_microphone is False
     assert legacy.control_audio_output is False
+
+
+def test_version_12_hardware_telemetry_is_migrated_to_cpu_and_gpu() -> None:
+    migrated = AppConfig.from_dict(
+        {
+            "schema_version": 7,
+            "publish_hardware_stats": True,
+            "publish_gpu_stats": False,
+        }
+    )
+
+    assert migrated.schema_version == 8
+    assert migrated.publish_cpu_stats is True
+    assert migrated.publish_gpu_stats is True

@@ -97,9 +97,12 @@ def test_nvidia_smi_is_found_in_system32(monkeypatch, tmp_path) -> None:
 def test_nvidia_metrics_are_parsed(monkeypatch) -> None:
     monitor = WindowsSystemMonitor()
     monitor._nvidia_smi = "nvidia-smi"
+    monkeypatch.setattr(monitor, "_hardware_identity", lambda: ("Intel", "NVIDIA"))
     monkeypatch.setattr(
         "ha_windows_bridge.system_monitor.subprocess.run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout="97, 71, 238.5, 6800, 8192\n"),
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout="97, 71, 238.5, 6800, 8192, 2100, 1450\n"
+        ),
     )
 
     metrics = monitor._gpu_metrics()
@@ -108,14 +111,19 @@ def test_nvidia_metrics_are_parsed(monkeypatch) -> None:
     assert metrics["gpu_temperature"] == 71
     assert metrics["gpu_power_watts"] == 238.5
     assert metrics["gpu_memory_used_mb"] == 6800
+    assert metrics["gpu_clock_mhz"] == 2100
+    assert metrics["gpu_fan_rpm"] == 1450
 
 
 def test_nvidia_metrics_keep_supported_values_when_one_field_is_unavailable(monkeypatch) -> None:
     monitor = WindowsSystemMonitor()
     monitor._nvidia_smi = "nvidia-smi"
+    monkeypatch.setattr(monitor, "_hardware_identity", lambda: ("AMD", "NVIDIA"))
     monkeypatch.setattr(
         "ha_windows_bridge.system_monitor.subprocess.run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout="42, 65, [N/A], 1024, 8192\n"),
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout="42, 65, [N/A], 1024, 8192, 1800, [N/A]\n"
+        ),
     )
 
     metrics = monitor._gpu_metrics()
@@ -140,3 +148,55 @@ def test_gpu_metrics_are_cached_for_ten_seconds(monkeypatch) -> None:
     assert monitor.system_metrics().gpu_percent == 42.0
     assert monitor.system_metrics().gpu_percent == 42.0
     assert len(calls) == 2
+
+
+def test_windows_update_status_is_derived_without_blocking(monkeypatch) -> None:
+    monitor = WindowsSystemMonitor()
+    monkeypatch.setattr(monitor, "_schedule_windows_update_check", lambda: None)
+    monkeypatch.setattr(monitor, "_pending_restart", lambda: False)
+    monkeypatch.setattr(monitor, "_active_power_plan", lambda: "Balanced")
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.psutil.sensors_battery",
+        lambda: None,
+    )
+    monitor._pending_updates = 3
+
+    health = monitor.windows_health()
+
+    assert health.windows_update_status == "3 update(s) available"
+    assert health.pending_restart is False
+    assert health.power_plan == "Balanced"
+
+
+def test_zero_physical_disk_health_status_means_healthy(monkeypatch) -> None:
+    import win32com.client
+
+    storage = SimpleNamespace(
+        ExecQuery=lambda _query: [SimpleNamespace(HealthStatus=0, Temperature=42)]
+    )
+    monkeypatch.setattr(win32com.client, "GetObject", lambda _path: storage)
+
+    assert WindowsSystemMonitor._physical_disk_health() == ("Healthy", 42.0)
+
+
+def test_pnp_presence_uses_windows_present_property(monkeypatch) -> None:
+    import win32com.client
+
+    service = SimpleNamespace(
+        ExecQuery=lambda _query: [
+            SimpleNamespace(
+                PNPDeviceID=r"USB\VID_1234&PID_5678",
+                Name="USB controller",
+                PNPClass="USBDevice",
+                Present=False,
+                ConfigManagerErrorCode=0,
+            )
+        ]
+    )
+    monkeypatch.setattr(win32com.client, "GetObject", lambda _path: service)
+
+    devices = WindowsSystemMonitor.list_pnp_devices()
+
+    assert len(devices) == 1
+    assert devices[0].present is False
+    assert WindowsSystemMonitor.present_device_ids() == set()

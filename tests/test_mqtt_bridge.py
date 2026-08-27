@@ -6,7 +6,7 @@ import json
 import pytest
 
 from ha_windows_bridge.audio import AudioSessionSnapshot, MicrophoneSnapshot
-from ha_windows_bridge.config import AppConfig, AudioAppConfig, MqttConfig
+from ha_windows_bridge.config import AppConfig, AudioAppConfig, AudioProfileConfig, MqttConfig
 from ha_windows_bridge.discovery import (
     active_app_topic,
     active_window_topic,
@@ -139,7 +139,7 @@ class FakeSystem:
     def context_snapshot(self):
         return PcContext("Cyberpunk2077.exe", "Cyberpunk 2077", True, 12, False)
 
-    def system_metrics(self, _include_gpu):
+    def system_metrics(self, include_cpu=True, include_gpu=True):
         return SystemMetrics(18.5, 43.2, 3600, 97.0, 71.0, 238.0, 6800.0, 8192.0)
 
 
@@ -361,8 +361,14 @@ def test_running_state_uses_process_even_without_audio_session() -> None:
 
 
 def test_microphone_activity_is_held_long_enough_to_be_visible(monkeypatch) -> None:
-    config = AppConfig(mqtt=MqttConfig(host="broker"), apps=[], control_microphone=True)
+    config = AppConfig(
+        mqtt=MqttConfig(host="broker"),
+        apps=[],
+        control_microphone=True,
+        ducking_sensitivity=73,
+    )
     audio = FakeAudio()
+    received_sensitivity = []
     snapshots = iter(
         [
             MicrophoneSnapshot(0.6, False, True),
@@ -370,7 +376,9 @@ def test_microphone_activity_is_held_long_enough_to_be_visible(monkeypatch) -> N
             MicrophoneSnapshot(0.6, False, False),
         ]
     )
-    audio.get_microphone_snapshot = lambda: next(snapshots)
+    audio.get_microphone_snapshot = lambda sensitivity=50: (
+        received_sensitivity.append(sensitivity) or next(snapshots)
+    )
     bridge = MqttBridge(config, audio=audio)
     bridge.client = FakeClient()
     bridge._connected.set()
@@ -380,6 +388,8 @@ def test_microphone_activity_is_held_long_enough_to_be_visible(monkeypatch) -> N
     bridge._monitor_microphone()
     bridge._monitor_microphone()
     bridge._monitor_microphone()
+
+    assert received_sensitivity == [73, 73, 73]
 
     active_states = [
         payload
@@ -478,7 +488,11 @@ def test_media_player_publishes_announcement_and_changed_state() -> None:
 
 
 def test_power_action_and_notification_commands_are_dispatched() -> None:
-    from ha_windows_bridge.discovery import power_action_topic, windows_notification_topic
+    from ha_windows_bridge.discovery import (
+        overlay_notification_topic,
+        power_action_topic,
+        windows_notification_topic,
+    )
 
     class FakePowerActions:
         def __init__(self):
@@ -493,14 +507,19 @@ def test_power_action_and_notification_commands_are_dispatched() -> None:
         apps=[],
         allow_power_actions=True,
         enable_windows_notifications=True,
+        overlay_enabled=True,
     )
     power = FakePowerActions()
     notifications = []
+    overlays = []
     bridge = MqttBridge(
         config,
         audio=FakeAudio(),
         power_actions=power,
         notification_callback=lambda title, message: notifications.append((title, message)),
+        overlay_callback=lambda title, message, data: overlays.append(
+            (title, message, data)
+        ),
     )
     bridge.client = FakeClient()
     bridge._connected.set()
@@ -525,4 +544,64 @@ def test_power_action_and_notification_commands_are_dispatched() -> None:
             b'{"title":"HA","message":"Front door is open"}',
             False,
         ),
+    )
+    bridge._on_message(
+        None,
+        None,
+        FakeMessage(
+            overlay_notification_topic(config),
+            b'{"title":"Update","message":"50%","data":{"action":"show","id":"job","progress":50}}',
+            False,
+        ),
+    )
+    bridge._on_message(
+        None,
+        None,
+        FakeMessage(
+            overlay_notification_topic(config),
+            b'{"title":"","message":"","data":{"action":"clear"}}',
+            False,
+        ),
+    )
+
+    assert power.actions == ["restart"]
+    assert notifications == [
+        ("HA Windows Bridge", "Action accepted"),
+        ("HA", "Front door is open"),
+    ]
+    assert overlays == [
+        ("Update", "50%", {"action": "show", "id": "job", "progress": 50}),
+        ("Home Assistant", "", {"action": "clear"}),
+    ]
+
+
+def test_audio_profile_and_master_volume_are_not_artificially_limited() -> None:
+    profile = AudioProfileConfig(
+        "Gaming",
+        master_volume=85,
+        output_device="Headphones",
+        app_volumes={"Spotify.exe": 40},
+    )
+    config = AppConfig(
+        mqtt=MqttConfig(host="broker", base_topic="hawn/pc"),
+        apps=[],
+        audio_enhancements_enabled=True,
+        audio_profiles_enabled=True,
+        audio_profiles=[profile],
+    )
+    audio = FakeAudio()
+    bridge = MqttBridge(config, audio=audio)
+    bridge.client = FakeClient()
+    bridge._connected.set()
+
+    bridge._handle_master_volume(0.9)
+    bridge._handle_audio_profile(b"Gaming")
+    bridge._handle_media_command(b'{"action":"set_volume","value":0.95}')
+
+    assert audio.master_set_calls == [0.9, 0.85, 0.95]
+    assert audio.output_calls == ["Headphones"]
+    assert audio.set_calls == [("Spotify.exe", 0.4)]
+    assert any(
+        topic == "hawn/pc/audio/profile/state" and payload == "Gaming"
+        for topic, payload, _qos, _retain in bridge.client.published
     )

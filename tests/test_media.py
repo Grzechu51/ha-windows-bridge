@@ -311,7 +311,7 @@ def test_home_assistant_integration_files_are_valid_json() -> None:
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["dependencies"] == ["mqtt"]
     assert manifest["mqtt"] == ["ha-windows-bridge/devices/+"]
-    assert manifest["version"] == "1.1.0"
+    assert manifest["version"] == "1.2.0"
     assert manifest["codeowners"] == ["@Grzechu51"]
     assert manifest["documentation"] == "https://github.com/Grzechu51/ha-windows-bridge"
     assert manifest["issue_tracker"].endswith("/Grzechu51/ha-windows-bridge/issues")

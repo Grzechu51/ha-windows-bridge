@@ -19,5 +19,47 @@
         "name": "Media Player"
       }
     }
+  },
+  "services": {
+    "show_overlay": {
+      "name": "Pokaż nakładkę Windows",
+      "description": "Wyświetla zweryfikowaną, pasywną wiadomość na wybranym komputerze z Windows.",
+      "fields": {
+        "title": {"name": "Tytuł"},
+        "message": {"name": "Wiadomość"},
+        "notification_id": {"name": "ID wiadomości", "description": "Stałe ID używane później do aktualizacji lub usunięcia wiadomości."},
+        "icon": {"name": "Ikona", "description": "Do ośmiu znaków, na przykład emoji."},
+        "image": {"name": "Osadzony obraz", "description": "URI danych PNG, JPEG, GIF lub WebP do 512 KiB."},
+        "qr": {"name": "Treść kodu QR"},
+        "progress": {"name": "Postęp"},
+        "duration": {"name": "Czas"},
+        "pinned": {"name": "Przypięta"},
+        "corner": {"name": "Narożnik"},
+        "monitor": {"name": "Monitor"},
+        "size": {"name": "Rozmiar"},
+        "opacity": {"name": "Przezroczystość"},
+        "preset": {"name": "Styl"}
+      }
+    },
+    "update_overlay": {
+      "name": "Aktualizuj nakładkę Windows",
+      "description": "Zastępuje istniejącą wiadomość nakładki o tym samym ID.",
+      "fields": {
+        "notification_id": {"name": "ID wiadomości"},
+        "title": {"name": "Tytuł"},
+        "message": {"name": "Wiadomość"},
+        "progress": {"name": "Postęp"},
+        "pinned": {"name": "Przypięta"}
+      }
+    },
+    "remove_overlay": {
+      "name": "Usuń nakładkę Windows",
+      "description": "Usuwa bieżącą lub oczekującą wiadomość nakładki o podanym ID.",
+      "fields": {"notification_id": {"name": "ID wiadomości"}}
+    },
+    "clear_overlay": {
+      "name": "Wyczyść nakładki Windows",
+      "description": "Ukrywa bieżącą nakładkę i czyści jej kolejkę."
+    }
   }
 }

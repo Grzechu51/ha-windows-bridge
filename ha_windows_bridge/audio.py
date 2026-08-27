@@ -32,6 +32,7 @@ class AudioApplication:
 class AudioSessionSnapshot:
     volume: float
     muted: bool
+    session_count: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +95,39 @@ class WindowsAudioService:
             except Exception:
                 return False
 
-    def get_microphone_snapshot(self) -> MicrophoneSnapshot | None:
+    def get_master_balance(self) -> float | None:
+        """Return stereo balance from -1 (left) to +1 (right)."""
+        with com_scope():
+            try:
+                endpoint = AudioUtilities.GetSpeakers().EndpointVolume
+                if int(endpoint.GetChannelCount()) < 2:
+                    return None
+                left = float(endpoint.GetChannelVolumeLevelScalar(0))
+                right = float(endpoint.GetChannelVolumeLevelScalar(1))
+                peak = max(left, right)
+                if peak <= 0.0001:
+                    return 0.0
+                return max(-1.0, min(1.0, (right - left) / peak))
+            except Exception:
+                return None
+
+    def set_master_balance(self, balance: float) -> bool:
+        balance = max(-1.0, min(1.0, balance))
+        with com_scope():
+            try:
+                endpoint = AudioUtilities.GetSpeakers().EndpointVolume
+                if int(endpoint.GetChannelCount()) < 2:
+                    return False
+                master = float(endpoint.GetMasterVolumeLevelScalar())
+                left = master * (1.0 - max(0.0, balance))
+                right = master * (1.0 + min(0.0, balance))
+                endpoint.SetChannelVolumeLevelScalar(0, left, None)
+                endpoint.SetChannelVolumeLevelScalar(1, right, None)
+                return True
+            except Exception:
+                return False
+
+    def get_microphone_snapshot(self, sensitivity: int = 50) -> MicrophoneSnapshot | None:
         with com_scope():
             try:
                 device = AudioUtilities.GetMicrophone()
@@ -114,14 +147,21 @@ class WindowsAudioService:
                 return MicrophoneSnapshot(
                     float(endpoint.GetMasterVolumeLevelScalar()),
                     muted,
-                    self._microphone_signal_active(peaks, muted),
+                    self._microphone_signal_active(peaks, muted, sensitivity),
                 )
             except Exception:
                 return None
 
     @staticmethod
-    def _microphone_signal_active(peaks: list[float], muted: bool) -> bool:
-        return not muted and any(peak > 0.0005 for peak in peaks)
+    def _microphone_signal_active(
+        peaks: list[float], muted: bool, sensitivity: int = 50
+    ) -> bool:
+        sensitivity = max(1, min(100, int(sensitivity)))
+        # Audio peak values are logarithmic in practice. A logarithmic mapping
+        # gives useful adjustment across quiet and noisy microphones while
+        # keeping the slider intuitive: higher means more sensitive.
+        threshold = 0.0005 * (200 ** ((100 - sensitivity) / 99))
+        return not muted and any(peak > threshold for peak in peaks)
 
     def set_microphone_volume(self, volume: float) -> bool:
         return self._set_microphone_endpoint(volume=volume)
@@ -218,14 +258,14 @@ class WindowsAudioService:
 
     def session_snapshot(self, process_names: list[str]) -> dict[str, AudioSessionSnapshot]:
         requested = {name.lower() for name in process_names}
-        snapshot: dict[str, AudioSessionSnapshot] = {}
+        collected: dict[str, list[AudioSessionSnapshot]] = {}
         if not requested:
-            return snapshot
+            return {}
         with com_scope():
             try:
                 sessions = AudioUtilities.GetAllSessions()
             except Exception:
-                return snapshot
+                return {}
             for session in sessions:
                 process = session.Process
                 if process is None:
@@ -234,12 +274,19 @@ class WindowsAudioService:
                     key = process.name().lower()
                 except psutil.Error:
                     continue
-                if key not in requested or key in snapshot:
+                if key not in requested:
                     continue
                 state = self._read_session_state(session)
                 if state is not None:
-                    snapshot[key] = state
-        return snapshot
+                    collected.setdefault(key, []).append(state)
+        return {
+            key: AudioSessionSnapshot(
+                volume=max(state.volume for state in states),
+                muted=all(state.muted for state in states),
+                session_count=len(states),
+            )
+            for key, states in collected.items()
+        }
 
     def volume_snapshot(self, process_names: list[str]) -> dict[str, float]:
         return {name: state.volume for name, state in self.session_snapshot(process_names).items()}

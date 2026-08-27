@@ -1,0 +1,125 @@
+show_overlay:
+  target:
+    entity:
+      domain: notify
+      integration: ha_windows_bridge
+  fields:
+    title:
+      selector:
+        text:
+    message:
+      required: true
+      selector:
+        text:
+          multiline: true
+    notification_id:
+      selector:
+        text:
+    icon:
+      selector:
+        text:
+    qr:
+      selector:
+        text:
+    image:
+      selector:
+        text:
+          multiline: true
+    progress:
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
+    duration:
+      selector:
+        number:
+          min: 2
+          max: 60
+          unit_of_measurement: s
+    pinned:
+      selector:
+        boolean:
+    corner:
+      selector:
+        select:
+          options:
+            - top_left
+            - top_right
+            - bottom_left
+            - bottom_right
+            - top_center
+    monitor:
+      selector:
+        number:
+          min: 0
+          max: 15
+          mode: box
+    size:
+      selector:
+        select:
+          options:
+            - small
+            - medium
+            - large
+    opacity:
+      selector:
+        number:
+          min: 0.35
+          max: 1
+          step: 0.05
+          mode: slider
+    preset:
+      selector:
+        select:
+          options:
+            - default
+            - success
+            - warning
+            - error
+            - info
+
+update_overlay:
+  target:
+    entity:
+      domain: notify
+      integration: ha_windows_bridge
+  fields:
+    notification_id:
+      required: true
+      selector:
+        text:
+    title:
+      selector:
+        text:
+    message:
+      required: true
+      selector:
+        text:
+          multiline: true
+    progress:
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
+    pinned:
+      selector:
+        boolean:
+
+remove_overlay:
+  target:
+    entity:
+      domain: notify
+      integration: ha_windows_bridge
+  fields:
+    notification_id:
+      required: true
+      selector:
+        text:
+
+clear_overlay:
+  target:
+    entity:
+      domain: notify
+      integration: ha_windows_bridge

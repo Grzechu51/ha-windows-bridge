@@ -27,7 +27,12 @@ umieszcza wszystkie włączone encje pod jednym urządzeniem **HA Windows Bridge
 - głośność, wyciszenie i aktywność mikrofonu;
 - wybór domyślnego wyjścia audio;
 - aktywna aplikacja i okno, pełny ekran, bezczynność oraz blokada sesji;
-- CPU, RAM, czas pracy systemu i opcjonalna telemetria kart NVIDIA;
+- stan Windows Update, wymagany restart, plan zasilania i bateria komputera;
+- miejsce, transfer, stan SMART i temperatura dysków, jeżeli Windows je udostępnia;
+- CPU, RAM, czas pracy oraz automatycznie wykrywana telemetria CPU i GPU;
+- Audio: balans, wiele sesji, profile i automatyczne ściszanie z regulacją czułości;
+- obecność wybranych urządzeń Plug and Play jako encje Home Assistant;
+- bezpieczna nakładka Windows z kolejką, obrazem, QR i paskiem postępu;
 - natywny `media_player` z metadanymi, pozycją, komendami i miniaturą;
 - opcjonalne przyciski blokady, uśpienia, restartu, wyłączenia i anulowania;
 - powiadomienia Windows wysyłane z Home Assistant;
@@ -35,8 +40,8 @@ umieszcza wszystkie włączone encje pod jednym urządzeniem **HA Windows Bridge
 - polski i angielski interfejs, ciemny i jasny motyw, autostart i zasobnik systemowy;
 - automatyczne sprawdzanie dostępności nowego wydania na oficjalnym GitHubie.
 
-Każda rozszerzona funkcja jest opcjonalna. Dane systemowe, zdalne akcje, powiadomienia
-oraz zdalne uruchamianie i zamykanie programów są domyślnie wyłączone.
+Każda rozszerzona funkcja jest opcjonalna. Moduły systemu, dysków, audio, urządzeń,
+nakładki, zdalnych akcji i powiadomień są domyślnie wyłączone.
 
 ## Jak działa integracja
 
@@ -106,12 +111,12 @@ Home Assistant.
 ## Instalacja aplikacji Windows
 
 1. Otwórz [najnowsze wydanie](https://github.com/Grzechu51/ha-windows-bridge/releases/latest).
-2. Pobierz **HA-Windows-Bridge-Setup-1.1.0.exe**.
-3. Porównaj sumę SHA-256 z plikiem **SHA256SUMS-1.1.0.txt**.
+2. Pobierz **HA-Windows-Bridge-Setup-1.2.0.exe**.
+3. Porównaj sumę SHA-256 z plikiem **SHA256SUMS-1.2.0.txt**.
 4. Uruchom instalator i opcjonalnie utwórz skrót na pulpicie.
 5. Uruchom **HA Windows Bridge** z menu Start.
 
-Archiwum **HA-Windows-Bridge-1.1.0-win64.zip** jest wersją przenośną. Po rozpakowaniu
+Archiwum **HA-Windows-Bridge-1.2.0-win64.zip** jest wersją przenośną. Po rozpakowaniu
 trzeba zachować cały katalog wraz z folderem `_internal`.
 
 ## Pierwsza konfiguracja
@@ -137,6 +142,31 @@ obrazu Home Assistant.
 Pojedynczy obraz jest ograniczony do 1 MB. Akceptowane są PNG, JPEG, GIF i WebP o
 zgodnym typie MIME oraz sygnaturze pliku. Brak miniatury nie blokuje odtwarzacza.
 
+## Moduły 1.2.0
+
+Zakładka **Funkcje** jest podzielona na **Ogólne**, **System i dyski**, **Audio**,
+**Urządzenia** i **Nakładka**. Każdą grupę można włączyć niezależnie.
+
+- **Stan Windows i dysków** publikuje Windows Update, wymagany restart, plan zasilania,
+  baterię komputera, użycie miejsca, transfer oraz dostępne dane SMART i temperatury.
+- **Telemetria CPU i GPU** automatycznie wykrywa sprzęt i publikuje wyłącznie dostępne
+  pomiary. NVIDIA używa `nvidia-smi`, a pozostałe czujniki mogą pochodzić z liczników
+  Windows albo opcjonalnie uruchomionego LibreHardwareMonitor/OpenHardwareMonitor.
+- **Audio** agreguje wszystkie sesje tego samego procesu, udostępnia balans stereo,
+  automatyczne ściszanie z regulowaną czułością mikrofonu oraz profile miksu. Profil może
+  przełączyć domyślne wyjście całego systemu i uruchomić się wraz z przypisaną aplikacją.
+- **Urządzenia** wykrywa urządzenia audio, Bluetooth, USB, kamery, kontrolery, drukarki
+  i dyski widoczne jako Plug and Play. Zaznaczone pozycje otrzymują osobny sensor
+  podłączenia, którego zmiany można wykorzystać w automatyzacjach.
+- **Nakładka** jest zwykłym, nieaktywnym i nieprzechwytującym kliknięć oknem Windows.
+  Nie wstrzykuje kodu, nie instaluje hooków i domyślnie nie pojawia się podczas pełnego
+  ekranu. Nie daje to gwarancji zgodności z każdym regulaminem anti-cheat.
+
+Windows nie udostępnia stabilnego publicznego API do przypisywania obcej aplikacji do
+konkretnego wyjścia audio. Projekt nie używa prywatnego `IAudioPolicyConfigFactory`,
+który może zmienić się po aktualizacji systemu. Profile bezpiecznie przełączają wyjście
+domyślne dla całego Windows.
+
 ## Bezpieczne akcje i powiadomienia
 
 Aplikacja nie wykonuje dowolnych poleceń z MQTT. Obsługiwana jest stała lista akcji:
@@ -144,9 +174,33 @@ blokada, uśpienie, restart, wyłączenie i anulowanie. Restart i wyłączenie m
 30-sekundowe opóźnienie, podczas którego można nacisnąć **Cancel Power Action**.
 Funkcja jest domyślnie wyłączona.
 
-Encja `notify` przyjmuje jedynie tytuł i tekst. Długość jest ograniczona, retained
-commands są ignorowane, a wiadomość pojawia się jako zwykłe powiadomienie zasobnika
-Windows.
+Zwykła encja `notify` przyjmuje tytuł i tekst. Długość jest ograniczona, retained
+commands są ignorowane, a wiadomość pojawia się jako powiadomienie zasobnika Windows.
+
+Po włączeniu nakładki dostępna jest druga encja `notify` do prostych komunikatów oraz
+cztery akcje integracji: `show_overlay`, `update_overlay`, `remove_overlay` i
+`clear_overlay`. Akcje udostępniają ID, ikonę, obraz, QR, postęp, czas, przypięcie,
+narożnik, monitor, rozmiar, przezroczystość i styl. Obraz musi być poprawnym PNG, JPEG,
+GIF lub WebP jako `data:image/...;base64` i nie może przekraczać 512 KiB.
+
+```yaml
+action: ha_windows_bridge.show_overlay
+target:
+  entity_id: notify.pc_windows_overlay
+data:
+  title: Pobieranie
+  message: Aktualizacja aplikacji
+  notification_id: update
+  progress: 45
+  pinned: true
+  corner: top_right
+  preset: info
+```
+
+`ha_windows_bridge.update_overlay` z tym samym `notification_id` aktualizuje komunikat,
+`remove_overlay` usuwa wskazany, a `clear_overlay` czyści całą kolejkę. Kolejka jest
+ograniczona do 20 pozycji. Wszystkie akcje sprawdzają uprawnienia do wskazanej encji i
+publikują wyłącznie do topicu przypisanego do tego komputera.
 
 ## Konfiguracja, diagnostyka i czyszczenie
 
@@ -164,7 +218,48 @@ tego samego użytkownika Windows. Dane aplikacji są przechowywane w
 
 Aplikacja może automatycznie sprawdzać oficjalne wydania GitHub i otworzyć stronę
 nowszej wersji. Nie pobiera ani nie uruchamia instalatora bez zgody użytkownika.
-\
+
+Skrypt `build.ps1` obsługuje podpis Authenticode dla EXE i instalatora. Publiczne
+wydanie będzie podpisane tylko wtedy, gdy autor skonfiguruje własny zaufany certyfikat
+Code Signing. Certyfikat i klucz prywatny nie są częścią repozytorium.
+
+```powershell
+$env:HAWB_SIGNING_THUMBPRINT = "40_ZNAKOWY_ODCISK_CERTYFIKATU"
+.\build.ps1 -Installer
+Get-AuthenticodeSignature ".\dist\HA-Windows-Bridge-Setup-1.2.0.exe"
+```
+
+Bez certyfikatu pliki nadal można zbudować, ale Windows SmartScreen może wyświetlić
+ostrzeżenie. Zawsze publikuj również sumy SHA-256.
+
+## Integracja z limitami Codex
+
+Integracja limitów konta Codex nie jest częścią tego wydania. Sprawdzony projekt
+`ofilis/codex-ha-bridge` korzysta z prywatnego tokenu logowania i nieudokumentowanego
+endpointu ChatGPT. HA Windows Bridge celowo nie odczytuje pliku logowania Codex ani nie
+wysyła takiego tokenu do niepublicznego API. Funkcja może zostać dodana, gdy OpenAI
+udostępni stabilny, oficjalny interfejs do odczytu limitów.
+
+## Uruchomienie ze źródeł
+
+Python 3.11 lub nowszy jest wymagany wyłącznie do pracy ze źródłami:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -c constraints.txt -e ".[dev]"
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe main.py
+```
+
+Budowanie wersji przenośnej, integracji i instalatora:
+
+```powershell
+.\build.ps1 -Installer
+```
+
+Skrypt uruchamia testy, tworzy ikonę, buduje aplikację, integrację, instalator i plik
+sum SHA-256. Wymaga Inno Setup 7 dostępnego jako `iscc.exe` albo w
+`tools/InnoSetup/7.0.2`.
 
 ## Rozwiązywanie problemów
 
@@ -175,16 +270,20 @@ MQTT nie jest aktywna lub poprawnie skonfigurowana. Uruchom ją w
 **Ustawienia → Urządzenia i usługi → MQTT**, a następnie przeładuj MQTT i HA Windows
 Bridge albo uruchom Home Assistant ponownie. Sam działający broker nie wystarcza.
 
-### Sensory NVIDIA mają stan „nieznany”
+### Brakuje części telemetrii sprzętu
 
-Aplikacja korzysta z `nvidia-smi.exe` instalowanego ze sterownikiem NVIDIA. Jeśli
-narzędzie nie istnieje lub sterownik nie udostępnia konkretnej wartości, odpowiedni
-sensor pozostanie nieznany bez wpływu na pozostałe funkcje.
+Aplikacja tworzy tylko encje, dla których odczytała wartość. NVIDIA korzysta z
+`nvidia-smi.exe`. Część temperatur i poboru mocy AMD/Intel wymaga działającego
+LibreHardwareMonitor albo OpenHardwareMonitor udostępniającego sensory przez WMI.
 
 ## Ograniczenia
 
 - multimedia zależą od funkcji udostępnianych systemowi Windows przez dany program;
-- telemetria GPU obsługuje obecnie NVIDIA przez `nvidia-smi`;
+- zakres telemetrii zależy od sterownika, liczników Windows i opcjonalnego dostawcy WMI;
+- poziom baterii samego komputera jest obsługiwany; Windows nie udostępnia jednolitego
+  źródła poziomu baterii wszystkich akcesoriów, dlatego ich encje pokazują obecność;
+- routowanie pojedynczej obcej aplikacji do wyjścia nie jest włączone z powodu braku
+  stabilnego publicznego API Windows;
 - zdalne zamknięcie programu wysyła łagodne żądanie tylko do widocznych okien;
 - aplikacja i integracja wymagają dostępności lokalnego brokera MQTT;
 - sprawdzanie aktualizacji wymaga dostępu do API GitHub.

@@ -26,7 +26,7 @@ def export_configuration(path: Path, config: AppConfig) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def import_configuration(path: Path, current_password: str = "") -> AppConfig:
+def import_configuration(path: Path, current_password: str | None = None) -> AppConfig:
     if path.stat().st_size > MAX_CONFIG_BYTES:
         raise ValueError("Plik konfiguracji jest zbyt duży")
     try:
@@ -40,7 +40,7 @@ def import_configuration(path: Path, current_password: str = "") -> AppConfig:
     if not isinstance(payload, dict):
         raise ValueError("Plik konfiguracji jest nieprawidłowy")
     config = AppConfig.from_dict(payload)
-    config.mqtt.password = current_password
+    config.mqtt.password = current_password or ""
     errors = config.validation_errors()
     if errors:
         raise ValueError("\n".join(errors))

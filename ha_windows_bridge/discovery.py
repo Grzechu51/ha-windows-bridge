@@ -110,6 +110,28 @@ def windows_notification_topic(config: AppConfig) -> str:
     return f"{config.mqtt.base_topic}/notification/show/set"
 
 
+def master_balance_topics(config: AppConfig) -> tuple[str, str]:
+    root = f"{config.mqtt.base_topic}/audio/master/balance"
+    return f"{root}/set", f"{root}/state"
+
+
+def app_session_count_topic(config: AppConfig, app: AudioAppConfig) -> str:
+    return f"{config.mqtt.base_topic}/audio/{app.slug}/sessions/state"
+
+
+def tracked_device_topic(config: AppConfig, slug: str) -> str:
+    return f"{config.mqtt.base_topic}/device/{slug}/connected/state"
+
+
+def overlay_notification_topic(config: AppConfig) -> str:
+    return f"{config.mqtt.base_topic}/overlay/show/set"
+
+
+def audio_profile_topics(config: AppConfig) -> tuple[str, str]:
+    root = f"{config.mqtt.base_topic}/audio/profile"
+    return f"{root}/set", f"{root}/state"
+
+
 def _device(config: AppConfig) -> dict:
     return {
         "identifiers": [config.device_id],
@@ -141,6 +163,7 @@ def _base_entity(config: AppConfig, unique_id: str) -> dict:
 def discovery_messages(
     config: AppConfig,
     audio_outputs: list[str] | None = None,
+    hardware_metrics: set[str] | None = None,
 ) -> list[DiscoveryMessage]:
     prefix = config.mqtt.discovery_prefix
     object_root = slugify(config.device_id)
@@ -207,6 +230,28 @@ def discovery_messages(
             )
         )
 
+        if config.audio_enhancements_enabled and config.control_channel_balance:
+            balance_command, balance_state = master_balance_topics(config)
+            balance_payload = _base_entity(config, f"{object_root}_master_balance")
+            balance_payload.update(
+                {
+                    "name": "Audio Balance",
+                    "command_topic": balance_command,
+                    "state_topic": balance_state,
+                    "min": -100,
+                    "max": 100,
+                    "step": 1,
+                    "mode": "slider",
+                    "icon": "mdi:surround-sound",
+                }
+            )
+            messages.append(
+                DiscoveryMessage(
+                    f"{prefix}/number/{object_root}/master_balance/config",
+                    balance_payload,
+                )
+            )
+
     for app in config.apps:
         if not app.enabled:
             continue
@@ -270,6 +315,24 @@ def discovery_messages(
                 running_payload,
             )
         )
+
+        if config.audio_enhancements_enabled and config.publish_audio_sessions:
+            sessions_payload = _base_entity(config, f"{unique_root}_sessions")
+            sessions_payload.update(
+                {
+                    "name": f"{app.display_name} Audio Sessions",
+                    "state_topic": app_session_count_topic(config, app),
+                    "icon": "mdi:account-multiple-sound",
+                    "state_class": "measurement",
+                    "entity_category": "diagnostic",
+                }
+            )
+            messages.append(
+                DiscoveryMessage(
+                    f"{prefix}/sensor/{object_root}/{app.slug}_sessions/config",
+                    sessions_payload,
+                )
+            )
 
         if app.allow_remote_start and app.executable_path:
             start_payload = _base_entity(config, f"{unique_root}_start")
@@ -430,12 +493,25 @@ def discovery_messages(
             )
         )
 
-    if config.publish_system_stats:
-        system_entities = (
-            ("cpu", "CPU Usage", "%", "mdi:cpu-64-bit", "measurement"),
-            ("ram", "RAM Usage", "%", "mdi:memory", "measurement"),
-            ("uptime", "System Uptime", "s", "mdi:clock-outline", "total_increasing"),
-        )
+    if config.publish_system_stats or config.publish_cpu_stats:
+        system_entities = []
+        if config.publish_system_stats or config.publish_cpu_stats:
+            system_entities.append(
+                ("cpu", "CPU Usage", "%", "mdi:cpu-64-bit", "measurement")
+            )
+        if config.publish_system_stats:
+            system_entities.extend(
+                (
+                    ("ram", "RAM Usage", "%", "mdi:memory", "measurement"),
+                    (
+                        "uptime",
+                        "System Uptime",
+                        "s",
+                        "mdi:clock-outline",
+                        "total_increasing",
+                    ),
+                )
+            )
         for metric, name, unit, icon, state_class in system_entities:
             metric_payload = _base_entity(config, f"{object_root}_{metric}")
             metric_payload.update(
@@ -455,32 +531,159 @@ def discovery_messages(
                 )
             )
 
-        if config.publish_gpu_stats:
-            gpu_entities = (
-                ("gpu_usage", "GPU Usage", "%", "mdi:expansion-card", "measurement"),
-                ("gpu_temperature", "GPU Temperature", "°C", "mdi:thermometer", "measurement"),
-                ("gpu_power", "GPU Power", "W", "mdi:lightning-bolt", "measurement"),
-                ("gpu_memory", "GPU Memory Used", "MiB", "mdi:memory", "measurement"),
+    if config.publish_gpu_stats:
+        gpu_entities = (
+            ("gpu_usage", "GPU Usage", "%", "mdi:expansion-card", "measurement"),
+            ("gpu_temperature", "GPU Temperature", "°C", "mdi:thermometer", "measurement"),
+            ("gpu_power", "GPU Power", "W", "mdi:lightning-bolt", "measurement"),
+            ("gpu_memory", "GPU Memory Used", "MiB", "mdi:memory", "measurement"),
+            ("gpu_vendor", "GPU Vendor", None, "mdi:expansion-card", None),
+            ("gpu_clock", "GPU Clock", "MHz", "mdi:speedometer", "measurement"),
+            ("gpu_fan", "GPU Fan", "rpm", "mdi:fan", "measurement"),
+        )
+        for metric, name, unit, icon, state_class in gpu_entities:
+            if hardware_metrics is not None and metric not in hardware_metrics:
+                continue
+            gpu_payload = _base_entity(config, f"{object_root}_{metric}")
+            gpu_payload.update(
+                {
+                    "name": name,
+                    "state_topic": system_metric_topic(config, metric),
+                    "icon": icon,
+                    "entity_category": "diagnostic",
+                }
             )
-            for metric, name, unit, icon, state_class in gpu_entities:
-                gpu_payload = _base_entity(config, f"{object_root}_{metric}")
-                gpu_payload.update(
-                    {
-                        "name": name,
-                        "state_topic": system_metric_topic(config, metric),
-                        "unit_of_measurement": unit,
-                        "state_class": state_class,
-                        "icon": icon,
-                        "entity_category": "diagnostic",
-                    }
+            if unit:
+                gpu_payload["unit_of_measurement"] = unit
+            if state_class:
+                gpu_payload["state_class"] = state_class
+            messages.append(
+                DiscoveryMessage(
+                    f"{prefix}/sensor/{object_root}/{metric}/config",
+                    gpu_payload,
                 )
-                messages.append(
-                    DiscoveryMessage(
-                        f"{prefix}/sensor/{object_root}/{metric}/config",
-                        gpu_payload,
-                    )
-                )
+            )
 
+    if config.publish_cpu_stats:
+        cpu_entities = (
+            ("cpu_frequency", "CPU Frequency", "MHz", "mdi:speedometer", "measurement"),
+            ("cpu_temperature", "CPU Temperature", "°C", "mdi:thermometer", "measurement"),
+            ("cpu_power", "CPU Power", "W", "mdi:lightning-bolt", "measurement"),
+            ("cpu_vendor", "CPU Vendor", None, "mdi:cpu-64-bit", None),
+        )
+        for metric, name, unit, icon, state_class in cpu_entities:
+            if hardware_metrics is not None and metric not in hardware_metrics:
+                continue
+            payload = _base_entity(config, f"{object_root}_{metric}")
+            payload.update(
+                {
+                    "name": name,
+                    "state_topic": system_metric_topic(config, metric),
+                    "icon": icon,
+                    "entity_category": "diagnostic",
+                }
+            )
+            if unit:
+                payload["unit_of_measurement"] = unit
+            if state_class:
+                payload["state_class"] = state_class
+            messages.append(
+                DiscoveryMessage(
+                    f"{prefix}/sensor/{object_root}/{metric}/config",
+                    payload,
+                )
+            )
+
+    if config.publish_windows_health:
+        health_entities = (
+            ("battery", "Battery", "%", "mdi:battery", "measurement"),
+            ("power_plan", "Windows Power Plan", None, "mdi:power-settings", None),
+            ("windows_update", "Windows Update", None, "mdi:update", None),
+        )
+        for metric, name, unit, icon, state_class in health_entities:
+            if hardware_metrics is not None and metric not in hardware_metrics:
+                continue
+            payload = _base_entity(config, f"{object_root}_{metric}")
+            payload.update(
+                {
+                    "name": name,
+                    "state_topic": system_metric_topic(config, metric),
+                    "icon": icon,
+                    "entity_category": "diagnostic",
+                }
+            )
+            if unit:
+                payload["unit_of_measurement"] = unit
+            if state_class:
+                payload["state_class"] = state_class
+            messages.append(
+                DiscoveryMessage(f"{prefix}/sensor/{object_root}/{metric}/config", payload)
+            )
+        for metric, name, icon in (
+            ("ac_power", "AC Power", "mdi:power-plug"),
+            ("pending_restart", "Restart Required", "mdi:restart-alert"),
+        ):
+            if hardware_metrics is not None and metric not in hardware_metrics:
+                continue
+            payload = _base_entity(config, f"{object_root}_{metric}")
+            payload.update(
+                {
+                    "name": name,
+                    "state_topic": system_metric_topic(config, metric),
+                    "payload_on": "ON",
+                    "payload_off": "OFF",
+                    "icon": icon,
+                    "entity_category": "diagnostic",
+                }
+            )
+            messages.append(
+                DiscoveryMessage(
+                    f"{prefix}/binary_sensor/{object_root}/{metric}/config",
+                    payload,
+                )
+            )
+
+    if config.publish_disk_stats:
+        disk_entities = (
+            ("disk_used", "Disk Used", "%", "mdi:harddisk", "measurement"),
+            ("disk_free", "Disk Free", "GiB", "mdi:harddisk-plus", "measurement"),
+            ("disk_read", "Disk Read", "MiB/s", "mdi:download", "measurement"),
+            ("disk_write", "Disk Write", "MiB/s", "mdi:upload", "measurement"),
+            ("disk_temperature", "Disk Temperature", "°C", "mdi:thermometer", "measurement"),
+        )
+        for metric, name, unit, icon, state_class in disk_entities:
+            if hardware_metrics is not None and metric not in hardware_metrics:
+                continue
+            payload = _base_entity(config, f"{object_root}_{metric}")
+            payload.update(
+                {
+                    "name": name,
+                    "state_topic": system_metric_topic(config, metric),
+                    "unit_of_measurement": unit,
+                    "state_class": state_class,
+                    "icon": icon,
+                    "entity_category": "diagnostic",
+                }
+            )
+            messages.append(
+                DiscoveryMessage(f"{prefix}/sensor/{object_root}/{metric}/config", payload)
+            )
+        if hardware_metrics is None or "disk_health" in hardware_metrics:
+            payload = _base_entity(config, f"{object_root}_disk_health")
+            payload.update(
+                {
+                    "name": "Disk Health",
+                    "state_topic": system_metric_topic(config, "disk_health"),
+                    "icon": "mdi:harddisk-check",
+                    "entity_category": "diagnostic",
+                }
+            )
+            messages.append(
+                DiscoveryMessage(
+                    f"{prefix}/sensor/{object_root}/disk_health/config",
+                    payload,
+                )
+            )
     if config.control_microphone:
         mic_volume_command, mic_volume_state = microphone_volume_topics(config)
         mic_volume_payload = _base_entity(config, f"{object_root}_microphone_volume")
@@ -605,6 +808,63 @@ def discovery_messages(
             )
         )
 
+    profiles = [profile for profile in config.audio_profiles if profile.enabled]
+    if config.audio_enhancements_enabled and config.audio_profiles_enabled and profiles:
+        profile_command, profile_state = audio_profile_topics(config)
+        profile_payload = _base_entity(config, f"{object_root}_audio_profile")
+        profile_payload.update(
+            {
+                "name": "Audio Profile",
+                "command_topic": profile_command,
+                "state_topic": profile_state,
+                "options": [profile.name for profile in profiles],
+                "icon": "mdi:tune-variant",
+            }
+        )
+        messages.append(
+            DiscoveryMessage(
+                f"{prefix}/select/{object_root}/audio_profile/config",
+                profile_payload,
+            )
+        )
+
+    if config.publish_devices:
+        for device in config.tracked_devices:
+            if not device.enabled:
+                continue
+            payload = _base_entity(config, f"{object_root}_device_{device.slug}")
+            payload.update(
+                {
+                    "name": device.display_name,
+                    "state_topic": tracked_device_topic(config, device.slug),
+                    "payload_on": "ON",
+                    "payload_off": "OFF",
+                    "icon": "mdi:devices",
+                    "entity_category": "diagnostic",
+                }
+            )
+            messages.append(
+                DiscoveryMessage(
+                    f"{prefix}/binary_sensor/{object_root}/device_{device.slug}/config",
+                    payload,
+                )
+            )
+
+    if config.overlay_enabled:
+        payload = _base_entity(config, f"{object_root}_windows_overlay")
+        payload.update(
+            {
+                "name": "Windows Overlay",
+                "command_topic": overlay_notification_topic(config),
+                "icon": "mdi:message-text-fast-outline",
+            }
+        )
+        messages.append(
+            DiscoveryMessage(
+                f"{prefix}/notify/{object_root}/windows_overlay/config",
+                payload,
+            )
+        )
     return messages
 
 
@@ -625,7 +885,16 @@ def all_possible_discovery_messages(config: AppConfig) -> list[DiscoveryMessage]
     expanded.publish_idle = True
     expanded.publish_session_lock = True
     expanded.publish_system_stats = True
+    expanded.publish_cpu_stats = True
     expanded.publish_gpu_stats = True
+    expanded.publish_windows_health = True
+    expanded.publish_disk_stats = True
+    expanded.audio_enhancements_enabled = True
+    expanded.control_channel_balance = True
+    expanded.publish_audio_sessions = True
+    expanded.audio_profiles_enabled = True
+    expanded.publish_devices = True
+    expanded.overlay_enabled = True
     expanded.allow_power_actions = True
     expanded.enable_windows_notifications = True
     expanded.control_microphone = True

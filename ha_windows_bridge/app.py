@@ -122,6 +122,40 @@ QScrollArea#pageScroll > QWidget > QWidget {
     background: #0e0f11;
     border: none;
 }
+QTabWidget#featureTabs::pane {
+    background: #0e0f11;
+    border: 1px solid #30363a;
+    border-radius: 8px;
+    top: -1px;
+}
+QTabBar::tab {
+    background: #0b0c0e;
+    color: #8f9995;
+    border: 1px solid #30363a;
+    padding: 9px 15px;
+    margin-right: 4px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+}
+QTabBar::tab:selected {
+    background: #15191a;
+    color: #f4f8f6;
+    border-bottom-color: #15191a;
+}
+QListWidget#devicesList {
+    background: #0b0d0f;
+    color: #e8efec;
+    border: 1px solid #353c40;
+    border-radius: 7px;
+    padding: 6px;
+}
+QListWidget#devicesList::item {
+    min-height: 30px;
+    border-bottom: 1px solid #252a2d;
+}
+QListWidget#devicesList::item:selected {
+    background: #183629;
+}
 QLabel#pageTitle {
     color: #ffffff;
     font-size: 18pt;
@@ -566,6 +600,7 @@ def configure_logging() -> logging.Logger:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--minimized", action="store_true")
+    parser.add_argument("--smoke-test", action="store_true")
     args, _ = parser.parse_known_args(argv)
 
     with suppress(AttributeError, OSError):
@@ -577,6 +612,9 @@ def main(argv: list[str] | None = None) -> int:
     app.setQuitOnLastWindowClosed(False)
     bridge_style = BridgeProxyStyle(app.style())
     app.setStyle(bridge_style)
+
+    if args.smoke_test:
+        return 0
     app._bridge_style = bridge_style
 
     def apply_theme(theme: str) -> None:

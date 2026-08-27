@@ -72,6 +72,7 @@ def test_gui_defaults_and_minimum_size() -> None:
         assert not window.publish_idle_row.switch.isChecked()
         assert not window.publish_session_lock_row.switch.isChecked()
         assert not window.publish_system_stats_row.switch.isChecked()
+        assert not window.publish_cpu_stats_row.switch.isChecked()
         assert not window.publish_gpu_stats_row.switch.isChecked()
         assert not window.media_player_row.switch.isChecked()
         assert window.master_volume_card.enabled_switch.isChecked()
@@ -288,5 +289,48 @@ def test_compact_settings_and_remote_features_are_localized() -> None:
         assert window.windows_notifications_row.title_label.text() == "Windows notifications"
         assert window.mqtt_cleanup_button.text() == "Clean MQTT data"
         assert window.uninstall_button.text() == "Uninstall application"
+    finally:
+        close_window(window)
+
+
+def test_disabling_audio_profiles_does_not_disable_audio_module() -> None:
+    config = AppConfig(
+        audio_enhancements_enabled=True,
+        audio_profiles_enabled=True,
+    )
+    window = make_window(config)
+    try:
+        assert window.audio_enhancements_row.switch.isChecked()
+        assert window.automatic_ducking_row.isEnabled()
+        assert window.audio_profiles_list.isEnabled()
+
+        window.audio_profiles_row.switch.setChecked(False)
+        QApplication.processEvents()
+
+        assert window.audio_enhancements_row.switch.isChecked()
+        assert window.automatic_ducking_row.isEnabled()
+        assert not window.audio_profiles_list.isEnabled()
+        assert not window.automatic_audio_profiles_row.isEnabled()
+    finally:
+        close_window(window)
+
+
+def test_ducking_sensitivity_is_saved_and_follows_ducking_switch() -> None:
+    config = AppConfig(
+        audio_enhancements_enabled=True,
+        automatic_ducking=True,
+        ducking_sensitivity=73,
+    )
+    window = make_window(config)
+    try:
+        assert window.ducking_sensitivity.isEnabled()
+        assert window.ducking_sensitivity.value() == 73
+        assert window.ducking_sensitivity_value.text() == "73%"
+        assert window._config_from_form().ducking_sensitivity == 73
+
+        window.automatic_ducking_row.switch.setChecked(False)
+        QApplication.processEvents()
+
+        assert not window.ducking_sensitivity.isEnabled()
     finally:
         close_window(window)

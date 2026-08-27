@@ -1,6 +1,6 @@
 #define MyAppName "HA Windows Bridge"
 #ifndef MyAppVersion
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.2.0"
 #endif
 #define MyAppPublisher "HA Windows Bridge"
 #define MyAppExeName "HA Windows Bridge.exe"
@@ -48,6 +48,10 @@ Source: "..\dist\HA Windows Bridge\*"; DestDir: "{app}"; Flags: ignoreversion re
 Source: "..\assets\icon.ico"; DestDir: "{app}\_internal\assets"; DestName: "{#MyShortcutIconName}"; Flags: ignoreversion
 
 [InstallDelete]
+; Always replace the packaged runtime as one coherent set. Leaving files from
+; an older PySide/Qt build can cause an early DLL procedure import failure.
+Type: filesandordirs; Name: "{app}\_internal"
+Type: files; Name: "{app}\{#MyAppExeName}"
 Type: files; Name: "{app}\HAWindowsBridge-*.ico"
 Type: files; Name: "{app}\_internal\assets\shortcut-*.ico"
 

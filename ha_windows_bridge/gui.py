@@ -23,8 +23,11 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -33,16 +36,26 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizeGrip,
+    QSlider,
     QSpinBox,
     QStackedWidget,
     QSystemTrayIcon,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from . import __version__
 from .audio import AudioApplication, AudioOutputDevice, WindowsAudioService
-from .config import AppConfig, AudioAppConfig, MqttConfig, SettingsStore, slugify
+from .config import (
+    AppConfig,
+    AudioAppConfig,
+    AudioProfileConfig,
+    MqttConfig,
+    SettingsStore,
+    TrackedDeviceConfig,
+    slugify,
+)
 from .data_exchange import (
     build_diagnostic_report,
     export_configuration,
@@ -53,7 +66,9 @@ from .discovery import all_possible_mqtt_topics
 from .i18n import LocalizedFormatter, set_active_language, translate
 from .mqtt_bridge import MqttBridge
 from .mqtt_cleanup import MqttCleanupResult, cleanup_application_mqtt_data
+from .overlay import OverlayManager
 from .startup import WindowsStartupManager
+from .system_monitor import PnpDevice, WindowsSystemMonitor
 from .ui_components import (
     AppCard,
     AudioOutputCard,
@@ -79,6 +94,8 @@ class UiSignals(QObject):
     cleanup_finished = Signal(object)
     windows_notification = Signal(str, str)
     update_checked = Signal(object)
+    devices_scanned = Signal(object)
+    overlay_requested = Signal(str, str, object)
 
 
 class QtLogHandler(logging.Handler):
@@ -130,6 +147,8 @@ class MainWindow(QMainWindow):
             self._known_mqtt_topics.update(self.store.load_mqtt_topic_history())
         self._remember_mqtt_topics(original_config, loaded_config)
         self.audio = WindowsAudioService()
+        self.system_monitor = WindowsSystemMonitor()
+        self.overlay_manager: OverlayManager | None = None
         self.bridge: MqttBridge | None = None
         self.signals = UiSignals()
         self.app_cards: list[AppCard] = []
@@ -506,105 +525,273 @@ class MainWindow(QMainWindow):
     def _features_page(self) -> QWidget:
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(30, 24, 30, 28)
-        layout.setSpacing(18)
-        header, _ = self._page_header(
-            "Funkcje",
-            "Dodatkowe dane z Windows.",
-        )
+        layout.setContentsMargins(24, 22, 24, 24)
+        layout.setSpacing(14)
+        header, _ = self._page_header("Funkcje", "Dodatkowe dane z Windows.")
         layout.addWidget(header)
 
-        multimedia_title = QLabel("Multimedia")
-        multimedia_title.setObjectName("sectionTitle")
-        layout.addWidget(multimedia_title)
+        self.feature_tabs = QTabWidget()
+        self.feature_tabs.setObjectName("featureTabs")
+        layout.addWidget(self.feature_tabs, 1)
+
+        def add_tab(title: str) -> QVBoxLayout:
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(16, 18, 16, 22)
+            page_layout.setSpacing(12)
+            scroll = self._scroll_page(page)
+            self.feature_tabs.addTab(scroll, title)
+            return page_layout
+
+        def number_card(title: str, description: str, editor: QSpinBox) -> QFrame:
+            card = QFrame()
+            card.setObjectName("settingRow")
+            row = QHBoxLayout(card)
+            row.setContentsMargins(16, 14, 16, 14)
+            text = QVBoxLayout()
+            name = QLabel(title)
+            name.setObjectName("settingTitle")
+            detail = QLabel(description)
+            detail.setObjectName("settingDescription")
+            detail.setWordWrap(True)
+            text.addWidget(name)
+            text.addWidget(detail)
+            row.addLayout(text, 1)
+            editor.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+            editor.setFixedWidth(125)
+            row.addWidget(editor)
+            return card
+
+        def slider_card(
+            title: str,
+            description: str,
+            slider: QSlider,
+            value_label: QLabel,
+        ) -> QFrame:
+            card = QFrame()
+            card.setObjectName("settingRow")
+            row = QHBoxLayout(card)
+            row.setContentsMargins(16, 14, 16, 14)
+            text = QVBoxLayout()
+            name = QLabel(title)
+            name.setObjectName("settingTitle")
+            detail = QLabel(description)
+            detail.setObjectName("settingDescription")
+            detail.setWordWrap(True)
+            text.addWidget(name)
+            text.addWidget(detail)
+            row.addLayout(text, 1)
+            controls = QHBoxLayout()
+            controls.setSpacing(12)
+            slider.setFixedWidth(190)
+            value_label.setObjectName("sliderValue")
+            value_label.setFixedWidth(42)
+            value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            controls.addWidget(slider)
+            controls.addWidget(value_label)
+            row.addLayout(controls)
+            return card
+
+        general = add_tab("Ogólne")
         self.media_player_row = SettingRow(
             "Media Player",
-            "Utwórz w Home Assistant odtwarzacz aktywnej sesji multimediów Windows. Wymaga integracji HA Windows Bridge.",
+            "Utwórz w Home Assistant odtwarzacz aktywnej sesji multimediów Windows.",
         )
-        layout.addWidget(self.media_player_row)
-        remote_title = QLabel("Zdalne sterowanie")
-        remote_title.setObjectName("sectionTitle")
-        layout.addWidget(remote_title)
         self.power_actions_row = SettingRow(
             "Bezpieczne akcje systemowe",
-            "Dodaj przyciski blokady, uśpienia, restartu i wyłączenia. Restart i wyłączenie można anulować przez 30 sekund.",
+            "Dodaj blokadę, uśpienie, restart i wyłączenie z 30-sekundowym anulowaniem.",
         )
         self.windows_notifications_row = SettingRow(
             "Powiadomienia Windows",
-            "Pozwól Home Assistant wyświetlać kontrolowane powiadomienia w zasobniku Windows.",
+            "Wyświetlaj kontrolowane wiadomości wysyłane z Home Assistant.",
         )
-        remote_group = QFrame()
-        remote_group.setObjectName("settingsGroup")
-        remote_layout = QVBoxLayout(remote_group)
-        remote_layout.setContentsMargins(0, 0, 0, 0)
-        remote_layout.setSpacing(12)
-        remote_layout.addWidget(self.power_actions_row)
-        remote_layout.addWidget(self.windows_notifications_row)
-        layout.addWidget(remote_group)
-
-        features_title = QLabel("Dodatkowe sensory")
-        features_title.setObjectName("sectionTitle")
-        layout.addWidget(features_title)
         self.publish_activity_row = SettingRow(
             "Aktywna aplikacja i pełny ekran",
-            "Publikuj nazwę procesu, tytuł aktywnego okna i stan fullscreen.",
+            "Publikuj proces, tytuł aktywnego okna i stan pełnego ekranu.",
         )
         self.publish_idle_row = SettingRow(
             "Czas bezczynności",
-            "Publikuj czas od ostatniego użycia klawiatury lub myszy oraz stan PC Active.",
+            "Publikuj czas od użycia klawiatury lub myszy oraz stan aktywności PC.",
         )
         self.publish_session_lock_row = SettingRow(
             "Stan blokady Windows",
-            "Wystaw sensor informujący, czy sesja Windows jest zablokowana.",
+            "Informuj, czy bieżąca sesja Windows jest zablokowana.",
         )
-        self.publish_system_stats_row = SettingRow(
-            "Statystyki systemu",
-            "Publikuj użycie CPU, RAM oraz czas działania Windows.",
-        )
-        self.publish_gpu_stats_row = SettingRow(
-            "Telemetria NVIDIA GPU",
-            "Publikuj obciążenie, temperaturę, moc i VRAM przez nvidia-smi, jeśli jest dostępne.",
-        )
-        features_group = QFrame()
-        features_group.setObjectName("settingsGroup")
-        features_layout = QVBoxLayout(features_group)
-        features_layout.setContentsMargins(0, 0, 0, 0)
-        features_layout.setSpacing(12)
         for row in (
+            self.media_player_row,
+            self.power_actions_row,
+            self.windows_notifications_row,
             self.publish_activity_row,
             self.publish_idle_row,
             self.publish_session_lock_row,
-            self.publish_system_stats_row,
-            self.publish_gpu_stats_row,
         ):
-            features_layout.addWidget(row)
-        layout.addWidget(features_group)
-
-        idle_card = QFrame()
-        idle_card.setObjectName("settingRow")
-        idle_layout = QHBoxLayout(idle_card)
-        idle_layout.setContentsMargins(16, 14, 16, 14)
-        idle_text = QVBoxLayout()
-        idle_title = QLabel("Czas do uznania komputera za nieaktywny")
-        idle_title.setObjectName("settingTitle")
-        idle_description = QLabel(
-            "Po tylu sekundach bez klawiatury lub myszy status „Komputer aktywny” zmieni się na wyłączony."
-        )
-        idle_description.setObjectName("settingDescription")
-        idle_description.setWordWrap(True)
-        idle_text.addWidget(idle_title)
-        idle_text.addWidget(idle_description)
-        idle_layout.addLayout(idle_text, 1)
+            general.addWidget(row)
         self.idle_threshold = QSpinBox()
         self.idle_threshold.setRange(30, 7200)
         self.idle_threshold.setSingleStep(30)
         self.idle_threshold.setSuffix(" s")
-        self.idle_threshold.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.idle_threshold.setFixedWidth(125)
-        idle_layout.addWidget(self.idle_threshold)
-        layout.addWidget(idle_card)
-        layout.addStretch()
-        return self._scroll_page(content)
+        general.addWidget(
+            number_card(
+                "Próg aktywności komputera",
+                "Po tym czasie bez wejścia sensor aktywności komputera zostanie wyłączony.",
+                self.idle_threshold,
+            )
+        )
+        general.addStretch()
+
+        system = add_tab("System i dyski")
+        self.publish_system_stats_row = SettingRow(
+            "Statystyki systemu",
+            "Publikuj użycie CPU, RAM i czas działania Windows.",
+        )
+        self.publish_windows_health_row = SettingRow(
+            "Stan Windows i zasilania",
+            "Publikuj Windows Update, wymagany restart, plan zasilania oraz baterię, jeśli jest dostępna.",
+        )
+        self.publish_disk_stats_row = SettingRow(
+            "Stan i aktywność dysków",
+            "Publikuj zajęte i wolne miejsce oraz łączny odczyt i zapis dysków.",
+        )
+        self.publish_cpu_stats_row = SettingRow(
+            "Telemetria CPU",
+            "Automatycznie wykryj procesor i publikuj dostępne dane.",
+        )
+        self.publish_gpu_stats_row = SettingRow(
+            "Telemetria GPU",
+            "Automatycznie wykryj kartę NVIDIA lub AMD i publikuj dostępne dane.",
+        )
+        for row in (
+            self.publish_system_stats_row,
+            self.publish_windows_health_row,
+            self.publish_disk_stats_row,
+            self.publish_cpu_stats_row,
+            self.publish_gpu_stats_row,
+        ):
+            system.addWidget(row)
+        system.addStretch()
+
+        audio = add_tab("Audio")
+        self.audio_enhancements_row = SettingRow(
+            "Audio",
+            "Włącz dodatkowe funkcje dźwięku.",
+        )
+        self.channel_balance_row = SettingRow(
+            "Balans kanałów",
+            "Dodaj w Home Assistant regulator balansu lewy/prawy dla urządzeń stereo.",
+        )
+        self.automatic_ducking_row = SettingRow(
+            "Automatyczne ściszanie podczas rozmowy",
+            "Ścisz wybrane aplikacje, gdy mikrofon wykryje aktywną mowę, i przywróć je po rozmowie.",
+        )
+        self.ducking_volume = QSpinBox()
+        self.ducking_volume.setRange(1, 100)
+        self.ducking_volume.setSuffix(" %")
+        self.ducking_sensitivity = QSlider(Qt.Orientation.Horizontal)
+        self.ducking_sensitivity.setRange(1, 100)
+        self.ducking_sensitivity.setSingleStep(1)
+        self.ducking_sensitivity.setPageStep(5)
+        self.ducking_sensitivity_value = QLabel("50%")
+        self.publish_audio_sessions_row = SettingRow(
+            "Liczba sesji audio",
+            "Publikuj liczbę sesji miksera dla każdej włączonej aplikacji.",
+        )
+        self.audio_profiles_row = SettingRow(
+            "Profile audio",
+            "Dodaj w Home Assistant wybór zapisanych poziomów miksu i wyjścia audio.",
+        )
+        self.automatic_audio_profiles_row = SettingRow(
+            "Automatyczne reguły profili",
+            "Zastosuj profil, gdy uruchomi się przypisana do niego aplikacja.",
+        )
+        audio.addWidget(self.audio_enhancements_row)
+        audio.addWidget(self.channel_balance_row)
+        audio.addWidget(self.automatic_ducking_row)
+        audio.addWidget(
+            slider_card(
+                "Czułość mikrofonu",
+                "Określa, jak silny sygnał uruchamia ściszanie. Wyższa wartość oznacza większą czułość.",
+                self.ducking_sensitivity,
+                self.ducking_sensitivity_value,
+            )
+        )
+        audio.addWidget(
+            number_card(
+                "Poziom podczas rozmowy",
+                "Docelowa głośność programów ściszanych przy aktywnym mikrofonie.",
+                self.ducking_volume,
+            )
+        )
+        audio.addWidget(self.publish_audio_sessions_row)
+        audio.addWidget(self.audio_profiles_row)
+        audio.addWidget(self.automatic_audio_profiles_row)
+        profile_controls = QHBoxLayout()
+        profile_label = QLabel("Zapisane profile")
+        profile_label.setObjectName("sectionTitle")
+        self.capture_profile_button = QPushButton("Dodaj z bieżącego miksu")
+        self.capture_profile_button.setObjectName("secondaryButton")
+        self.remove_profile_button = QPushButton("Usuń profil")
+        self.remove_profile_button.setObjectName("outlineButton")
+        profile_controls.addWidget(profile_label)
+        profile_controls.addStretch()
+        profile_controls.addWidget(self.capture_profile_button)
+        profile_controls.addWidget(self.remove_profile_button)
+        audio.addLayout(profile_controls)
+        self.audio_profiles_list = QListWidget()
+        self.audio_profiles_list.setObjectName("devicesList")
+        self.audio_profiles_list.setMinimumHeight(150)
+        audio.addWidget(self.audio_profiles_list)
+        audio.addStretch()
+
+        devices = add_tab("Urządzenia")
+        self.publish_devices_row = SettingRow(
+            "Urządzenia jako encje",
+            "Wybrane urządzenia Plug and Play pojawią się jako sensory połączenia.",
+        )
+        devices.addWidget(self.publish_devices_row)
+        controls = QHBoxLayout()
+        label = QLabel("Śledzone urządzenia")
+        label.setObjectName("sectionTitle")
+        self.scan_devices_button = QPushButton("Wykryj urządzenia")
+        self.scan_devices_button.setObjectName("secondaryButton")
+        controls.addWidget(label)
+        controls.addStretch()
+        controls.addWidget(self.scan_devices_button)
+        devices.addLayout(controls)
+        self.devices_list = QListWidget()
+        self.devices_list.setObjectName("devicesList")
+        self.devices_list.setMinimumHeight(260)
+        devices.addWidget(self.devices_list)
+        devices.addStretch()
+
+        overlay = add_tab("Nakładka")
+        self.overlay_enabled_row = SettingRow(
+            "Wiadomości na ekranie",
+            "Dodaj encję do wyświetlania krótkich wiadomości nad zwykłymi oknami Windows.",
+        )
+        self.overlay_fullscreen_row = SettingRow(
+            "Zezwalaj w pełnym ekranie",
+            "Domyślnie nakładka nie pojawia się nad grą lub aplikacją pełnoekranową.",
+        )
+        self.overlay_duration = QSpinBox()
+        self.overlay_duration.setRange(2, 60)
+        self.overlay_duration.setSuffix(" s")
+        overlay.addWidget(self.overlay_enabled_row)
+        overlay.addWidget(self.overlay_fullscreen_row)
+        overlay.addWidget(
+            number_card(
+                "Czas wyświetlania",
+                "Nakładka jest zwykłym, nieaktywnym oknem i nie wstrzykuje kodu do innych procesów.",
+                self.overlay_duration,
+            )
+        )
+        warning = QLabel(
+            "Wyłączenie modułu usuwa okno nakładki. Nie używa on hooków ani pamięci gry, ale zgodność zależy od regulaminu konkretnego anty-cheata."
+        )
+        warning.setObjectName("settingDescription")
+        warning.setWordWrap(True)
+        overlay.addWidget(warning)
+        overlay.addStretch()
+        return content
 
     def _logs_page(self) -> QWidget:
         content = QWidget()
@@ -926,6 +1113,8 @@ class MainWindow(QMainWindow):
         self.signals.cleanup_finished.connect(self._mqtt_cleanup_finished)
         self.signals.windows_notification.connect(self._show_windows_notification)
         self.signals.update_checked.connect(self._update_check_finished)
+        self.signals.devices_scanned.connect(self._apply_scanned_devices)
+        self.signals.overlay_requested.connect(self._show_overlay_message)
         self.title_bar.menu_clicked.connect(self._toggle_sidebar)
         self.show_password.toggled.connect(
             lambda checked: self.password.setEchoMode(
@@ -947,10 +1136,18 @@ class MainWindow(QMainWindow):
         self.microphone_card.mute_requested.connect(self._set_microphone_mute)
         self.audio_output_card.output_requested.connect(self._set_audio_output)
         self.audio_output_card.refresh_requested.connect(self._refresh_audio_outputs)
-        self.publish_system_stats_row.switch.toggled.connect(
-            self.publish_gpu_stats_row.switch.setEnabled
-        )
         self.publish_idle_row.switch.toggled.connect(self.idle_threshold.setEnabled)
+        self.audio_enhancements_row.switch.toggled.connect(self._apply_audio_state)
+        self.automatic_ducking_row.switch.toggled.connect(self._apply_ducking_state)
+        self.ducking_sensitivity.valueChanged.connect(
+            lambda value: self.ducking_sensitivity_value.setText(f"{value}%")
+        )
+        self.publish_devices_row.switch.toggled.connect(self.devices_list.setEnabled)
+        self.overlay_enabled_row.switch.toggled.connect(self._apply_overlay_state)
+        self.scan_devices_button.clicked.connect(self.scan_devices)
+        self.capture_profile_button.clicked.connect(self.capture_audio_profile)
+        self.remove_profile_button.clicked.connect(self.remove_audio_profile)
+        self.audio_profiles_row.switch.toggled.connect(self._apply_audio_profiles_state)
         self.test_button.clicked.connect(self.test_mqtt_connection)
         self.discovery_button.clicked.connect(self._republish_discovery)
         self.language_combo.currentIndexChanged.connect(self._language_changed)
@@ -979,6 +1176,15 @@ class MainWindow(QMainWindow):
             button.set_language(self._language)
         self.theme_combo.setItemText(0, "Dark" if self._language == "en" else "Ciemny")
         self.theme_combo.setItemText(1, "Light" if self._language == "en" else "Jasny")
+        tab_names = (
+            ("General", "Ogólne"),
+            ("System and disks", "System i dyski"),
+            ("Audio", "Audio"),
+            ("Devices", "Urządzenia"),
+            ("Overlay", "Nakładka"),
+        )
+        for index, (english, polish) in enumerate(tab_names):
+            self.feature_tabs.setTabText(index, english if self._language == "en" else polish)
         self._translate_widget_tree(self, self._language)
         self.status_card.set_language(self._language)
         displayed = "Połączono" if self.bridge and self.bridge.connected else self._last_status_text
@@ -1056,8 +1262,24 @@ class MainWindow(QMainWindow):
         self.idle_threshold.setValue(config.idle_threshold)
         self.publish_session_lock_row.switch.setChecked(config.publish_session_lock)
         self.publish_system_stats_row.switch.setChecked(config.publish_system_stats)
+        self.publish_cpu_stats_row.switch.setChecked(config.publish_cpu_stats)
         self.publish_gpu_stats_row.switch.setChecked(config.publish_gpu_stats)
-        self.publish_gpu_stats_row.switch.setEnabled(config.publish_system_stats)
+        self.publish_windows_health_row.switch.setChecked(config.publish_windows_health)
+        self.publish_disk_stats_row.switch.setChecked(config.publish_disk_stats)
+        self.audio_enhancements_row.switch.setChecked(config.audio_enhancements_enabled)
+        self.channel_balance_row.switch.setChecked(config.control_channel_balance)
+        self.automatic_ducking_row.switch.setChecked(config.automatic_ducking)
+        self.ducking_volume.setValue(config.ducking_volume)
+        self.ducking_sensitivity.setValue(config.ducking_sensitivity)
+        self.publish_audio_sessions_row.switch.setChecked(config.publish_audio_sessions)
+        self.audio_profiles_row.switch.setChecked(config.audio_profiles_enabled)
+        self.automatic_audio_profiles_row.switch.setChecked(config.automatic_audio_profiles)
+        self._load_audio_profiles(config.audio_profiles)
+        self.publish_devices_row.switch.setChecked(config.publish_devices)
+        self._load_tracked_devices(config.tracked_devices)
+        self.overlay_enabled_row.switch.setChecked(config.overlay_enabled)
+        self.overlay_fullscreen_row.switch.setChecked(config.overlay_allow_fullscreen)
+        self.overlay_duration.setValue(config.overlay_duration)
         self.media_player_row.switch.setChecked(config.media_player_enabled)
         self.power_actions_row.switch.setChecked(config.allow_power_actions)
         self.windows_notifications_row.switch.setChecked(config.enable_windows_notifications)
@@ -1066,6 +1288,9 @@ class MainWindow(QMainWindow):
         self.microphone_card.set_feature_enabled(config.control_microphone)
         self.audio_output_card.set_feature_enabled(config.control_audio_output)
         self.idle_threshold.setEnabled(config.publish_idle)
+        self._apply_audio_state(config.audio_enhancements_enabled)
+        self._apply_overlay_state(config.overlay_enabled)
+        self.devices_list.setEnabled(config.publish_devices)
         language_index = self.language_combo.findData(config.language)
         self.language_combo.blockSignals(True)
         self.language_combo.setCurrentIndex(max(0, language_index))
@@ -1081,6 +1306,7 @@ class MainWindow(QMainWindow):
         for app_config in config.apps:
             self._add_app_card(app_config)
         self._update_empty_state()
+        self._configure_overlay(config)
         self._apply_language(config.language)
 
     def _config_from_form(self) -> AppConfig:
@@ -1113,6 +1339,7 @@ class MainWindow(QMainWindow):
             idle_threshold=self.idle_threshold.value(),
             publish_session_lock=self.publish_session_lock_row.switch.isChecked(),
             publish_system_stats=self.publish_system_stats_row.switch.isChecked(),
+            publish_cpu_stats=self.publish_cpu_stats_row.switch.isChecked(),
             publish_gpu_stats=self.publish_gpu_stats_row.switch.isChecked(),
             control_microphone=self.microphone_card.enabled_switch.isChecked(),
             control_audio_output=self.audio_output_card.enabled_switch.isChecked(),
@@ -1120,6 +1347,22 @@ class MainWindow(QMainWindow):
             allow_power_actions=self.power_actions_row.switch.isChecked(),
             enable_windows_notifications=self.windows_notifications_row.switch.isChecked(),
             auto_check_updates=self.auto_update_row.switch.isChecked(),
+            publish_windows_health=self.publish_windows_health_row.switch.isChecked(),
+            publish_disk_stats=self.publish_disk_stats_row.switch.isChecked(),
+            audio_enhancements_enabled=self.audio_enhancements_row.switch.isChecked(),
+            control_channel_balance=self.channel_balance_row.switch.isChecked(),
+            automatic_ducking=self.automatic_ducking_row.switch.isChecked(),
+            ducking_volume=self.ducking_volume.value(),
+            ducking_sensitivity=self.ducking_sensitivity.value(),
+            publish_audio_sessions=self.publish_audio_sessions_row.switch.isChecked(),
+            audio_profiles_enabled=self.audio_profiles_row.switch.isChecked(),
+            automatic_audio_profiles=self.automatic_audio_profiles_row.switch.isChecked(),
+            audio_profiles=self._audio_profiles_from_list(),
+            publish_devices=self.publish_devices_row.switch.isChecked(),
+            tracked_devices=self._tracked_devices_from_list(),
+            overlay_enabled=self.overlay_enabled_row.switch.isChecked(),
+            overlay_allow_fullscreen=self.overlay_fullscreen_row.switch.isChecked(),
+            overlay_duration=self.overlay_duration.value(),
         )
 
     def save_and_apply(self) -> bool:
@@ -1135,6 +1378,7 @@ class MainWindow(QMainWindow):
             self.store.save(new_config)
             self.startup.set_enabled(new_config.start_with_windows)
             self.current_config = copy.deepcopy(new_config)
+            self._configure_overlay(new_config)
             self.logger.info("Zapisano konfigurację")
             if new_config.auto_connect:
                 self.start_bridge()
@@ -1177,6 +1421,10 @@ class MainWindow(QMainWindow):
                 notification_callback=lambda title, message: self.signals.windows_notification.emit(
                     title, message
                 ),
+                overlay_callback=lambda title, message, data: self.signals.overlay_requested.emit(
+                    title, message, data
+                ),
+                system_monitor=self.system_monitor,
             )
             self.bridge.start()
             self.start_button.setText(self._t("Zatrzymaj usługę"))
@@ -1198,6 +1446,224 @@ class MainWindow(QMainWindow):
     def restart_bridge(self) -> None:
         self.stop_bridge()
         self.start_bridge()
+
+    def _apply_audio_state(self, enabled: bool) -> None:
+        for row in (
+            self.channel_balance_row,
+            self.automatic_ducking_row,
+            self.publish_audio_sessions_row,
+            self.audio_profiles_row,
+            self.automatic_audio_profiles_row,
+        ):
+            row.setEnabled(enabled)
+        self._apply_ducking_state(self.automatic_ducking_row.switch.isChecked())
+        self._apply_audio_profiles_state(self.audio_profiles_row.switch.isChecked())
+
+    def _apply_ducking_state(self, ducking_checked: bool) -> None:
+        enabled = self.audio_enhancements_row.switch.isChecked() and ducking_checked
+        self.ducking_volume.setEnabled(enabled)
+        self.ducking_sensitivity.setEnabled(enabled)
+
+    def _apply_audio_profiles_state(self, profiles_checked: bool) -> None:
+        profiles_enabled = (
+            self.audio_enhancements_row.switch.isChecked() and profiles_checked
+        )
+        self.audio_profiles_list.setEnabled(profiles_enabled)
+        self.capture_profile_button.setEnabled(profiles_enabled)
+        self.remove_profile_button.setEnabled(profiles_enabled)
+        self.automatic_audio_profiles_row.setEnabled(profiles_enabled)
+
+    def _apply_overlay_state(self, enabled: bool) -> None:
+        self.overlay_fullscreen_row.setEnabled(enabled)
+        self.overlay_duration.setEnabled(enabled)
+        if not enabled and self.overlay_manager is not None:
+            self.overlay_manager.close()
+            self.overlay_manager = None
+
+    def _configure_overlay(self, config: AppConfig) -> None:
+        if self.overlay_manager is not None:
+            self.overlay_manager.close()
+            self.overlay_manager = None
+        if config.overlay_enabled:
+            self.overlay_manager = OverlayManager(
+                duration_seconds=config.overlay_duration,
+                allow_fullscreen=config.overlay_allow_fullscreen,
+            )
+
+    def _show_overlay_message(self, title: str, message: str, data: dict) -> None:
+        if self.overlay_manager is None:
+            return
+        if not self.overlay_manager.handle_message(title, message, data):
+            self.logger.info("Pominięto nakładkę podczas działania aplikacji pełnoekranowej")
+
+    def _load_audio_profiles(self, profiles: list[AudioProfileConfig]) -> None:
+        self.audio_profiles_list.clear()
+        for profile in profiles:
+            self._add_audio_profile_item(profile)
+
+    def _add_audio_profile_item(self, profile: AudioProfileConfig) -> None:
+        trigger = profile.trigger_process or self._t("Ręcznie")
+        item = QListWidgetItem(
+            f"{profile.name}  ·  {profile.master_volume}%  ·  {trigger}"
+        )
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        item.setCheckState(Qt.CheckState.Checked if profile.enabled else Qt.CheckState.Unchecked)
+        item.setData(
+            Qt.ItemDataRole.UserRole,
+            {
+                "name": profile.name,
+                "slug": profile.slug,
+                "master_volume": profile.master_volume,
+                "output_device": profile.output_device,
+                "app_volumes": profile.app_volumes,
+                "trigger_process": profile.trigger_process,
+            },
+        )
+        self.audio_profiles_list.addItem(item)
+
+    def _audio_profiles_from_list(self) -> list[AudioProfileConfig]:
+        profiles: list[AudioProfileConfig] = []
+        for index in range(self.audio_profiles_list.count()):
+            item = self.audio_profiles_list.item(index)
+            data = item.data(Qt.ItemDataRole.UserRole) or {}
+            profiles.append(
+                AudioProfileConfig(
+                    name=str(data.get("name", "")),
+                    slug=str(data.get("slug", "")),
+                    master_volume=int(data.get("master_volume", 50)),
+                    output_device=str(data.get("output_device", "")),
+                    app_volumes=dict(data.get("app_volumes", {})),
+                    trigger_process=str(data.get("trigger_process", "")),
+                    enabled=item.checkState() == Qt.CheckState.Checked,
+                )
+            )
+        return profiles
+
+    def capture_audio_profile(self) -> None:
+        name, accepted = QInputDialog.getText(
+            self,
+            self._t("Nowy profil audio"),
+            self._t("Nazwa profilu:"),
+        )
+        if not accepted or not name.strip():
+            return
+        current_master = self.audio.get_master_volume()
+        master, accepted = QInputDialog.getInt(
+            self,
+            self._t("Nowy profil audio"),
+            self._t("Główna głośność:"),
+            round((current_master if current_master is not None else 0.5) * 100),
+            0,
+            100,
+            1,
+        )
+        if not accepted:
+            return
+        apps = [card.to_config() for card in self.app_cards if card.to_config().enabled]
+        labels = [self._t("Ręcznie"), *[app.display_name for app in apps]]
+        trigger_label, accepted = QInputDialog.getItem(
+            self,
+            self._t("Reguła profilu"),
+            self._t("Zastosuj po uruchomieniu:"),
+            labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        trigger_process = ""
+        if trigger_label != self._t("Ręcznie"):
+            trigger_process = next(
+                (app.process_name for app in apps if app.display_name == trigger_label), ""
+            )
+        snapshots = self.audio.session_snapshot([app.process_name for app in apps])
+        app_volumes = {
+            app.process_name: round(state.volume * 100)
+            for app in apps
+            if (state := snapshots.get(app.process_name.casefold())) is not None
+        }
+        output = next(
+            (device.name for device in self.audio.list_output_devices() if device.is_default), ""
+        )
+        self._add_audio_profile_item(
+            AudioProfileConfig(
+                name=name,
+                master_volume=master,
+                output_device=output,
+                app_volumes=app_volumes,
+                trigger_process=trigger_process,
+            )
+        )
+
+    def remove_audio_profile(self) -> None:
+        row = self.audio_profiles_list.currentRow()
+        if row >= 0:
+            self.audio_profiles_list.takeItem(row)
+
+    def _load_tracked_devices(self, devices: list[TrackedDeviceConfig]) -> None:
+        self.devices_list.clear()
+        for device in devices:
+            self._add_device_item(device)
+
+    def _add_device_item(self, device: TrackedDeviceConfig) -> None:
+        item = QListWidgetItem(f"{device.display_name}  ·  {device.category}")
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        item.setCheckState(Qt.CheckState.Checked if device.enabled else Qt.CheckState.Unchecked)
+        item.setData(
+            Qt.ItemDataRole.UserRole,
+            {
+                "instance_id": device.instance_id,
+                "display_name": device.display_name,
+                "category": device.category,
+                "slug": device.slug,
+            },
+        )
+        item.setToolTip(device.instance_id)
+        self.devices_list.addItem(item)
+
+    def _tracked_devices_from_list(self) -> list[TrackedDeviceConfig]:
+        devices: list[TrackedDeviceConfig] = []
+        for index in range(self.devices_list.count()):
+            item = self.devices_list.item(index)
+            data = item.data(Qt.ItemDataRole.UserRole) or {}
+            devices.append(
+                TrackedDeviceConfig(
+                    instance_id=str(data.get("instance_id", "")),
+                    display_name=str(data.get("display_name", "")),
+                    category=str(data.get("category", "Device")),
+                    slug=str(data.get("slug", "")),
+                    enabled=item.checkState() == Qt.CheckState.Checked,
+                )
+            )
+        return devices
+
+    def scan_devices(self) -> None:
+        self.scan_devices_button.setEnabled(False)
+        self.scan_devices_button.setText(self._t("Wyszukiwanie…"))
+
+        def worker() -> None:
+            self.signals.devices_scanned.emit(self.system_monitor.list_pnp_devices())
+
+        threading.Thread(target=worker, name="device-scan", daemon=True).start()
+
+    def _apply_scanned_devices(self, detected: list[PnpDevice]) -> None:
+        existing = {
+            device.instance_id.casefold(): device for device in self._tracked_devices_from_list()
+        }
+        self.devices_list.clear()
+        for device in detected:
+            previous = existing.get(device.instance_id.casefold())
+            self._add_device_item(
+                TrackedDeviceConfig(
+                    instance_id=device.instance_id,
+                    display_name=device.display_name,
+                    category=device.category,
+                    slug=previous.slug if previous else "",
+                    enabled=previous.enabled if previous else False,
+                )
+            )
+        self.scan_devices_button.setEnabled(True)
+        self.scan_devices_button.setText(self._t("Wykryj urządzenia"))
 
     def scan_audio_apps(self) -> None:
         self.scan_apps_button.setEnabled(False)
@@ -1813,11 +2279,17 @@ class MainWindow(QMainWindow):
                 self._tray_notice_shown = True
             return
         self.stop_bridge()
+        if self.overlay_manager is not None:
+            self.overlay_manager.close()
+            self.overlay_manager = None
         event.accept()
 
     def quit_application(self) -> None:
         self._force_close = True
         self.stop_bridge()
+        if self.overlay_manager is not None:
+            self.overlay_manager.close()
+            self.overlay_manager = None
         self.tray.hide()
         QApplication.quit()
 

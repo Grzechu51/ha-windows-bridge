@@ -11,7 +11,7 @@ from contextlib import suppress
 import paho.mqtt.client as mqtt
 
 from .audio import AudioOutputDevice, AudioSessionSnapshot, WindowsAudioService
-from .config import AppConfig, AudioAppConfig
+from .config import AppConfig, AudioAppConfig, AudioProfileConfig
 from .discovery import (
     active_app_topic,
     active_volume_topics,
@@ -19,21 +19,26 @@ from .discovery import (
     app_close_topic,
     app_mute_topics,
     app_running_topic,
+    app_session_count_topic,
     app_start_topic,
     app_volume_topics,
     audio_output_topics,
+    audio_profile_topics,
     fullscreen_topic,
     idle_topic,
+    master_balance_topics,
     master_mute_topics,
     master_volume_topics,
     microphone_active_topic,
     microphone_mute_topics,
     microphone_volume_topics,
+    overlay_notification_topic,
     pc_active_topic,
     power_action_topic,
     session_locked_topic,
     status_topic,
     system_metric_topic,
+    tracked_device_topic,
     windows_notification_topic,
 )
 from .i18n import translate
@@ -51,7 +56,9 @@ from .system_monitor import PcContext, WindowsSystemMonitor
 
 StatusCallback = Callable[[str, bool], None]
 NotificationCallback = Callable[[str, str], None]
+OverlayCallback = Callable[[str, str, dict], None]
 MAX_COMMAND_PAYLOAD = 8 * 1024
+MAX_OVERLAY_PAYLOAD = 768 * 1024
 
 
 class MqttBridge:
@@ -65,6 +72,7 @@ class MqttBridge:
         media_service: WindowsMediaService | None = None,
         power_actions: WindowsPowerActions | None = None,
         notification_callback: NotificationCallback | None = None,
+        overlay_callback: OverlayCallback | None = None,
     ):
         self.config = config
         self.audio = audio or WindowsAudioService()
@@ -74,6 +82,7 @@ class MqttBridge:
         self.status_callback = status_callback
         self.power_actions = power_actions or WindowsPowerActions()
         self.notification_callback = notification_callback
+        self.overlay_callback = overlay_callback
         self.client: mqtt.Client | None = None
         self._stop_event = threading.Event()
         self._connected = threading.Event()
@@ -86,6 +95,10 @@ class MqttBridge:
         self._last_active: tuple[str, float] | None = None
         self._last_master_volume: float | None = None
         self._last_master_mute: bool | None = None
+        self._last_master_balance: float | None = None
+        self._last_session_counts: dict[str, int] = {}
+        self._last_device_states: dict[str, bool] = {}
+        self._ducked_volumes: dict[str, float] = {}
         self._last_microphone: tuple[float, bool, bool] | None = None
         self._microphone_active_until = 0.0
         self._last_context: PcContext | None = None
@@ -106,6 +119,10 @@ class MqttBridge:
         self._media_command = ""
         self._power_action_commands: dict[str, str] = {}
         self._notification_command = ""
+        self._overlay_command = ""
+        self._master_balance_command = ""
+        self._audio_profile_command = ""
+        self._active_audio_profile = ""
         self.started_at: float | None = None
         self.messages_processed = 0
 
@@ -157,6 +174,10 @@ class MqttBridge:
         self._monitor_thread.start()
 
     def stop(self) -> None:
+        if self._ducked_volumes:
+            for process_name, volume in self._ducked_volumes.items():
+                self.audio.set_volume(process_name, volume)
+            self._ducked_volumes.clear()
         client = self.client
         if client is None:
             return
@@ -270,10 +291,12 @@ class MqttBridge:
         self._app_action_commands.clear()
         self._master_command, _ = master_volume_topics(self.config)
         self._master_mute_command, _ = master_mute_topics(self.config)
+        self._master_balance_command, _ = master_balance_topics(self.config)
         self._microphone_volume_command, _ = microphone_volume_topics(self.config)
         self._microphone_mute_command, _ = microphone_mute_topics(self.config)
         self._audio_output_command, _ = audio_output_topics(self.config)
         self._media_command, _ = media_topics(self.config)
+        self._audio_profile_command, _ = audio_profile_topics(self.config)
         self._power_action_commands = (
             {
                 power_action_topic(self.config, action): action
@@ -286,6 +309,9 @@ class MqttBridge:
             windows_notification_topic(self.config)
             if self.config.enable_windows_notifications
             else ""
+        )
+        self._overlay_command = (
+            overlay_notification_topic(self.config) if self.config.overlay_enabled else ""
         )
         for app in self.config.apps:
             if not app.enabled:
@@ -312,16 +338,26 @@ class MqttBridge:
         }
         if self.config.control_master_volume:
             topics.update((self._master_command, self._master_mute_command))
+            if self.config.audio_enhancements_enabled and self.config.control_channel_balance:
+                topics.add(self._master_balance_command)
         if self._active_command:
             topics.add(self._active_command)
         if self.config.control_microphone:
             topics.update((self._microphone_volume_command, self._microphone_mute_command))
         if self.config.control_audio_output:
             topics.add(self._audio_output_command)
+        if (
+            self.config.audio_enhancements_enabled
+            and self.config.audio_profiles_enabled
+            and self.config.audio_profiles
+        ):
+            topics.add(self._audio_profile_command)
         if self.config.media_player_enabled:
             topics.add(self._media_command)
         if self._notification_command:
             topics.add(self._notification_command)
+        if self._overlay_command:
+            topics.add(self._overlay_command)
         return {topic for topic in topics if topic}
 
     def _on_connect(self, client, _userdata, _flags, reason_code, _properties) -> None:
@@ -359,7 +395,10 @@ class MqttBridge:
 
     def _on_message(self, _client, _userdata, message) -> None:
         self.messages_processed += 1
-        if len(message.payload) > MAX_COMMAND_PAYLOAD:
+        payload_limit = (
+            MAX_OVERLAY_PAYLOAD if message.topic == self._overlay_command else MAX_COMMAND_PAYLOAD
+        )
+        if len(message.payload) > payload_limit:
             self.log.warning("Zignorowano zbyt dużą komendę MQTT na %s", message.topic)
             return
         birth_topic = f"{self.config.mqtt.discovery_prefix}/status"
@@ -373,6 +412,9 @@ class MqttBridge:
 
         if message.topic == self._notification_command:
             self._handle_windows_notification(message.payload)
+            return
+        if message.topic == self._overlay_command:
+            self._handle_overlay_notification(message.payload)
             return
         power_action = self._power_action_commands.get(message.topic)
         if power_action:
@@ -389,11 +431,17 @@ class MqttBridge:
         if message.topic == self._audio_output_command:
             self._handle_audio_output(message.payload)
             return
+        if message.topic == self._audio_profile_command:
+            self._handle_audio_profile(message.payload)
+            return
         if message.topic == self._master_mute_command:
             self._handle_master_mute(message.payload)
             return
         if message.topic == self._microphone_mute_command:
             self._handle_microphone_mute(message.payload)
+            return
+        if message.topic == self._master_balance_command:
+            self._handle_master_balance(message.payload)
             return
         app_for_mute = self._app_mute_commands.get(message.topic)
         if app_for_mute:
@@ -428,6 +476,29 @@ class MqttBridge:
             self.notification_callback(title or "Home Assistant", message)
         self.log.info("Wyświetlono powiadomienie Windows z Home Assistant")
 
+    def _handle_overlay_notification(self, payload: bytes) -> None:
+        try:
+            value = json.loads(payload.decode("utf-8", errors="strict"))
+            title = str(value.get("title", "Home Assistant")).strip()
+            message = str(value.get("message", "")).strip()
+            data = value.get("data") or {}
+        except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+            self.log.warning("Nieprawidłowa wiadomość nakładki Windows")
+            return
+        action = str(data.get("action", "show")).strip().lower() if isinstance(data, dict) else ""
+        if (
+            action not in {"show", "update", "remove", "clear"}
+            or (action in {"show", "update"} and not message)
+            or len(title) > 128
+            or len(message) > 2048
+            or not isinstance(data, dict)
+        ):
+            self.log.warning("Nieprawidłowa wiadomość nakładki Windows")
+            return
+        if self.overlay_callback:
+            self.overlay_callback(title or "Home Assistant", message, data)
+        self.log.info("Przekazano wiadomość do nakładki Windows")
+
     @staticmethod
     def _is_button_press(payload: bytes) -> bool:
         try:
@@ -460,6 +531,21 @@ class MqttBridge:
         self._last_master_volume = actual
         self._publish_master_volume(actual)
         self.log.info("Ustawiono główną głośność na %s%%", round(actual * 100))
+
+    def _handle_master_balance(self, payload: bytes) -> None:
+        try:
+            value = float(payload.decode("utf-8", errors="strict").strip())
+        except (UnicodeDecodeError, ValueError):
+            return
+        if not math.isfinite(value) or not -100 <= value <= 100:
+            return
+        balance = value / 100.0
+        if not self.audio.set_master_balance(balance):
+            self.log.warning("Urządzenie audio nie obsługuje balansu kanałów")
+            return
+        self._last_master_balance = balance
+        _, state = master_balance_topics(self.config)
+        self._publish_text_state(state, round(balance * 100))
 
     def _handle_master_mute(self, payload: bytes) -> None:
         try:
@@ -518,6 +604,56 @@ class MqttBridge:
         _, state = audio_output_topics(self.config)
         self._publish_text_state(state, name)
         self.log.info("Przełączono wyjście audio na %s", name)
+
+    def _handle_audio_profile(self, payload: bytes) -> None:
+        try:
+            name = payload.decode("utf-8", errors="strict").strip()
+        except UnicodeDecodeError:
+            return
+        profile = next(
+            (
+                item
+                for item in self.config.audio_profiles
+                if item.enabled and item.name.casefold() == name.casefold()
+            ),
+            None,
+        )
+        if profile is None:
+            self.log.warning("Nieznany profil audio: %s", name)
+            return
+        self._apply_audio_profile(profile)
+
+    def _apply_audio_profile(self, profile: AudioProfileConfig) -> None:
+        master = profile.master_volume / 100.0
+        self.audio.set_master_volume(master)
+        if profile.output_device:
+            self.audio.set_output_device(profile.output_device)
+        for process_name, volume in profile.app_volumes.items():
+            self.audio.set_volume(process_name, volume / 100.0)
+        self._active_audio_profile = profile.name
+        _, state = audio_profile_topics(self.config)
+        self._publish_text_state(state, profile.name)
+        self.log.info("Zastosowano profil audio: %s", profile.name)
+
+    def _apply_triggered_audio_profile(self, process_name: str) -> None:
+        if not (
+            self.config.audio_enhancements_enabled
+            and self.config.audio_profiles_enabled
+            and self.config.automatic_audio_profiles
+        ):
+            return
+        profile = next(
+            (
+                item
+                for item in self.config.audio_profiles
+                if item.enabled
+                and item.trigger_process
+                and item.trigger_process.casefold() == process_name.casefold()
+            ),
+            None,
+        )
+        if profile is not None and profile.name != self._active_audio_profile:
+            self._apply_audio_profile(profile)
 
     def _handle_app_action(self, action: str, app: AudioAppConfig, payload: bytes) -> None:
         if not self._is_button_press(payload):
@@ -632,7 +768,52 @@ class MqttBridge:
             return 0
 
         outputs = [device.name for device in self._audio_outputs]
-        payload = integration_announcement_payload(self.config, outputs)
+        hardware_metrics: set[str] = set()
+        if self.config.publish_cpu_stats or self.config.publish_gpu_stats:
+            metrics = self.system.system_metrics(
+                include_cpu=self.config.publish_cpu_stats,
+                include_gpu=self.config.publish_gpu_stats,
+            )
+            candidates: dict[str, float | str | None] = {}
+            if self.config.publish_cpu_stats:
+                candidates.update(
+                    {
+                        "cpu_frequency": metrics.cpu_frequency_mhz,
+                        "cpu_temperature": metrics.cpu_temperature,
+                        "cpu_power": metrics.cpu_power_watts,
+                        "cpu_vendor": metrics.cpu_vendor,
+                    }
+                )
+            if self.config.publish_gpu_stats:
+                candidates.update(
+                    {
+                        "gpu_usage": metrics.gpu_percent,
+                        "gpu_temperature": metrics.gpu_temperature,
+                        "gpu_power": metrics.gpu_power_watts,
+                        "gpu_memory": metrics.gpu_memory_used_mb,
+                        "gpu_clock": metrics.gpu_clock_mhz,
+                        "gpu_fan": metrics.gpu_fan_rpm,
+                        "gpu_vendor": metrics.gpu_vendor,
+                    }
+                )
+            hardware_metrics.update(
+                name for name, value in candidates.items() if value not in (None, "")
+            )
+        if self.config.publish_windows_health:
+            health = self.system.windows_health()
+            hardware_metrics.update(("pending_restart", "windows_update"))
+            if health.battery_percent is not None:
+                hardware_metrics.update(("battery", "ac_power"))
+            if health.power_plan:
+                hardware_metrics.add("power_plan")
+        if self.config.publish_disk_stats:
+            disks = self.system.disk_metrics()
+            hardware_metrics.update(("disk_used", "disk_free", "disk_read", "disk_write"))
+            if disks.health:
+                hardware_metrics.add("disk_health")
+            if disks.temperature is not None:
+                hardware_metrics.add("disk_temperature")
+        payload = integration_announcement_payload(self.config, outputs, hardware_metrics)
         client.publish(
             media_announcement_topic(self.config),
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
@@ -660,6 +841,9 @@ class MqttBridge:
         next_output = 0.0
         next_process_scan = 0.0
         next_media = 0.0
+        next_health = 0.0
+        next_disk = 0.0
+        next_devices = 0.0
         running_processes: set[str] = set()
         while not self._stop_event.wait(self.config.poll_interval):
             if not self._connected.is_set():
@@ -675,7 +859,9 @@ class MqttBridge:
                 self._monitor_apps(enabled, snapshot, running_processes)
                 if self.config.control_active_app:
                     self._monitor_active(snapshot)
-                if self.config.control_microphone:
+                if self.config.control_microphone or (
+                    self.config.audio_enhancements_enabled and self.config.automatic_ducking
+                ):
                     self._monitor_microphone()
 
                 if now >= next_context and (
@@ -685,9 +871,22 @@ class MqttBridge:
                 ):
                     self._monitor_context()
                     next_context = now + 1.0
-                if now >= next_system and self.config.publish_system_stats:
+                if now >= next_system and (
+                    self.config.publish_system_stats
+                    or self.config.publish_cpu_stats
+                    or self.config.publish_gpu_stats
+                ):
                     self._monitor_system()
                     next_system = now + 5.0
+                if now >= next_health and self.config.publish_windows_health:
+                    self._monitor_windows_health()
+                    next_health = now + 30.0
+                if now >= next_disk and self.config.publish_disk_stats:
+                    self._monitor_disks()
+                    next_disk = now + 5.0
+                if now >= next_devices and self.config.publish_devices:
+                    self._monitor_devices()
+                    next_devices = now + 10.0
                 if now >= next_output and self.config.control_audio_output:
                     self._monitor_audio_output()
                     next_output = now + 3.0
@@ -717,6 +916,15 @@ class MqttBridge:
             self._last_master_mute = snapshot.muted
             _, state = master_mute_topics(self.config)
             self._publish_switch_state(state, snapshot.muted)
+        if self.config.audio_enhancements_enabled and self.config.control_channel_balance:
+            balance = self.audio.get_master_balance()
+            if balance is not None and (
+                self._last_master_balance is None
+                or abs(self._last_master_balance - balance) >= 0.01
+            ):
+                self._last_master_balance = balance
+                _, state = master_balance_topics(self.config)
+                self._publish_text_state(state, round(balance * 100))
 
     def _monitor_apps(
         self,
@@ -731,8 +939,26 @@ class MqttBridge:
             if self._last_running.get(app.slug) is not running:
                 self._publish_running(app, running)
                 self._last_running[app.slug] = running
+                if running:
+                    self._apply_triggered_audio_profile(app.process_name)
             if state is None:
+                if (
+                    self.config.audio_enhancements_enabled
+                    and self.config.publish_audio_sessions
+                    and self._last_session_counts.get(app.slug) != 0
+                ):
+                    self._publish_text_state(app_session_count_topic(self.config, app), 0)
+                    self._last_session_counts[app.slug] = 0
                 continue
+            if (
+                self.config.audio_enhancements_enabled
+                and self.config.publish_audio_sessions
+                and self._last_session_counts.get(app.slug) != state.session_count
+            ):
+                self._publish_text_state(
+                    app_session_count_topic(self.config, app), state.session_count
+                )
+                self._last_session_counts[app.slug] = state.session_count
             if app.slug not in self._last_volumes:
                 self._last_volumes[app.slug] = state.volume
                 if self.config.publish_initial_state:
@@ -774,13 +1000,15 @@ class MqttBridge:
             self._publish_volume_state(None, volume)
 
     def _monitor_microphone(self) -> None:
-        snapshot = self.audio.get_microphone_snapshot()
+        snapshot = self.audio.get_microphone_snapshot(self.config.ducking_sensitivity)
         if snapshot is None:
             return
         now = time.monotonic()
         if snapshot.active and not snapshot.muted:
             self._microphone_active_until = now + 1.25
         active = not snapshot.muted and now < self._microphone_active_until
+        if self.config.audio_enhancements_enabled and self.config.automatic_ducking:
+            self._apply_automatic_ducking(active)
         current = (snapshot.volume, snapshot.muted, active)
         if self._last_microphone is None:
             self._last_microphone = current
@@ -834,19 +1062,104 @@ class MqttBridge:
         self._last_context = context
 
     def _monitor_system(self) -> None:
-        metrics = self.system.system_metrics(self.config.publish_gpu_stats)
-        values: dict[str, float | int | None] = {
-            "cpu": round(metrics.cpu_percent, 1),
-            "ram": round(metrics.ram_percent, 1),
-            "uptime": metrics.uptime_seconds,
-            "gpu_usage": metrics.gpu_percent,
-            "gpu_temperature": metrics.gpu_temperature,
-            "gpu_power": metrics.gpu_power_watts,
-            "gpu_memory": metrics.gpu_memory_used_mb,
+        metrics = self.system.system_metrics(
+            include_cpu=self.config.publish_cpu_stats,
+            include_gpu=self.config.publish_gpu_stats,
+        )
+        values: dict[str, float | int | str | None] = {}
+        if self.config.publish_system_stats or self.config.publish_cpu_stats:
+            values["cpu"] = round(metrics.cpu_percent, 1)
+        if self.config.publish_system_stats:
+            values.update(
+                {
+                    "ram": round(metrics.ram_percent, 1),
+                    "uptime": metrics.uptime_seconds,
+                }
+            )
+        if self.config.publish_gpu_stats:
+            values.update(
+                {
+                    "gpu_usage": metrics.gpu_percent,
+                    "gpu_temperature": metrics.gpu_temperature,
+                    "gpu_power": metrics.gpu_power_watts,
+                    "gpu_memory": metrics.gpu_memory_used_mb,
+                    "gpu_clock": metrics.gpu_clock_mhz,
+                    "gpu_fan": metrics.gpu_fan_rpm,
+                    "gpu_vendor": metrics.gpu_vendor,
+                }
+            )
+        if self.config.publish_cpu_stats:
+            values.update(
+                {
+                    "cpu_frequency": metrics.cpu_frequency_mhz,
+                    "cpu_temperature": metrics.cpu_temperature,
+                    "cpu_power": metrics.cpu_power_watts,
+                    "cpu_vendor": metrics.cpu_vendor,
+                }
+            )
+        for metric, value in values.items():
+            if value not in (None, ""):
+                self._publish_text_state(system_metric_topic(self.config, metric), value)
+
+    def _monitor_windows_health(self) -> None:
+        health = self.system.windows_health()
+        if health.battery_percent is not None:
+            self._publish_text_state(
+                system_metric_topic(self.config, "battery"), round(health.battery_percent, 1)
+            )
+        if health.on_ac_power is not None:
+            self._publish_switch_state(
+                system_metric_topic(self.config, "ac_power"), health.on_ac_power
+            )
+        self._publish_switch_state(
+            system_metric_topic(self.config, "pending_restart"), health.pending_restart
+        )
+        if health.power_plan:
+            self._publish_text_state(system_metric_topic(self.config, "power_plan"), health.power_plan)
+        self._publish_text_state(
+            system_metric_topic(self.config, "windows_update"),
+            health.windows_update_status,
+        )
+
+    def _monitor_disks(self) -> None:
+        metrics = self.system.disk_metrics()
+        values = {
+            "disk_used": round(metrics.used_percent, 1),
+            "disk_free": round(metrics.free_gb, 1),
+            "disk_read": round(metrics.read_mb_s, 2),
+            "disk_write": round(metrics.write_mb_s, 2),
+            "disk_health": metrics.health,
+            "disk_temperature": metrics.temperature,
         }
         for metric, value in values.items():
-            if value is not None:
+            if value not in (None, ""):
                 self._publish_text_state(system_metric_topic(self.config, metric), value)
+
+    def _monitor_devices(self) -> None:
+        present = self.system.present_device_ids()
+        for device in self.config.tracked_devices:
+            if not device.enabled:
+                continue
+            connected = device.instance_id.casefold() in present
+            if self._last_device_states.get(device.slug) != connected:
+                self._last_device_states[device.slug] = connected
+                self._publish_switch_state(tracked_device_topic(self.config, device.slug), connected)
+
+    def _apply_automatic_ducking(self, active: bool) -> None:
+        apps = [app for app in self.config.apps if app.enabled]
+        if active and not self._ducked_volumes:
+            snapshot = self.audio.session_snapshot([app.process_name for app in apps])
+            target = self.config.ducking_volume / 100.0
+            for app in apps:
+                state = snapshot.get(app.process_name.casefold())
+                if state is None or state.volume <= target:
+                    continue
+                self._ducked_volumes[app.process_name] = state.volume
+                self.audio.set_volume(app.process_name, target)
+        elif not active and self._ducked_volumes:
+            for process_name, volume in self._ducked_volumes.items():
+                self.audio.set_volume(process_name, volume)
+            self._ducked_volumes.clear()
 
     def _monitor_audio_output(self) -> None:
         outputs = self.audio.list_output_devices()

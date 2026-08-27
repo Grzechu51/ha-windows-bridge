@@ -1,0 +1,8 @@
+{
+  "services": {
+    "show_overlay": {"service": "mdi:message-text-fast-outline"},
+    "update_overlay": {"service": "mdi:message-draw"},
+    "remove_overlay": {"service": "mdi:message-off-outline"},
+    "clear_overlay": {"service": "mdi:notification-clear-all"}
+  }
+}

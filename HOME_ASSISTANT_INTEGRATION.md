@@ -27,14 +27,15 @@ zainstalowanie HA Windows Bridge nie instaluje brokera.
 
 ## Obsługiwane encje
 
-- `number`: głośność główna, mikrofon, aktywna aplikacja i wybrane programy;
+- `number`: głośność główna, balans, mikrofon, aktywna aplikacja i wybrane programy;
 - `switch`: wyciszenie główne, mikrofonu i programów;
 - `binary_sensor`: połączenie, uruchomienie programu, aktywność mikrofonu,
-  pełny ekran, aktywność komputera i blokada Windows;
-- `sensor`: aktywna aplikacja i okno, bezczynność, CPU, RAM, uptime oraz GPU;
+  pełny ekran, aktywność komputera, blokada Windows i śledzone urządzenia;
+- `sensor`: aktywna aplikacja i okno, bezczynność, CPU, RAM, uptime, Windows Update,
+  zasilanie, dyski, liczba sesji audio oraz dostępna telemetria sprzętu;
 - `button`: start lub zamknięcie programu oraz opcjonalne akcje komputera;
-- `select`: domyślne wyjście audio;
-- `notify`: kontrolowane powiadomienia zasobnika Windows;
+- `select`: domyślne wyjście audio i profile audio;
+- `notify`: kontrolowane powiadomienia zasobnika i bezpieczna nakładka Windows;
 - `media_player`: aktywna sesja multimediów Windows z miniaturą.
 
 Wyłączenie funkcji w aplikacji usuwa jej encję po zapisaniu i ponownym opublikowaniu
@@ -51,6 +52,14 @@ Windows. Obraz jest ograniczony do 1 MB i weryfikowany jako PNG, JPEG, GIF albo 
 Akcje systemowe są domyślnie wyłączone. Aplikacja przyjmuje tylko stałą listę poleceń:
 blokada, uśpienie, restart, wyłączenie i anulowanie. Restart i wyłączenie są opóźnione
 o 30 sekund. Integracja nie udostępnia encji do wykonywania dowolnych komend.
+
+## Nakładka Windows
+
+Prosty komunikat można wysłać encją `notify`. Rozszerzone opcje udostępniają akcje
+`ha_windows_bridge.show_overlay`, `update_overlay`, `remove_overlay` i `clear_overlay`.
+Obsługują kolejkę, stałe ID, obraz osadzony, kod QR, postęp, monitor, narożnik, czas,
+rozmiar i przezroczystość. Nakładka nie wstrzykuje kodu do gier i domyślnie jest
+blokowana przy pełnym ekranie.
 
 ## Usuwanie
 

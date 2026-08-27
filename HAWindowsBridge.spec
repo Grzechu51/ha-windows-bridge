@@ -1,7 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_submodules
 
-hiddenimports = collect_submodules("pycaw") + collect_submodules("winrt")
+hiddenimports = (
+    collect_submodules("pycaw")
+    + ["qrcode", "qrcode.image.pil"]
+    + collect_submodules("winrt")
+)
 hiddenimports.append("winrt.windows.foundation")
 hiddenimports.append("winrt.windows.foundation.collections")
 hiddenimports.append("winrt.windows.media.control")

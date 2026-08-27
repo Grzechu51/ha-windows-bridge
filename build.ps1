@@ -51,6 +51,9 @@ if (-not $SkipInstall) {
     Assert-NativeCommandSucceeded "Instalacja zależności"
 }
 
+$AppVersion = (& $VenvPython -c "from ha_windows_bridge import __version__; print(__version__)").Trim()
+Assert-NativeCommandSucceeded "Odczyt wersji aplikacji"
+
 $BuiltExe = Join-Path $ProjectRoot "dist\HA Windows Bridge\HA Windows Bridge.exe"
 if (Test-Path -LiteralPath $BuiltExe) {
     $ResolvedBuiltExe = [System.IO.Path]::GetFullPath($BuiltExe)
@@ -80,12 +83,55 @@ finally {
 }
 & $VenvPython "tools\create_icon.py"
 Assert-NativeCommandSucceeded "Generowanie ikony"
-& $VenvPython -m PyInstaller --noconfirm --clean "HAWindowsBridge.spec"
-Assert-NativeCommandSucceeded "Budowanie PyInstaller"
+$PythonBase = (& $VenvPython -c "import sys; print(sys.base_prefix)").Trim()
+Assert-NativeCommandSucceeded "Odczyt katalogu bazowego Pythona"
+$OriginalBuildPath = $env:PATH
+$CleanBuildPath = @(
+    (Split-Path -Parent $VenvPython),
+    $PythonBase,
+    (Join-Path $PythonBase "DLLs"),
+    (Join-Path $PythonBase "Scripts"),
+    (Join-Path $env:SystemRoot "System32"),
+    $env:SystemRoot
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
+try {
+    # PyInstaller resolves transitive DLL dependencies through PATH. Build
+    # runners may prepend unrelated tools (for example Poppler) that ship DLLs
+    # named like Windows ICU. Keeping only Python and Windows locations avoids
+    # silently packaging those incompatible libraries.
+    $env:PATH = $CleanBuildPath -join [System.IO.Path]::PathSeparator
+    & $VenvPython -m PyInstaller --noconfirm --clean "HAWindowsBridge.spec"
+    Assert-NativeCommandSucceeded "Budowanie PyInstaller"
+}
+finally {
+    $env:PATH = $OriginalBuildPath
+}
+
+$UnexpectedRuntimeFiles = @(
+    Get-ChildItem -LiteralPath (Split-Path -Parent $BuiltExe) -Recurse -File |
+        Where-Object {
+            $_.Name -in @("icu.dll", "icuuc.dll", "ucrtbase.dll") -or
+            $_.Name -match "^icudt\d+\.dll$"
+        }
+)
+if ($UnexpectedRuntimeFiles.Count -gt 0) {
+    throw "Unexpected system/runtime DLLs were bundled: $($UnexpectedRuntimeFiles.FullName -join ', ')."
+}
+
+$SmokeTest = Start-Process -FilePath $BuiltExe -ArgumentList "--smoke-test" -Wait -PassThru -WindowStyle Hidden
+if ($SmokeTest.ExitCode -ne 0) {
+    throw "Packaged application smoke test failed (exit code $($SmokeTest.ExitCode))."
+}
+$BuiltVersion = (Get-Item -LiteralPath $BuiltExe).VersionInfo.ProductVersion.Trim()
+if ($BuiltVersion -ne $AppVersion) {
+    throw "EXE version $BuiltVersion does not match application version $AppVersion."
+}
+$IntegrationVersion = (Get-Content -LiteralPath "custom_components\ha_windows_bridge\manifest.json" -Raw | ConvertFrom-Json).version
+if ($IntegrationVersion -ne $AppVersion) {
+    throw "Integration version $IntegrationVersion does not match application version $AppVersion."
+}
 Invoke-CodeSigning -Path $BuiltExe
 
-$AppVersion = (& $VenvPython -c "from ha_windows_bridge import __version__; print(__version__)").Trim()
-Assert-NativeCommandSucceeded "Odczyt wersji aplikacji"
 $AppDist = Join-Path $ProjectRoot "dist\HA Windows Bridge"
 Copy-Item -LiteralPath (Join-Path $ProjectRoot "LICENSE") -Destination (Join-Path $AppDist "LICENSE") -Force
 $PortableZip = Join-Path $ProjectRoot "dist\HA-Windows-Bridge-$AppVersion-win64.zip"
