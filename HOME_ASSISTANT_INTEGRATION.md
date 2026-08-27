@@ -34,7 +34,7 @@ zainstalowanie HA Windows Bridge nie instaluje brokera.
 - `sensor`: aktywna aplikacja i okno, bezczynność, CPU, RAM, uptime, Windows Update,
   zasilanie, dyski, liczba sesji audio oraz dostępna telemetria sprzętu;
 - `button`: start lub zamknięcie programu oraz opcjonalne akcje komputera;
-- `select`: domyślne wyjście audio i profile audio;
+- `select`: domyślne wyjście audio, profile audio i monitor nakładki;
 - `notify`: kontrolowane powiadomienia zasobnika i bezpieczna nakładka Windows;
 - `media_player`: aktywna sesja multimediów Windows z miniaturą.
 
@@ -60,6 +60,22 @@ Prosty komunikat można wysłać encją `notify`. Rozszerzone opcje udostępniaj
 Obsługują kolejkę, stałe ID, obraz osadzony, kod QR, postęp, monitor, narożnik, czas,
 rozmiar i przezroczystość. Nakładka nie wstrzykuje kodu do gier i domyślnie jest
 blokowana przy pełnym ekranie.
+
+Najprostsze wyświetlenie aktywnej sesji multimediów Windows wraz z okładką i bieżącym
+czasem:
+
+```yaml
+action: ha_windows_bridge.show_overlay
+target:
+  entity_id: notify.pc_windows_overlay
+data:
+  notification_id: now_playing
+  media: true
+  pinned: true
+```
+
+Przypięta karta ma przycisk **×**. Postęp i czas mogą pochodzić z encji lub atrybutu;
+własny zakres źródła można zmapować na 0–100% polami minimum i maksimum.
 
 ## Usuwanie
 

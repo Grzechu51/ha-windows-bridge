@@ -26,20 +26,34 @@
       "description": "Wyświetla zweryfikowaną, pasywną wiadomość na wybranym komputerze z Windows.",
       "fields": {
         "title": {"name": "Tytuł"},
-        "message": {"name": "Wiadomość"},
+        "message": {"name": "Wiadomość", "description": "Opcjonalna po włączeniu układu bieżącego Media Playera Windows."},
+        "media": {"name": "Bieżący Media Player Windows", "description": "Używa aktywnej sesji Windows wraz z okładką, tytułem i żywym postępem odtwarzania."},
         "notification_id": {"name": "ID wiadomości", "description": "Stałe ID używane później do aktualizacji lub usunięcia wiadomości."},
         "icon": {"name": "Ikona", "description": "Do ośmiu znaków, na przykład emoji."},
         "image": {"name": "Osadzony obraz", "description": "URI danych PNG, JPEG, GIF lub WebP do 512 KiB."},
         "qr": {"name": "Treść kodu QR"},
-        "progress": {"name": "Postęp"},
-        "duration": {"name": "Czas"},
+        "progress": {"name": "Postęp", "description": "Stała wartość od 0 do 100."},
+        "progress_entity": {"name": "Źródło postępu", "description": "Odczytuje postęp ze stanu albo wskazanego atrybutu encji."},
+        "progress_attribute": {"name": "Atrybut postępu"},
+        "progress_min": {"name": "Minimum źródła", "description": "Wartość przeliczana na 0%."},
+        "progress_max": {"name": "Maksimum źródła", "description": "Wartość przeliczana na 100%."},
+        "duration": {"name": "Czas", "description": "Stały czas wyświetlania w sekundach."},
+        "duration_entity": {"name": "Źródło czasu", "description": "Odczytuje czas wyświetlania ze stanu albo wskazanego atrybutu encji."},
+        "duration_attribute": {"name": "Atrybut czasu"},
         "pinned": {"name": "Przypięta"},
         "corner": {"name": "Narożnik"},
-        "monitor": {"name": "Monitor"},
+        "monitor": {"name": "Nadpisanie monitora", "description": "Opcjonalny numer liczony od zera. Zwykle użyj encji Monitor nakładki na urządzeniu."},
         "size": {"name": "Rozmiar"},
         "layout": {"name": "Układ", "description": "Media umieszcza przekazany obraz obok tytułu i wiadomości."},
         "opacity": {"name": "Przezroczystość"},
         "preset": {"name": "Styl"}
+      },
+      "sections": {
+        "content": {"name": "Treść"},
+        "appearance": {"name": "Wygląd"},
+        "progress_options": {"name": "Postęp"},
+        "timing": {"name": "Czas i zamykanie"},
+        "placement": {"name": "Położenie"}
       }
     },
     "update_overlay": {
@@ -49,7 +63,12 @@
         "notification_id": {"name": "ID wiadomości"},
         "title": {"name": "Tytuł"},
         "message": {"name": "Wiadomość"},
+        "media": {"name": "Odśwież z Media Playera Windows"},
         "progress": {"name": "Postęp"},
+        "progress_entity": {"name": "Źródło postępu"},
+        "progress_attribute": {"name": "Atrybut postępu"},
+        "progress_min": {"name": "Minimum źródła"},
+        "progress_max": {"name": "Maksimum źródła"},
         "pinned": {"name": "Przypięta"}
       }
     },

@@ -26,20 +26,34 @@
       "description": "Shows a validated, passive message on the selected Windows computer.",
       "fields": {
         "title": {"name": "Title"},
-        "message": {"name": "Message"},
+        "message": {"name": "Message", "description": "Optional when the current Windows Media Player layout is enabled."},
+        "media": {"name": "Current Windows Media Player", "description": "Uses the active Windows media session, including artwork, title and live playback progress."},
         "notification_id": {"name": "Message ID", "description": "Stable ID used to update or remove this message later."},
         "icon": {"name": "Icon", "description": "Up to eight characters, for example an emoji."},
         "image": {"name": "Embedded image", "description": "PNG, JPEG, GIF or WebP data URI up to 512 KiB."},
         "qr": {"name": "QR content"},
-        "progress": {"name": "Progress"},
-        "duration": {"name": "Duration"},
+        "progress": {"name": "Progress", "description": "Fixed value from 0 to 100."},
+        "progress_entity": {"name": "Progress source", "description": "Reads progress from the state or selected attribute of an entity."},
+        "progress_attribute": {"name": "Progress attribute"},
+        "progress_min": {"name": "Source minimum", "description": "Value mapped to 0%."},
+        "progress_max": {"name": "Source maximum", "description": "Value mapped to 100%."},
+        "duration": {"name": "Duration", "description": "Fixed display time in seconds."},
+        "duration_entity": {"name": "Duration source", "description": "Reads the display time from the state or selected attribute of an entity."},
+        "duration_attribute": {"name": "Duration attribute"},
         "pinned": {"name": "Pinned"},
         "corner": {"name": "Corner"},
-        "monitor": {"name": "Monitor"},
+        "monitor": {"name": "Monitor override", "description": "Optional zero-based override. Normally use the Overlay Monitor entity on the device."},
         "size": {"name": "Size"},
         "layout": {"name": "Layout", "description": "Media places a supplied image next to the title and message."},
         "opacity": {"name": "Opacity"},
         "preset": {"name": "Preset"}
+      },
+      "sections": {
+        "content": {"name": "Content"},
+        "appearance": {"name": "Appearance"},
+        "progress_options": {"name": "Progress"},
+        "timing": {"name": "Timing and closing"},
+        "placement": {"name": "Placement"}
       }
     },
     "update_overlay": {
@@ -49,7 +63,12 @@
         "notification_id": {"name": "Message ID"},
         "title": {"name": "Title"},
         "message": {"name": "Message"},
+        "media": {"name": "Refresh from Windows Media Player"},
         "progress": {"name": "Progress"},
+        "progress_entity": {"name": "Progress source"},
+        "progress_attribute": {"name": "Progress attribute"},
+        "progress_min": {"name": "Source minimum"},
+        "progress_max": {"name": "Source maximum"},
         "pinned": {"name": "Pinned"}
       }
     },

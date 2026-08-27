@@ -325,7 +325,8 @@ def test_ducking_sensitivity_is_saved_and_follows_ducking_switch() -> None:
     try:
         assert window.ducking_sensitivity.isEnabled()
         assert window.ducking_sensitivity.value() == 73
-        assert window.ducking_sensitivity_value.text() == "73%"
+        assert window.ducking_sensitivity_value.text().startswith("73%")
+        assert window.ducking_sensitivity_value.text().endswith("0%")
         assert window._config_from_form().ducking_sensitivity == 73
 
         window.automatic_ducking_row.switch.setChecked(False)

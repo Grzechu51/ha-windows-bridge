@@ -111,12 +111,12 @@ Home Assistant.
 ## Instalacja aplikacji Windows
 
 1. Otwórz [najnowsze wydanie](https://github.com/Grzechu51/ha-windows-bridge/releases/latest).
-2. Pobierz **HA-Windows-Bridge-Setup-1.2.1.exe**.
-3. Porównaj sumę SHA-256 z plikiem **SHA256SUMS-1.2.1.txt**.
+2. Pobierz **HA-Windows-Bridge-Setup-1.3.0.exe**.
+3. Porównaj sumę SHA-256 z plikiem **SHA256SUMS-1.3.0.txt**.
 4. Uruchom instalator i opcjonalnie utwórz skrót na pulpicie.
 5. Uruchom **HA Windows Bridge** z menu Start.
 
-Archiwum **HA-Windows-Bridge-1.2.1-win64.zip** jest wersją przenośną. Po rozpakowaniu
+Archiwum **HA-Windows-Bridge-1.3.0-win64.zip** jest wersją przenośną. Po rozpakowaniu
 trzeba zachować cały katalog wraz z folderem `_internal`.
 
 ## Pierwsza konfiguracja
@@ -148,13 +148,15 @@ Zakładka **Funkcje** jest podzielona na **Ogólne**, **System i dyski**, **Audi
 **Urządzenia** i **Nakładka**. Każdą grupę można włączyć niezależnie.
 
 - **Stan Windows i dysków** publikuje Windows Update, wymagany restart, plan zasilania,
-  baterię komputera, użycie miejsca, transfer oraz dostępne dane SMART i temperatury.
+  baterię komputera, użycie miejsca osobno dla zaznaczonych woluminów, łączny transfer
+  oraz dostępne dane SMART i temperatury.
 - **Telemetria CPU i GPU** automatycznie wykrywa sprzęt i publikuje wyłącznie dostępne
   pomiary. NVIDIA używa `nvidia-smi`, a pozostałe czujniki mogą pochodzić z liczników
   Windows albo opcjonalnie uruchomionego LibreHardwareMonitor/OpenHardwareMonitor.
 - **Audio** agreguje wszystkie sesje tego samego procesu, udostępnia balans stereo,
-  automatyczne ściszanie z regulowaną czułością mikrofonu oraz profile miksu. Profil może
-  przełączyć domyślne wyjście całego systemu i uruchomić się wraz z przypisaną aplikacją.
+  automatyczne ściszanie z podglądem sygnału mikrofonu oraz profile miksu. Profil można
+  edytować, może przełączyć domyślne wyjście całego systemu i uruchomić się wraz z jedną
+  z kilku przypisanych aplikacji.
 - **Urządzenia** wykrywa urządzenia audio, Bluetooth, USB, kamery, kontrolery, drukarki
   i dyski widoczne jako Plug and Play. Zaznaczone pozycje otrzymują osobny sensor
   podłączenia, którego zmiany można wykorzystać w automatyzacjach.
@@ -199,21 +201,50 @@ data:
   preset: info
 ```
 
-Układ `media` umieszcza przekazaną okładkę po lewej stronie oraz tytuł, opis i postęp po
-prawej. Tytuł i wykonawcę można pobierać z dowolnej encji odtwarzacza za pomocą szablonu:
+Po zaznaczeniu **Media Player** aplikacja może przygotować całą kartę z aktywnej sesji
+Windows: tytuł, wykonawcę, okładkę, bieżący czas i długość utworu. Pasek przesuwa się
+lokalnie co pół sekundy, więc nie generuje ciągłego ruchu MQTT:
 
 ```yaml
 action: ha_windows_bridge.show_overlay
 target:
   entity_id: notify.pc_windows_overlay
 data:
-  title: "{{ state_attr('media_player.spotify', 'media_title') or 'Media Player' }}"
-  message: "{{ state_attr('media_player.spotify', 'media_artist') or '' }}"
-  image: "data:image/jpeg;base64,TUTAJ_DANE_OBRAZU"
-  layout: media
+  notification_id: now_playing
+  media: true
+  pinned: true
   size: large
   preset: info
 ```
+
+To jest kompletna komenda do wyświetlenia aktualnego Media Playera. Przypięta karta ma
+przycisk **×**; można ją też zamknąć akcją `remove_overlay` z tym samym
+`notification_id`. Domyślny ekran wybiera się w aplikacji lub encją **Overlay Monitor**
+utworzoną pod urządzeniem HA Windows Bridge. Pole **Monitor override** w akcji służy
+tylko do jednorazowego nadpisania tego wyboru i jest numerowane od zera.
+
+Postęp może być liczbą albo stanem/atrybutem dowolnej encji. **Minimum źródła** i
+**Maksimum źródła** przeliczają własny zakres na 0–100%; przykładowo sensor 0–240:
+
+```yaml
+action: ha_windows_bridge.show_overlay
+target:
+  entity_id: notify.pc_windows_overlay
+data:
+  title: Pranie
+  message: Pozostały czas programu
+  progress_entity: sensor.pralka_pozostaly_czas
+  progress_min: 0
+  progress_max: 240
+  duration: 10
+```
+
+W automatyzacji można też wpisać zwykłe równanie szablonu Home Assistant, np.
+`progress: "{{ (states('sensor.postep') | float * 100) | round }}"`. Podobnie pole
+**Duration source** może pobrać czas wyświetlania z encji lub jej atrybutu.
+
+Układ `media` umieszcza ręcznie przekazaną grafikę po lewej stronie oraz tytuł, opis i
+postęp po prawej. Własny komunikat może nadal używać `image` jako URI danych.
 
 Pole `image` nie przyjmuje adresu URL ani identyfikatora encji. Dzięki temu aplikacja
 Windows nie otrzymuje tokenu Home Assistant i nie pobiera dowolnych adresów sieciowych.
@@ -237,9 +268,10 @@ publikują wyłącznie do topicu przypisanego do tego komputera.
 
 Integracja zawiera lokalne warianty `icon.png`, `dark_icon.png`, `logo.png` i
 `dark_logo.png`. Home Assistant 2026.3 lub nowszy pobiera je bezpośrednio z katalogu
-integracji. Po aktualizacji przez HACS uruchom Home Assistant ponownie; przy zachowanym
-starym symbolu wykonaj także pełne odświeżenie strony w przeglądarce, ponieważ obrazy
-marki są buforowane.
+integracji, a HACS używa dodatkowej ikony z katalogu `brand` repozytorium. Ikona pojawi
+się dopiero po pobraniu wydania zawierającego te pliki. Po aktualizacji wybierz w HACS
+**⋮ → Update information**, pobierz integrację ponownie, uruchom Home Assistant i wykonaj
+pełne odświeżenie strony, ponieważ obrazy marki są buforowane.
 
 ## Konfiguracja, diagnostyka i czyszczenie
 
@@ -265,7 +297,7 @@ Code Signing. Certyfikat i klucz prywatny nie są częścią repozytorium.
 ```powershell
 $env:HAWB_SIGNING_THUMBPRINT = "40_ZNAKOWY_ODCISK_CERTYFIKATU"
 .\build.ps1 -Installer
-Get-AuthenticodeSignature ".\dist\HA-Windows-Bridge-Setup-1.2.1.exe"
+Get-AuthenticodeSignature ".\dist\HA-Windows-Bridge-Setup-1.3.0.exe"
 ```
 
 Bez certyfikatu pliki nadal można zbudować, ale Windows SmartScreen może wyświetlić

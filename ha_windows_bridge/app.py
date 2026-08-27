@@ -114,6 +114,15 @@ QProgressBar#resourceBar::chunk {
     background: #37835f;
     border-radius: 3px;
 }
+QProgressBar#microphoneLevelBar {
+    background: #252a2e;
+    border: none;
+    border-radius: 2px;
+}
+QProgressBar#microphoneLevelBar::chunk {
+    background: #43ba7d;
+    border-radius: 2px;
+}
 QLabel#versionLabel {
     color: #90989e;
 }
@@ -244,6 +253,11 @@ QFrame#appCard, QFrame#masterVolumeCard, QFrame#microphoneCard,
 QFrame#audioOutputCard, QFrame#settingRow, QFrame#dataCard {
     background: #131518;
     border: 1px solid #373c42;
+    border-radius: 8px;
+}
+QFrame#featureGroupHeader {
+    background: #101714;
+    border: 1px solid #327558;
     border-radius: 8px;
 }
 QFrame#uninstallCard {

@@ -8,6 +8,7 @@ import pytest
 from ha_windows_bridge.config import (
     AppConfig,
     AudioAppConfig,
+    AudioProfileConfig,
     DpapiSecretBackend,
     MqttConfig,
     SettingsStore,
@@ -173,7 +174,7 @@ def test_version_04_optional_features_are_disabled_during_migration() -> None:
         }
     )
 
-    assert legacy.schema_version == 8
+    assert legacy.schema_version == 9
     assert legacy.control_active_app is False
     assert legacy.publish_activity is False
     assert legacy.publish_idle is False
@@ -193,6 +194,25 @@ def test_version_12_hardware_telemetry_is_migrated_to_cpu_and_gpu() -> None:
         }
     )
 
-    assert migrated.schema_version == 8
+    assert migrated.schema_version == 9
     assert migrated.publish_cpu_stats is True
     assert migrated.publish_gpu_stats is True
+
+
+def test_audio_profile_keeps_multiple_unique_trigger_programs() -> None:
+    profile = AudioProfileConfig.from_dict(
+        {
+            "name": "Gaming",
+            "trigger_process": "Discord.exe",
+            "trigger_processes": ["Chrome.exe", "discord.EXE"],
+        }
+    )
+
+    assert profile.trigger_processes == ["Discord.exe", "Chrome.exe"]
+    assert profile.trigger_process == "Discord.exe"
+
+
+def test_disk_monitoring_requires_a_selected_volume() -> None:
+    config = AppConfig(publish_disk_stats=True, disk_mounts=[])
+
+    assert "Wybierz co najmniej jeden dysk do monitorowania." in config.validation_errors()

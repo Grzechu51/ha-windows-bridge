@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import math
+import os
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -24,6 +26,7 @@ from .discovery import (
     app_volume_topics,
     audio_output_topics,
     audio_profile_topics,
+    disk_volume_metric,
     fullscreen_topic,
     idle_topic,
     master_balance_topics,
@@ -32,12 +35,14 @@ from .discovery import (
     microphone_active_topic,
     microphone_mute_topics,
     microphone_volume_topics,
+    overlay_monitor_topics,
     overlay_notification_topic,
     pc_active_topic,
     power_action_topic,
     session_locked_topic,
     status_topic,
     system_metric_topic,
+    total_audio_session_count_topic,
     tracked_device_topic,
     windows_notification_topic,
 )
@@ -73,16 +78,25 @@ class MqttBridge:
         power_actions: WindowsPowerActions | None = None,
         notification_callback: NotificationCallback | None = None,
         overlay_callback: OverlayCallback | None = None,
+        overlay_monitors: list[str] | None = None,
     ):
         self.config = config
         self.audio = audio or WindowsAudioService()
         self.system = system_monitor or WindowsSystemMonitor()
+        if self.config.publish_disk_stats and not self.config.disk_mounts:
+            list_volumes = getattr(self.system, "list_disk_volumes", None)
+            if callable(list_volumes):
+                try:
+                    self.config.disk_mounts = [volume.mountpoint for volume in list_volumes()]
+                except Exception:
+                    self.config.disk_mounts = []
         self.media = media_service or WindowsMediaService(logger)
         self.log = logger or logging.getLogger(__name__)
         self.status_callback = status_callback
         self.power_actions = power_actions or WindowsPowerActions()
         self.notification_callback = notification_callback
         self.overlay_callback = overlay_callback
+        self.overlay_monitors = (overlay_monitors or ["1: Monitor"])[:16]
         self.client: mqtt.Client | None = None
         self._stop_event = threading.Event()
         self._connected = threading.Event()
@@ -97,6 +111,7 @@ class MqttBridge:
         self._last_master_mute: bool | None = None
         self._last_master_balance: float | None = None
         self._last_session_counts: dict[str, int] = {}
+        self._last_total_session_count: int | None = None
         self._last_device_states: dict[str, bool] = {}
         self._ducked_volumes: dict[str, float] = {}
         self._last_microphone: tuple[float, bool, bool] | None = None
@@ -120,6 +135,8 @@ class MqttBridge:
         self._power_action_commands: dict[str, str] = {}
         self._notification_command = ""
         self._overlay_command = ""
+        self._overlay_monitor_command = ""
+        self._overlay_monitor_state = ""
         self._master_balance_command = ""
         self._audio_profile_command = ""
         self._active_audio_profile = ""
@@ -313,6 +330,13 @@ class MqttBridge:
         self._overlay_command = (
             overlay_notification_topic(self.config) if self.config.overlay_enabled else ""
         )
+        if self.config.overlay_enabled:
+            self._overlay_monitor_command, self._overlay_monitor_state = overlay_monitor_topics(
+                self.config
+            )
+        else:
+            self._overlay_monitor_command = ""
+            self._overlay_monitor_state = ""
         for app in self.config.apps:
             if not app.enabled:
                 continue
@@ -358,6 +382,8 @@ class MqttBridge:
             topics.add(self._notification_command)
         if self._overlay_command:
             topics.add(self._overlay_command)
+        if self._overlay_monitor_command:
+            topics.add(self._overlay_monitor_command)
         return {topic for topic in topics if topic}
 
     def _on_connect(self, client, _userdata, _flags, reason_code, _properties) -> None:
@@ -415,6 +441,9 @@ class MqttBridge:
             return
         if message.topic == self._overlay_command:
             self._handle_overlay_notification(message.payload)
+            return
+        if message.topic == self._overlay_monitor_command:
+            self._handle_overlay_monitor(message.payload)
             return
         power_action = self._power_action_commands.get(message.topic)
         if power_action:
@@ -486,18 +515,53 @@ class MqttBridge:
             self.log.warning("Nieprawidłowa wiadomość nakładki Windows")
             return
         action = str(data.get("action", "show")).strip().lower() if isinstance(data, dict) else ""
+        media_requested = isinstance(data, dict) and bool(data.get("media", False))
         if (
             action not in {"show", "update", "remove", "clear"}
-            or (action in {"show", "update"} and not message)
+            or (action in {"show", "update"} and not message and not media_requested)
             or len(title) > 128
             or len(message) > 2048
             or not isinstance(data, dict)
         ):
             self.log.warning("Nieprawidłowa wiadomość nakładki Windows")
             return
+        if media_requested and action in {"show", "update"}:
+            snapshot = self.media.snapshot()
+            if snapshot.supported:
+                title = snapshot.title or title or "Media Player"
+                message = (
+                    " · ".join(value for value in (snapshot.artist, snapshot.album_title) if value)
+                    or message
+                )
+                data.update(
+                    {
+                        "layout": "media",
+                        "media_position": snapshot.position,
+                        "media_duration": snapshot.duration,
+                        "media_playing": snapshot.state == "playing",
+                    }
+                )
+                artwork = snapshot.artwork
+                if artwork.data and len(artwork.data) <= 512 * 1024:
+                    data["image"] = f"data:{artwork.content_type};base64," + base64.b64encode(
+                        artwork.data
+                    ).decode("ascii")
         if self.overlay_callback:
+            if action in {"show", "update"}:
+                data.setdefault("monitor", self.config.overlay_monitor)
             self.overlay_callback(title or "Home Assistant", message, data)
         self.log.info("Przekazano wiadomość do nakładki Windows")
+
+    def _handle_overlay_monitor(self, payload: bytes) -> None:
+        try:
+            selected = payload.decode("utf-8", errors="strict").strip()
+        except UnicodeDecodeError:
+            return
+        if selected not in self.overlay_monitors:
+            self.log.warning("Nieznany monitor nakładki: %s", selected)
+            return
+        self.config.overlay_monitor = self.overlay_monitors.index(selected)
+        self._publish_text_state(self._overlay_monitor_state, selected)
 
     @staticmethod
     def _is_button_press(payload: bytes) -> bool:
@@ -647,8 +711,8 @@ class MqttBridge:
                 item
                 for item in self.config.audio_profiles
                 if item.enabled
-                and item.trigger_process
-                and item.trigger_process.casefold() == process_name.casefold()
+                and process_name.casefold()
+                in {trigger.casefold() for trigger in item.trigger_processes}
             ),
             None,
         )
@@ -807,13 +871,31 @@ class MqttBridge:
             if health.power_plan:
                 hardware_metrics.add("power_plan")
         if self.config.publish_disk_stats:
-            disks = self.system.disk_metrics()
-            hardware_metrics.update(("disk_used", "disk_free", "disk_read", "disk_write"))
+            volumes = self.system.list_disk_volumes()
+            selected = {
+                os.path.normcase(os.path.normpath(mount)) for mount in self.config.disk_mounts
+            }
+            for volume in volumes:
+                if os.path.normcase(os.path.normpath(volume.mountpoint)) not in selected:
+                    continue
+                hardware_metrics.update(
+                    (
+                        disk_volume_metric(volume.mountpoint, "used"),
+                        disk_volume_metric(volume.mountpoint, "free"),
+                    )
+                )
+            disks = self.system.disk_metrics(self.config.disk_mounts)
+            hardware_metrics.update(("disk_read", "disk_write"))
             if disks.health:
                 hardware_metrics.add("disk_health")
             if disks.temperature is not None:
                 hardware_metrics.add("disk_temperature")
-        payload = integration_announcement_payload(self.config, outputs, hardware_metrics)
+        payload = integration_announcement_payload(
+            self.config,
+            outputs,
+            hardware_metrics,
+            self.overlay_monitors,
+        )
         client.publish(
             media_announcement_topic(self.config),
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
@@ -824,6 +906,11 @@ class MqttBridge:
             _, state_topic = media_topics(self.config)
             client.publish(state_topic, "", qos=1, retain=True)
             client.publish(media_thumbnail_topic(self.config), "", qos=1, retain=True)
+        if self.config.overlay_enabled and self._overlay_monitor_state:
+            selected = self.overlay_monitors[
+                max(0, min(len(self.overlay_monitors) - 1, self.config.overlay_monitor))
+            ]
+            self._publish_text_state(self._overlay_monitor_state, selected)
         return len(payload["entities"]) + int(self.config.media_player_enabled)
 
     def publish_media_announcement(self) -> None:
@@ -841,6 +928,7 @@ class MqttBridge:
         next_output = 0.0
         next_process_scan = 0.0
         next_media = 0.0
+        next_audio_sessions = 0.0
         next_health = 0.0
         next_disk = 0.0
         next_devices = 0.0
@@ -857,6 +945,13 @@ class MqttBridge:
                     running_processes = self.system.running_process_names(names)
                     next_process_scan = now + 2.0
                 self._monitor_apps(enabled, snapshot, running_processes)
+                if (
+                    now >= next_audio_sessions
+                    and self.config.audio_enhancements_enabled
+                    and self.config.publish_audio_sessions
+                ):
+                    next_audio_sessions = now + 2.0
+                    self._monitor_total_audio_sessions()
                 if self.config.control_active_app:
                     self._monitor_active(snapshot)
                 if self.config.control_microphone or (
@@ -999,6 +1094,16 @@ class MqttBridge:
             self._last_active = current
             self._publish_volume_state(None, volume)
 
+    def _monitor_total_audio_sessions(self) -> None:
+        counter = getattr(self.audio, "count_audio_sessions", None)
+        if not callable(counter):
+            return
+        count = counter()
+        if count == self._last_total_session_count:
+            return
+        self._last_total_session_count = count
+        self._publish_text_state(total_audio_session_count_topic(self.config), count)
+
     def _monitor_microphone(self) -> None:
         snapshot = self.audio.get_microphone_snapshot(self.config.ducking_sensitivity)
         if snapshot is None:
@@ -1115,17 +1220,30 @@ class MqttBridge:
             system_metric_topic(self.config, "pending_restart"), health.pending_restart
         )
         if health.power_plan:
-            self._publish_text_state(system_metric_topic(self.config, "power_plan"), health.power_plan)
+            self._publish_text_state(
+                system_metric_topic(self.config, "power_plan"), health.power_plan
+            )
         self._publish_text_state(
             system_metric_topic(self.config, "windows_update"),
             health.windows_update_status,
         )
 
     def _monitor_disks(self) -> None:
-        metrics = self.system.disk_metrics()
+        volumes = self.system.list_disk_volumes()
+        selected = {os.path.normcase(os.path.normpath(mount)) for mount in self.config.disk_mounts}
+        for volume in volumes:
+            if os.path.normcase(os.path.normpath(volume.mountpoint)) not in selected:
+                continue
+            self._publish_text_state(
+                system_metric_topic(self.config, disk_volume_metric(volume.mountpoint, "used")),
+                round(volume.used_percent, 1),
+            )
+            self._publish_text_state(
+                system_metric_topic(self.config, disk_volume_metric(volume.mountpoint, "free")),
+                round(volume.free_gb, 1),
+            )
+        metrics = self.system.disk_metrics(self.config.disk_mounts)
         values = {
-            "disk_used": round(metrics.used_percent, 1),
-            "disk_free": round(metrics.free_gb, 1),
             "disk_read": round(metrics.read_mb_s, 2),
             "disk_write": round(metrics.write_mb_s, 2),
             "disk_health": metrics.health,
@@ -1143,7 +1261,9 @@ class MqttBridge:
             connected = device.instance_id.casefold() in present
             if self._last_device_states.get(device.slug) != connected:
                 self._last_device_states[device.slug] = connected
-                self._publish_switch_state(tracked_device_topic(self.config, device.slug), connected)
+                self._publish_switch_state(
+                    tracked_device_topic(self.config, device.slug), connected
+                )
 
     def _apply_automatic_ducking(self, active: bool) -> None:
         apps = [app for app in self.config.apps if app.enabled]

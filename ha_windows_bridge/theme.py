@@ -32,6 +32,10 @@ QFrame#audioOutputCard, QFrame#settingRow, QFrame#dataCard,
 QFrame#statusCard, QLabel#infoBanner {
     background: #0d0f11;
 }
+QFrame#featureGroupHeader {
+    background: #101714;
+    border-color: #327558;
+}
 QFrame#appCard:hover, QFrame#masterVolumeCard:hover,
 QFrame#microphoneCard:hover, QFrame#audioOutputCard:hover {
     background: #111316;
@@ -254,6 +258,16 @@ QToolButton#helpButton:hover {
 }
 QProgressBar#resourceBar {
     background: #d4dcdf;
+}
+QProgressBar#microphoneLevelBar {
+    background: #d4dcdf;
+}
+QProgressBar#microphoneLevelBar::chunk {
+    background: #24895b;
+}
+QFrame#featureGroupHeader {
+    background: #edf7f2;
+    border-color: #81aa96;
 }
 QFrame#uninstallCard {
     background: #fffafb;

@@ -111,6 +111,15 @@ def test_cleanup_topics_cover_disabled_features_and_removed_default_app() -> Non
     assert "homeassistant/number/gaming_pc_123/youtube_music_volume/config" in stale
 
 
+def test_cleanup_topics_include_legacy_aggregate_disk_entities() -> None:
+    config = AppConfig(device_id="gaming_pc_123", mqtt=MqttConfig(host="broker"))
+
+    stale = all_possible_discovery_topics(config) - discovery_topics(config)
+
+    assert "homeassistant/sensor/gaming_pc_123/disk_used/config" in stale
+    assert "homeassistant/sensor/gaming_pc_123/disk_free/config" in stale
+
+
 def test_power_actions_and_windows_notifications_are_discovered() -> None:
     config = sample_config()
     config.allow_power_actions = True
@@ -132,6 +141,7 @@ def test_modular_system_audio_device_and_overlay_entities_are_capability_filtere
     config = sample_config()
     config.publish_windows_health = True
     config.publish_disk_stats = True
+    config.disk_mounts = ["C:\\", "D:\\"]
     config.publish_cpu_stats = True
     config.publish_gpu_stats = True
     config.audio_enhancements_enabled = True
@@ -151,25 +161,28 @@ def test_modular_system_audio_device_and_overlay_entities_are_capability_filtere
         "pending_restart",
         "power_plan",
         "windows_update",
-        "disk_used",
-        "disk_free",
+        "disk_c_used",
+        "disk_c_free",
+        "disk_d_used",
+        "disk_d_free",
         "disk_read",
         "disk_write",
         "disk_health",
     }
-    topics = {
-        message.topic
-        for message in discovery_messages(config, ["Speakers"], capabilities)
-    }
+    topics = {message.topic for message in discovery_messages(config, ["Speakers"], capabilities)}
 
     assert "homeassistant/number/gaming_pc_123/master_balance/config" in topics
     assert "homeassistant/sensor/gaming_pc_123/spotify_sessions/config" in topics
+    assert "homeassistant/sensor/gaming_pc_123/audio_sessions/config" in topics
     assert "homeassistant/select/gaming_pc_123/audio_profile/config" in topics
     assert "homeassistant/sensor/gaming_pc_123/disk_health/config" in topics
+    assert "homeassistant/sensor/gaming_pc_123/disk_c_used/config" in topics
+    assert "homeassistant/sensor/gaming_pc_123/disk_d_free/config" in topics
     assert "homeassistant/binary_sensor/gaming_pc_123/pending_restart/config" in topics
     assert "homeassistant/sensor/gaming_pc_123/windows_update/config" in topics
     assert "homeassistant/binary_sensor/gaming_pc_123/device_controller/config" in topics
     assert "homeassistant/notify/gaming_pc_123/windows_overlay/config" in topics
+    assert "homeassistant/select/gaming_pc_123/overlay_monitor/config" in topics
     assert "homeassistant/sensor/gaming_pc_123/gpu_usage/config" in topics
     assert "homeassistant/sensor/gaming_pc_123/gpu_temperature/config" not in topics
     assert "homeassistant/sensor/gaming_pc_123/battery/config" not in topics

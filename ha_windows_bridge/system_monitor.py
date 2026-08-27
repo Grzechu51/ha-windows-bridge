@@ -66,6 +66,16 @@ class DiskMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class DiskVolume:
+    mountpoint: str
+    device: str
+    file_system: str
+    total_gb: float
+    used_percent: float
+    free_gb: float
+
+
+@dataclass(frozen=True, slots=True)
 class PnpDevice:
     instance_id: str
     display_name: str
@@ -277,18 +287,47 @@ class WindowsSystemMonitor:
             if initialized:
                 pythoncom.CoUninitialize()
 
-    def disk_metrics(self) -> DiskMetrics:
-        partitions = []
+    @staticmethod
+    def list_disk_volumes() -> list[DiskVolume]:
+        """Return mounted fixed volumes suitable for user selection."""
+        volumes: list[DiskVolume] = []
+        seen: set[str] = set()
         for partition in psutil.disk_partitions(all=False):
+            mountpoint = os.path.normpath(str(partition.mountpoint).strip())
+            key = os.path.normcase(mountpoint)
+            if not mountpoint or key in seen:
+                continue
             try:
-                usage = psutil.disk_usage(partition.mountpoint)
+                usage = psutil.disk_usage(mountpoint)
             except (OSError, PermissionError):
                 continue
-            if usage.total > 0:
-                partitions.append(usage)
-        total = sum(item.total for item in partitions)
-        used = sum(item.used for item in partitions)
-        free = sum(item.free for item in partitions)
+            if usage.total <= 0:
+                continue
+            seen.add(key)
+            volumes.append(
+                DiskVolume(
+                    mountpoint=mountpoint,
+                    device=str(partition.device or mountpoint),
+                    file_system=str(partition.fstype or ""),
+                    total_gb=usage.total / 1_073_741_824,
+                    used_percent=float(usage.percent),
+                    free_gb=usage.free / 1_073_741_824,
+                )
+            )
+        return sorted(volumes, key=lambda item: item.mountpoint.casefold())
+
+    def disk_metrics(self, mounts: list[str] | None = None) -> DiskMetrics:
+        volumes = self.list_disk_volumes()
+        selected = {os.path.normcase(os.path.normpath(mount)) for mount in (mounts or []) if mount}
+        if selected:
+            volumes = [
+                item
+                for item in volumes
+                if os.path.normcase(os.path.normpath(item.mountpoint)) in selected
+            ]
+        total = sum(item.total_gb for item in volumes)
+        free = sum(item.free_gb for item in volumes)
+        used = max(0.0, total - free)
 
         now = time.monotonic()
         io = psutil.disk_io_counters()
@@ -305,7 +344,7 @@ class WindowsSystemMonitor:
             self._disk_health_cache_time = now
         return DiskMetrics(
             used_percent=(used / total * 100.0) if total else 0.0,
-            free_gb=free / 1_073_741_824,
+            free_gb=free,
             read_mb_s=read_rate,
             write_mb_s=write_rate,
             health=self._disk_health_cache[0],
@@ -319,14 +358,10 @@ class WindowsSystemMonitor:
         try:
             import win32com.client
 
-            storage = win32com.client.GetObject(
-                r"winmgmts:\\.\root\Microsoft\Windows\Storage"
-            )
+            storage = win32com.client.GetObject(r"winmgmts:\\.\root\Microsoft\Windows\Storage")
             statuses: list[int] = []
             temperatures: list[float] = []
-            for disk in storage.ExecQuery(
-                "SELECT HealthStatus,Temperature FROM MSFT_PhysicalDisk"
-            ):
+            for disk in storage.ExecQuery("SELECT HealthStatus,Temperature FROM MSFT_PhysicalDisk"):
                 raw_status = getattr(disk, "HealthStatus", None)
                 statuses.append(int(raw_status) if raw_status is not None else 5)
                 raw_temperature = getattr(disk, "Temperature", None)
@@ -348,9 +383,7 @@ class WindowsSystemMonitor:
 
                 wmi = win32com.client.GetObject(r"winmgmts:\\.\root\wmi")
                 predictions = list(
-                    wmi.ExecQuery(
-                        "SELECT PredictFailure FROM MSStorageDriver_FailurePredictStatus"
-                    )
+                    wmi.ExecQuery("SELECT PredictFailure FROM MSStorageDriver_FailurePredictStatus")
                 )
                 if predictions:
                     health = (
@@ -409,11 +442,16 @@ class WindowsSystemMonitor:
                 devices[instance_id.casefold()] = PnpDevice(instance_id, name, category, present)
         except Exception:
             return []
-        return sorted(devices.values(), key=lambda item: (item.category.casefold(), item.display_name.casefold()))[:300]
+        return sorted(
+            devices.values(),
+            key=lambda item: (item.category.casefold(), item.display_name.casefold()),
+        )[:300]
 
     @classmethod
     def present_device_ids(cls) -> set[str]:
-        return {device.instance_id.casefold() for device in cls.list_pnp_devices() if device.present}
+        return {
+            device.instance_id.casefold() for device in cls.list_pnp_devices() if device.present
+        }
 
     @staticmethod
     def _pending_restart() -> bool:
@@ -697,21 +735,15 @@ class WindowsSystemMonitor:
             try:
                 import win32com.client
 
-                service = win32com.client.GetObject(
-                    rf"winmgmts:\\.\root\{namespace}"
-                )
+                service = win32com.client.GetObject(rf"winmgmts:\\.\root\{namespace}")
                 hardware = {
                     str(getattr(item, "Identifier", "")): str(
                         getattr(item, "HardwareType", "")
                     ).casefold()
-                    for item in service.ExecQuery(
-                        "SELECT Identifier,HardwareType FROM Hardware"
-                    )
+                    for item in service.ExecQuery("SELECT Identifier,HardwareType FROM Hardware")
                 }
                 metrics: dict[str, float] = {}
-                for sensor in service.ExecQuery(
-                    "SELECT Name,SensorType,Value,Parent FROM Sensor"
-                ):
+                for sensor in service.ExecQuery("SELECT Name,SensorType,Value,Parent FROM Sensor"):
                     parent = str(getattr(sensor, "Parent", ""))
                     kind = hardware.get(parent, "")
                     sensor_type = str(getattr(sensor, "SensorType", "")).casefold()
@@ -729,9 +761,7 @@ class WindowsSystemMonitor:
                             metrics["cpu_temperature"] = max(
                                 value, metrics.get("cpu_temperature", value)
                             )
-                        elif sensor_type == "power" and (
-                            "package" in name or "cores" in name
-                        ):
+                        elif sensor_type == "power" and ("package" in name or "cores" in name):
                             metrics["cpu_power_watts"] = max(
                                 value, metrics.get("cpu_power_watts", value)
                             )
@@ -754,9 +784,7 @@ class WindowsSystemMonitor:
                         elif sensor_type == "clock" and "core" in name:
                             metrics["gpu_clock_mhz"] = value
                         elif sensor_type == "fan":
-                            metrics["gpu_fan_rpm"] = max(
-                                value, metrics.get("gpu_fan_rpm", value)
-                            )
+                            metrics["gpu_fan_rpm"] = max(value, metrics.get("gpu_fan_rpm", value))
                         elif sensor_type in {"data", "smalldata"} and "memory used" in name:
                             metrics["gpu_memory_used_mb"] = value
                 return metrics

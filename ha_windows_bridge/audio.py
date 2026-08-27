@@ -40,6 +40,7 @@ class MicrophoneSnapshot:
     volume: float
     muted: bool
     active: bool
+    peak: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,14 +149,13 @@ class WindowsAudioService:
                     float(endpoint.GetMasterVolumeLevelScalar()),
                     muted,
                     self._microphone_signal_active(peaks, muted, sensitivity),
+                    max(peaks, default=0.0),
                 )
             except Exception:
                 return None
 
     @staticmethod
-    def _microphone_signal_active(
-        peaks: list[float], muted: bool, sensitivity: int = 50
-    ) -> bool:
+    def _microphone_signal_active(peaks: list[float], muted: bool, sensitivity: int = 50) -> bool:
         sensitivity = max(1, min(100, int(sensitivity)))
         # Audio peak values are logarithmic in practice. A logarithmic mapping
         # gives useful adjustment across quiet and noisy microphones while
@@ -287,6 +287,27 @@ class WindowsAudioService:
             )
             for key, states in collected.items()
         }
+
+    @staticmethod
+    def count_audio_sessions() -> int:
+        """Return the number of process-backed Windows mixer sessions."""
+        with com_scope():
+            try:
+                sessions = AudioUtilities.GetAllSessions()
+            except Exception:
+                return 0
+            total = 0
+            for session in sessions:
+                process = session.Process
+                if process is None:
+                    continue
+                try:
+                    process.name()
+                except psutil.Error:
+                    continue
+                if WindowsAudioService._read_session_state(session) is not None:
+                    total += 1
+            return total
 
     def volume_snapshot(self, process_names: list[str]) -> dict[str, float]:
         return {name: state.volume for name, state in self.session_snapshot(process_names).items()}

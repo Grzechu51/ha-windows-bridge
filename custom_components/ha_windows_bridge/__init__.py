@@ -43,24 +43,27 @@ _OVERLAY_OPTIONS = {
     vol.Optional("image"): vol.All(cv.string, vol.Length(max=700 * 1024)),
     vol.Optional("qr"): vol.All(cv.string, vol.Length(max=512)),
     vol.Optional("progress"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+    vol.Optional("progress_entity"): cv.entity_id,
+    vol.Optional("progress_attribute"): vol.All(cv.string, vol.Length(max=128)),
+    vol.Optional("progress_min"): vol.Coerce(float),
+    vol.Optional("progress_max"): vol.Coerce(float),
     vol.Optional("duration"): vol.All(vol.Coerce(int), vol.Range(min=2, max=60)),
+    vol.Optional("duration_entity"): cv.entity_id,
+    vol.Optional("duration_attribute"): vol.All(cv.string, vol.Length(max=128)),
     vol.Optional("pinned"): cv.boolean,
+    vol.Optional("media"): cv.boolean,
     vol.Optional("corner"): vol.In(
         {"top_left", "top_right", "bottom_left", "bottom_right", "top_center"}
     ),
     vol.Optional("monitor"): vol.All(vol.Coerce(int), vol.Range(min=0, max=15)),
     vol.Optional("size"): vol.In({"small", "medium", "large"}),
     vol.Optional("layout"): vol.In({"default", "media"}),
-    vol.Optional("opacity"): vol.All(
-        vol.Coerce(float), vol.Range(min=0.35, max=1.0)
-    ),
-    vol.Optional("preset"): vol.In(
-        {"default", "success", "warning", "error", "info"}
-    ),
+    vol.Optional("opacity"): vol.All(vol.Coerce(float), vol.Range(min=0.35, max=1.0)),
+    vol.Optional("preset"): vol.In({"default", "success", "warning", "error", "info"}),
 }
 _SHOW_OVERLAY_SCHEMA = cv.make_entity_service_schema(
     {
-        vol.Required("message"): vol.All(cv.string, vol.Length(min=1, max=2048)),
+        vol.Optional("message"): vol.All(cv.string, vol.Length(max=2048)),
         vol.Optional("title"): vol.All(cv.string, vol.Length(max=128)),
         vol.Optional("notification_id"): _OVERLAY_ID,
         **_OVERLAY_OPTIONS,
@@ -69,7 +72,7 @@ _SHOW_OVERLAY_SCHEMA = cv.make_entity_service_schema(
 _UPDATE_OVERLAY_SCHEMA = cv.make_entity_service_schema(
     {
         vol.Required("notification_id"): _OVERLAY_ID,
-        vol.Required("message"): vol.All(cv.string, vol.Length(min=1, max=2048)),
+        vol.Optional("message"): vol.All(cv.string, vol.Length(max=2048)),
         vol.Optional("title"): vol.All(cv.string, vol.Length(max=128)),
         **_OVERLAY_OPTIONS,
     }
@@ -119,15 +122,54 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             if key not in {"entity_id", "device_id", "area_id", "floor_id", "label_id"}
             and key not in {"title", "message", "notification_id"}
         }
+        for value_field, entity_field, attribute_field, minimum, maximum in (
+            ("progress", "progress_entity", "progress_attribute", 0, 100),
+            ("duration", "duration_entity", "duration_attribute", 2, 60),
+        ):
+            entity_id = str(call.data.get(entity_field, "")).strip()
+            if not entity_id:
+                continue
+            state = hass.states.get(entity_id)
+            if state is None:
+                raise HomeAssistantError(f"Source entity is unavailable: {entity_id}")
+            attribute = str(call.data.get(attribute_field, "")).strip()
+            raw_value = state.attributes.get(attribute) if attribute else state.state
+            try:
+                numeric = float(raw_value)
+            except (TypeError, ValueError):
+                raise HomeAssistantError(
+                    f"Source entity does not contain a numeric value: {entity_id}"
+                ) from None
+            if value_field == "progress":
+                source_min = float(call.data.get("progress_min", 0))
+                source_max = float(call.data.get("progress_max", 100))
+                if source_max <= source_min:
+                    raise HomeAssistantError(
+                        "Progress maximum must be greater than progress minimum"
+                    )
+                numeric = round((numeric - source_min) / (source_max - source_min) * 100)
+            else:
+                numeric = round(numeric)
+            options[value_field] = max(minimum, min(maximum, numeric))
+        for helper_field in (
+            "progress_entity",
+            "progress_attribute",
+            "progress_min",
+            "progress_max",
+            "duration_entity",
+            "duration_attribute",
+        ):
+            options.pop(helper_field, None)
         options["action"] = action
         if notification_id := call.data.get("notification_id"):
             options["id"] = notification_id
+        message = str(call.data.get("message", ""))
+        if action in {"show", "update"} and not message and not options.get("media"):
+            raise HomeAssistantError("Provide a message or enable the Media Player layout")
         payload = json.dumps(
             {
-                "title": call.data.get(
-                    "title", "Home Assistant" if action == "show" else ""
-                ),
-                "message": call.data.get("message", ""),
+                "title": call.data.get("title", "Home Assistant" if action == "show" else ""),
+                "message": message,
                 "data": options,
             },
             ensure_ascii=False,

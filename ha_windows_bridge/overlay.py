@@ -5,6 +5,7 @@ import binascii
 import html
 import io
 import re
+import time
 from collections import deque
 from typing import Any
 
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
+    QToolButton,
     QVBoxLayout,
 )
 
@@ -29,13 +31,6 @@ _PRESET_COLORS = {
     "warning": "#f2b84b",
     "error": "#e4656a",
     "info": "#5aa9e6",
-}
-_PRESET_ICONS = {
-    "default": "⌂",
-    "success": "✓",
-    "warning": "!",
-    "error": "×",
-    "info": "i",
 }
 
 
@@ -57,9 +52,15 @@ class OverlayManager(QObject):
         self._cover: QLabel | None = None
         self._image: QLabel | None = None
         self._progress: QProgressBar | None = None
+        self._progress_time: QLabel | None = None
+        self._close_button: QToolButton | None = None
         self._timer: QTimer | None = None
+        self._progress_timer: QTimer | None = None
+        self._progress_started_at = 0.0
 
-    def handle_message(self, title: str, message: str, options: dict[str, Any] | None = None) -> bool:
+    def handle_message(
+        self, title: str, message: str, options: dict[str, Any] | None = None
+    ) -> bool:
         raw_options = options or {}
         action = str(raw_options.get("action", "show")).strip().lower()
         if action == "update":
@@ -68,9 +69,7 @@ class OverlayManager(QObject):
             if self._current and self._current["id"] == message_id:
                 existing = self._current
             else:
-                existing = next(
-                    (item for item in self._queue if item["id"] == message_id), None
-                )
+                existing = next((item for item in self._queue if item["id"] == message_id), None)
             if existing is None:
                 return False
             merged_options = {**existing, **raw_options, "action": "update", "id": message_id}
@@ -115,6 +114,8 @@ class OverlayManager(QObject):
     def hide(self, show_next: bool = True) -> None:
         if self._timer is not None:
             self._timer.stop()
+        if self._progress_timer is not None:
+            self._progress_timer.stop()
         if self._window is not None:
             self._window.hide()
         if show_next:
@@ -135,7 +136,10 @@ class OverlayManager(QObject):
         self._cover = None
         self._image = None
         self._progress = None
+        self._progress_time = None
+        self._close_button = None
         self._timer = None
+        self._progress_timer = None
 
     def _show_next(self) -> None:
         if not self._queue:
@@ -160,7 +164,10 @@ class OverlayManager(QObject):
                 self._cover,
                 self._image,
                 self._progress,
+                self._progress_time,
+                self._close_button,
                 self._timer,
+                self._progress_timer,
             )
         ):
             return False
@@ -170,7 +177,8 @@ class OverlayManager(QObject):
         self._title.setText(safe_title)
         self._label.setText(safe_message)
         self._label.setVisible(bool(request["message"]))
-        self._icon.setText(request["icon"] or _PRESET_ICONS[request["preset"]])
+        self._icon.setText(request["icon"])
+        self._icon.setVisible(bool(request["icon"]))
         pixmap = self._decode_qr(request.get("qr", "")) or self._decode_image(
             request.get("image", "")
         )
@@ -206,22 +214,23 @@ class OverlayManager(QObject):
             self._cover.setVisible(False)
             self._image.clear()
             self._image.setVisible(False)
-        progress = request.get("progress")
+        self._progress_started_at = 0.0
+        progress = self._current_progress(request)
         self._progress.setVisible(progress is not None)
         if progress is not None:
             self._progress.setValue(progress)
+        self._update_progress_time(request)
 
         accent = _PRESET_COLORS[request["preset"]]
         accent_color = QColor(accent)
         icon_background = (
-            f"rgba({accent_color.red()}, {accent_color.green()}, "
-            f"{accent_color.blue()}, 36)"
+            f"rgba({accent_color.red()}, {accent_color.green()}, {accent_color.blue()}, 36)"
         )
         opacity = request["opacity"]
         self._window.setStyleSheet(
             "QFrame#windowsOverlay { background: transparent; border: none; } "
-            "QFrame#overlayCard { background-color: rgba(13, 16, 18, 247); "
-            f"border: 1px solid {accent}; border-radius: 16px; }} "
+            "QFrame#overlayCard { background-color: rgba(12, 15, 18, 232); "
+            "border: 1px solid rgba(214, 225, 229, 42); border-radius: 17px; } "
             "QLabel { background: transparent; } "
             "QLabel#overlayTitle { color: #f5f8f7; font-size: 15px; "
             "font-weight: 700; } "
@@ -229,14 +238,23 @@ class OverlayManager(QObject):
             "QLabel#overlayCover { background-color: #171d20; border: 1px solid #334044; "
             "border-radius: 12px; padding: 3px; } "
             f"QLabel#overlayIcon {{ color: {accent}; background-color: {icon_background}; "
-            f"border: 1px solid {accent}; border-radius: 18px; font-size: 18px; "
+            f"border: 1px solid {accent}; border-radius: 18px; font-size: 17px; "
             "font-weight: 700; } "
+            "QToolButton#overlayClose { color: #9da9ad; background: transparent; border: none; "
+            "border-radius: 12px; font-size: 17px; font-weight: 600; } "
+            "QToolButton#overlayClose:hover { color: #ffffff; background: rgba(255,255,255,24); } "
             "QProgressBar#overlayProgress { background: #273034; border: none; "
             "border-radius: 3px; } "
             f"QProgressBar#overlayProgress::chunk {{ background: {accent}; "
-            "border-radius: 3px; }"
+            "border-radius: 3px; } "
+            "QLabel#overlayProgressTime { color: #93a0a5; font-size: 11px; }"
         )
         self._window.setWindowOpacity(opacity)
+        self._close_button.setVisible(request["pinned"])
+        self._window.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            not request["pinned"],
+        )
         self._card.setFixedWidth(card_width)
         self._window.setFixedWidth(card_width + 20)
         self._window.ensurePolished()
@@ -244,6 +262,11 @@ class OverlayManager(QObject):
         self._position(request["monitor"], request["corner"])
         self._window.show()
         self._window.raise_()
+        self._progress_started_at = time.monotonic()
+        if request["media_playing"] and request["media_duration"] > 0:
+            self._progress_timer.start(500)
+        else:
+            self._progress_timer.stop()
         if request["pinned"]:
             self._timer.stop()
         else:
@@ -272,7 +295,7 @@ class OverlayManager(QObject):
         width: int,
         height: int,
         corner: str,
-        margin: int = 4,
+        margin: int = 0,
     ) -> tuple[int, int]:
         """Position the transparent shadow window; the visible card adds 8 px."""
         x = area.left() + margin
@@ -300,7 +323,7 @@ class OverlayManager(QObject):
         window.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         outer = QHBoxLayout(window)
-        outer.setContentsMargins(8, 8, 8, 12)
+        outer.setContentsMargins(4, 4, 4, 8)
 
         card = QFrame()
         card.setObjectName("overlayCard")
@@ -327,7 +350,7 @@ class OverlayManager(QObject):
         text = QVBoxLayout()
         text.setSpacing(8)
         top = QHBoxLayout()
-        top.setSpacing(12)
+        top.setSpacing(10)
         icon = QLabel()
         icon.setObjectName("overlayIcon")
         icon.setFixedSize(36, 36)
@@ -337,6 +360,14 @@ class OverlayManager(QObject):
         title.setWordWrap(True)
         top.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
         top.addWidget(title, 1, Qt.AlignmentFlag.AlignVCenter)
+        close_button = QToolButton()
+        close_button.setObjectName("overlayClose")
+        close_button.setText("×")
+        close_button.setToolTip("Zamknij")
+        close_button.setFixedSize(26, 26)
+        close_button.setVisible(False)
+        close_button.clicked.connect(lambda: self.hide(show_next=True))
+        top.addWidget(close_button, 0, Qt.AlignmentFlag.AlignTop)
         label = QLabel()
         label.setObjectName("overlayMessage")
         label.setWordWrap(True)
@@ -354,12 +385,22 @@ class OverlayManager(QObject):
         body.addLayout(text, 1)
         content.addLayout(body)
         content.addWidget(image)
-        content.addWidget(progress)
+        progress_row = QHBoxLayout()
+        progress_row.setSpacing(10)
+        progress_time = QLabel()
+        progress_time.setObjectName("overlayProgressTime")
+        progress_time.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        progress_time.setVisible(False)
+        progress_row.addWidget(progress, 1)
+        progress_row.addWidget(progress_time)
+        content.addLayout(progress_row)
         card_layout.addLayout(content, 1)
         outer.addWidget(card)
         timer = QTimer(window)
         timer.setSingleShot(True)
         timer.timeout.connect(lambda: self.hide(show_next=True))
+        progress_timer = QTimer(window)
+        progress_timer.timeout.connect(self._refresh_live_progress)
         self._window = window
         self._card = card
         self._icon = icon
@@ -368,7 +409,10 @@ class OverlayManager(QObject):
         self._cover = cover
         self._image = image
         self._progress = progress
+        self._progress_time = progress_time
+        self._close_button = close_button
         self._timer = timer
+        self._progress_timer = progress_timer
 
     def _validated_request(
         self, title: str, message: str, options: dict[str, Any]
@@ -403,13 +447,24 @@ class OverlayManager(QObject):
         except (TypeError, ValueError):
             duration = self.duration_seconds
         try:
-            opacity = max(0.35, min(1.0, float(options.get("opacity", 0.92))))
+            opacity = max(0.35, min(1.0, float(options.get("opacity", 0.88))))
         except (TypeError, ValueError):
-            opacity = 0.92
+            opacity = 0.88
         try:
             monitor = max(0, min(15, int(options.get("monitor", 0))))
         except (TypeError, ValueError):
             monitor = 0
+        try:
+            media_position = max(0.0, float(options.get("media_position", 0.0)))
+        except (TypeError, ValueError):
+            media_position = 0.0
+        try:
+            media_duration = max(0.0, float(options.get("media_duration", 0.0)))
+        except (TypeError, ValueError):
+            media_duration = 0.0
+        if media_duration:
+            media_position = min(media_position, media_duration)
+            progress = round(media_position / media_duration * 100)
         return {
             "action": action,
             "id": message_id,
@@ -427,7 +482,51 @@ class OverlayManager(QObject):
             "opacity": opacity,
             "preset": preset,
             "monitor": monitor,
+            "media_position": media_position,
+            "media_duration": media_duration,
+            "media_playing": bool(options.get("media_playing", False)),
         }
+
+    def _current_progress(self, request: dict[str, Any]) -> int | None:
+        duration = float(request.get("media_duration", 0.0))
+        if duration <= 0:
+            return request.get("progress")
+        position = float(request.get("media_position", 0.0))
+        if request.get("media_playing") and self._progress_started_at:
+            position += max(0.0, time.monotonic() - self._progress_started_at)
+        return max(0, min(100, round(min(position, duration) / duration * 100)))
+
+    @staticmethod
+    def _clock(seconds: float) -> str:
+        value = max(0, round(seconds))
+        hours, remainder = divmod(value, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
+
+    def _update_progress_time(self, request: dict[str, Any]) -> None:
+        if self._progress_time is None:
+            return
+        duration = float(request.get("media_duration", 0.0))
+        if duration <= 0:
+            self._progress_time.clear()
+            self._progress_time.setVisible(False)
+            return
+        position = float(request.get("media_position", 0.0))
+        if request.get("media_playing") and self._progress_started_at:
+            position += max(0.0, time.monotonic() - self._progress_started_at)
+        position = min(position, duration)
+        self._progress_time.setText(f"{self._clock(position)} / {self._clock(duration)}")
+        self._progress_time.setVisible(True)
+
+    def _refresh_live_progress(self) -> None:
+        if self._current is None or self._progress is None:
+            return
+        progress = self._current_progress(self._current)
+        if progress is not None:
+            self._progress.setValue(progress)
+        self._update_progress_time(self._current)
+        if progress is not None and progress >= 100 and self._progress_timer is not None:
+            self._progress_timer.stop()
 
     @staticmethod
     def _decode_image(value: str) -> QPixmap | None:

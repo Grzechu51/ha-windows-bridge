@@ -102,6 +102,16 @@ def system_metric_topic(config: AppConfig, metric: str) -> str:
     return f"{config.mqtt.base_topic}/system/{metric}/state"
 
 
+def disk_volume_metric(mountpoint: str, measurement: str) -> str:
+    volume = slugify(mountpoint, "volume")
+    return f"disk_{volume}_{measurement}"
+
+
+def disk_volume_name(mountpoint: str) -> str:
+    value = mountpoint.strip().rstrip("\\/") or mountpoint.strip()
+    return value or "Volume"
+
+
 def power_action_topic(config: AppConfig, action: str) -> str:
     return f"{config.mqtt.base_topic}/system/power/{action}/set"
 
@@ -119,12 +129,21 @@ def app_session_count_topic(config: AppConfig, app: AudioAppConfig) -> str:
     return f"{config.mqtt.base_topic}/audio/{app.slug}/sessions/state"
 
 
+def total_audio_session_count_topic(config: AppConfig) -> str:
+    return f"{config.mqtt.base_topic}/audio/sessions/state"
+
+
 def tracked_device_topic(config: AppConfig, slug: str) -> str:
     return f"{config.mqtt.base_topic}/device/{slug}/connected/state"
 
 
 def overlay_notification_topic(config: AppConfig) -> str:
     return f"{config.mqtt.base_topic}/overlay/show/set"
+
+
+def overlay_monitor_topics(config: AppConfig) -> tuple[str, str]:
+    root = f"{config.mqtt.base_topic}/overlay/monitor"
+    return f"{root}/set", f"{root}/state"
 
 
 def audio_profile_topics(config: AppConfig) -> tuple[str, str]:
@@ -164,6 +183,7 @@ def discovery_messages(
     config: AppConfig,
     audio_outputs: list[str] | None = None,
     hardware_metrics: set[str] | None = None,
+    overlay_monitors: list[str] | None = None,
 ) -> list[DiscoveryMessage]:
     prefix = config.mqtt.discovery_prefix
     object_root = slugify(config.device_id)
@@ -322,7 +342,7 @@ def discovery_messages(
                 {
                     "name": f"{app.display_name} Audio Sessions",
                     "state_topic": app_session_count_topic(config, app),
-                    "icon": "mdi:account-multiple-sound",
+                    "icon": "mdi:waveform",
                     "state_class": "measurement",
                     "entity_category": "diagnostic",
                 }
@@ -367,6 +387,24 @@ def discovery_messages(
                     close_payload,
                 )
             )
+
+    if config.audio_enhancements_enabled and config.publish_audio_sessions:
+        sessions_payload = _base_entity(config, f"{object_root}_audio_sessions")
+        sessions_payload.update(
+            {
+                "name": "Windows Audio Sessions",
+                "state_topic": total_audio_session_count_topic(config),
+                "icon": "mdi:waveform",
+                "state_class": "measurement",
+                "entity_category": "diagnostic",
+            }
+        )
+        messages.append(
+            DiscoveryMessage(
+                f"{prefix}/sensor/{object_root}/audio_sessions/config",
+                sessions_payload,
+            )
+        )
 
     if config.control_active_app:
         command_topic, state = active_volume_topics(config)
@@ -496,9 +534,7 @@ def discovery_messages(
     if config.publish_system_stats or config.publish_cpu_stats:
         system_entities = []
         if config.publish_system_stats or config.publish_cpu_stats:
-            system_entities.append(
-                ("cpu", "CPU Usage", "%", "mdi:cpu-64-bit", "measurement")
-            )
+            system_entities.append(("cpu", "CPU Usage", "%", "mdi:cpu-64-bit", "measurement"))
         if config.publish_system_stats:
             system_entities.extend(
                 (
@@ -644,12 +680,39 @@ def discovery_messages(
             )
 
     if config.publish_disk_stats:
+        for mountpoint in config.disk_mounts:
+            name = disk_volume_name(mountpoint)
+            for measurement, label, unit, icon in (
+                ("used", "Used", "%", "mdi:harddisk"),
+                ("free", "Free", "GiB", "mdi:harddisk-plus"),
+            ):
+                metric = disk_volume_metric(mountpoint, measurement)
+                if hardware_metrics is not None and metric not in hardware_metrics:
+                    continue
+                payload = _base_entity(config, f"{object_root}_{metric}")
+                payload.update(
+                    {
+                        "name": f"Disk {name} {label}",
+                        "state_topic": system_metric_topic(config, metric),
+                        "unit_of_measurement": unit,
+                        "state_class": "measurement",
+                        "icon": icon,
+                        "entity_category": "diagnostic",
+                    }
+                )
+                messages.append(
+                    DiscoveryMessage(f"{prefix}/sensor/{object_root}/{metric}/config", payload)
+                )
         disk_entities = (
-            ("disk_used", "Disk Used", "%", "mdi:harddisk", "measurement"),
-            ("disk_free", "Disk Free", "GiB", "mdi:harddisk-plus", "measurement"),
-            ("disk_read", "Disk Read", "MiB/s", "mdi:download", "measurement"),
-            ("disk_write", "Disk Write", "MiB/s", "mdi:upload", "measurement"),
-            ("disk_temperature", "Disk Temperature", "°C", "mdi:thermometer", "measurement"),
+            ("disk_read", "All Disks Read", "MiB/s", "mdi:download", "measurement"),
+            ("disk_write", "All Disks Write", "MiB/s", "mdi:upload", "measurement"),
+            (
+                "disk_temperature",
+                "Physical Disks Temperature",
+                "°C",
+                "mdi:thermometer",
+                "measurement",
+            ),
         )
         for metric, name, unit, icon, state_class in disk_entities:
             if hardware_metrics is not None and metric not in hardware_metrics:
@@ -672,7 +735,7 @@ def discovery_messages(
             payload = _base_entity(config, f"{object_root}_disk_health")
             payload.update(
                 {
-                    "name": "Disk Health",
+                    "name": "Physical Disks Health",
                     "state_topic": system_metric_topic(config, "disk_health"),
                     "icon": "mdi:harddisk-check",
                     "entity_category": "diagnostic",
@@ -865,6 +928,25 @@ def discovery_messages(
                 payload,
             )
         )
+        monitors = overlay_monitors or ["1: Monitor"]
+        monitor_command, monitor_state = overlay_monitor_topics(config)
+        monitor_payload = _base_entity(config, f"{object_root}_overlay_monitor")
+        monitor_payload.update(
+            {
+                "name": "Overlay Monitor",
+                "command_topic": monitor_command,
+                "state_topic": monitor_state,
+                "options": monitors[:16],
+                "icon": "mdi:monitor-multiple",
+                "entity_category": "config",
+            }
+        )
+        messages.append(
+            DiscoveryMessage(
+                f"{prefix}/select/{object_root}/overlay_monitor/config",
+                monitor_payload,
+            )
+        )
     return messages
 
 
@@ -917,7 +999,35 @@ def all_possible_discovery_messages(config: AppConfig) -> list[DiscoveryMessage]
         app.allow_remote_close = True
         if not app.executable_path:
             app.executable_path = "__discovery_cleanup__.exe"
-    return discovery_messages(expanded)
+    messages = discovery_messages(expanded)
+
+    # Releases through 1.2.x exposed one aggregate disk_used/disk_free pair.
+    # Keep those definitions in the cleanup catalogue so retained MQTT
+    # Discovery entries disappear after upgrading to per-volume entities.
+    prefix = expanded.mqtt.discovery_prefix
+    object_root = slugify(expanded.device_id)
+    for metric, name, unit, icon in (
+        ("disk_used", "Disk Used", "%", "mdi:harddisk"),
+        ("disk_free", "Disk Free", "GiB", "mdi:harddisk-plus"),
+    ):
+        payload = _base_entity(expanded, f"{object_root}_{metric}")
+        payload.update(
+            {
+                "name": name,
+                "state_topic": system_metric_topic(expanded, metric),
+                "unit_of_measurement": unit,
+                "state_class": "measurement",
+                "icon": icon,
+                "entity_category": "diagnostic",
+            }
+        )
+        messages.append(
+            DiscoveryMessage(
+                f"{prefix}/sensor/{object_root}/{metric}/config",
+                payload,
+            )
+        )
+    return messages
 
 
 def all_possible_discovery_topics(config: AppConfig) -> set[str]:

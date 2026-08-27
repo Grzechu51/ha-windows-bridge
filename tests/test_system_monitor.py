@@ -100,9 +100,7 @@ def test_nvidia_metrics_are_parsed(monkeypatch) -> None:
     monkeypatch.setattr(monitor, "_hardware_identity", lambda: ("Intel", "NVIDIA"))
     monkeypatch.setattr(
         "ha_windows_bridge.system_monitor.subprocess.run",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            stdout="97, 71, 238.5, 6800, 8192, 2100, 1450\n"
-        ),
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="97, 71, 238.5, 6800, 8192, 2100, 1450\n"),
     )
 
     metrics = monitor._gpu_metrics()
@@ -195,11 +193,7 @@ def test_active_power_plan_decodes_windows_oem_output(monkeypatch, tmp_path) -> 
         # An English GitHub runner uses a different OEM code page than Polish Windows.
         label = "High performance"
         encoded_label = label.encode("oem")
-    output = (
-        b"Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  ("
-        + encoded_label
-        + b")"
-    )
+    output = b"Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  (" + encoded_label + b")"
     monkeypatch.setattr(
         "ha_windows_bridge.system_monitor.subprocess.run",
         lambda *_args, **_kwargs: SimpleNamespace(stdout=output),
@@ -217,6 +211,41 @@ def test_zero_physical_disk_health_status_means_healthy(monkeypatch) -> None:
     monkeypatch.setattr(win32com.client, "GetObject", lambda _path: storage)
 
     assert WindowsSystemMonitor._physical_disk_health() == ("Healthy", 42.0)
+
+
+def test_disk_volumes_can_be_selected_individually(monkeypatch) -> None:
+    gib = 1_073_741_824
+    partitions = [
+        SimpleNamespace(mountpoint="C:\\", device="C:\\", fstype="NTFS"),
+        SimpleNamespace(mountpoint="D:\\", device="D:\\", fstype="NTFS"),
+    ]
+    usage = {
+        "C:\\": SimpleNamespace(total=500 * gib, used=300 * gib, free=200 * gib, percent=60),
+        "D:\\": SimpleNamespace(total=100 * gib, used=50 * gib, free=50 * gib, percent=50),
+    }
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.psutil.disk_partitions",
+        lambda all=False: partitions,
+    )
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.psutil.disk_usage", lambda mount: usage[mount]
+    )
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.psutil.disk_io_counters",
+        lambda: SimpleNamespace(read_bytes=0, write_bytes=0),
+    )
+    monkeypatch.setattr(
+        WindowsSystemMonitor, "_physical_disk_health", staticmethod(lambda: ("", None))
+    )
+
+    monitor = WindowsSystemMonitor()
+    volumes = monitor.list_disk_volumes()
+    metrics = monitor.disk_metrics(["D:\\"])
+
+    assert [item.mountpoint for item in volumes] == ["C:\\", "D:\\"]
+    assert volumes[0].used_percent == 60
+    assert metrics.used_percent == 50
+    assert metrics.free_gb == 50
 
 
 def test_pnp_presence_uses_windows_present_property(monkeypatch) -> None:

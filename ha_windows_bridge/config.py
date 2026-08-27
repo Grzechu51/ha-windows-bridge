@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 APP_NAME = "HA Windows Bridge"
-CONFIG_SCHEMA_VERSION = 8
+CONFIG_SCHEMA_VERSION = 9
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_SECRET_BYTES = 64 * 1024
@@ -100,6 +100,7 @@ class AudioProfileConfig:
     output_device: str = ""
     app_volumes: dict[str, int] = field(default_factory=dict)
     trigger_process: str = ""
+    trigger_processes: list[str] = field(default_factory=list)
     enabled: bool = True
 
     def __post_init__(self) -> None:
@@ -108,6 +109,19 @@ class AudioProfileConfig:
         self.master_volume = max(0, min(100, int(self.master_volume)))
         self.output_device = self.output_device.strip()
         self.trigger_process = self.trigger_process.strip()
+        normalized_triggers: list[str] = []
+        seen_triggers: set[str] = set()
+        for process in ([self.trigger_process] if self.trigger_process else []) + list(
+            self.trigger_processes
+        ):
+            process = process.strip()
+            key = process.casefold()
+            if not process or key in seen_triggers:
+                continue
+            seen_triggers.add(key)
+            normalized_triggers.append(process)
+        self.trigger_processes = normalized_triggers
+        self.trigger_process = self.trigger_processes[0] if self.trigger_processes else ""
         self.app_volumes = {
             str(process).strip(): max(0, min(100, int(volume)))
             for process, volume in self.app_volumes.items()
@@ -124,6 +138,11 @@ class AudioProfileConfig:
             output_device=str(data.get("output_device", "")),
             app_volumes=dict(volumes) if isinstance(volumes, dict) else {},
             trigger_process=str(data.get("trigger_process", "")),
+            trigger_processes=[
+                str(process)
+                for process in data.get("trigger_processes", [])
+                if str(process).strip()
+            ],
             enabled=bool(data.get("enabled", True)),
         )
 
@@ -207,6 +226,7 @@ class AppConfig:
     auto_check_updates: bool = True
     publish_windows_health: bool = False
     publish_disk_stats: bool = False
+    disk_mounts: list[str] = field(default_factory=list)
     audio_enhancements_enabled: bool = False
     control_channel_balance: bool = False
     automatic_ducking: bool = False
@@ -221,6 +241,7 @@ class AppConfig:
     overlay_enabled: bool = False
     overlay_allow_fullscreen: bool = False
     overlay_duration: int = 8
+    overlay_monitor: int = 0
 
     def __post_init__(self) -> None:
         self.language = self.language.strip().lower()
@@ -237,6 +258,14 @@ class AppConfig:
         self.mqtt.discovery_prefix = (
             self.mqtt.discovery_prefix.strip().strip("/") or "homeassistant"
         )
+        self.disk_mounts = list(
+            dict.fromkeys(
+                os.path.normpath(str(mount).strip())
+                for mount in self.disk_mounts
+                if str(mount).strip()
+            )
+        )
+        self.overlay_monitor = max(0, min(15, int(self.overlay_monitor)))
 
     @classmethod
     def from_dict(cls, data: dict) -> AppConfig:
@@ -290,9 +319,7 @@ class AppConfig:
             publish_cpu_stats=(
                 False
                 if reset_legacy_optional_features
-                else bool(
-                    data.get("publish_cpu_stats", data.get("publish_hardware_stats", False))
-                )
+                else bool(data.get("publish_cpu_stats", data.get("publish_hardware_stats", False)))
             ),
             publish_gpu_stats=(
                 False
@@ -318,6 +345,7 @@ class AppConfig:
             auto_check_updates=bool(data.get("auto_check_updates", True)),
             publish_windows_health=bool(data.get("publish_windows_health", False)),
             publish_disk_stats=bool(data.get("publish_disk_stats", False)),
+            disk_mounts=[str(mount) for mount in data.get("disk_mounts", []) if str(mount).strip()],
             audio_enhancements_enabled=bool(data.get("audio_enhancements_enabled", False)),
             control_channel_balance=bool(data.get("control_channel_balance", False)),
             automatic_ducking=bool(data.get("automatic_ducking", False)),
@@ -340,6 +368,7 @@ class AppConfig:
             overlay_enabled=bool(data.get("overlay_enabled", False)),
             overlay_allow_fullscreen=bool(data.get("overlay_allow_fullscreen", False)),
             overlay_duration=int(data.get("overlay_duration", 8)),
+            overlay_monitor=int(data.get("overlay_monitor", 0)),
         )
 
     def to_dict(self) -> dict:
@@ -379,6 +408,8 @@ class AppConfig:
             errors.append("Czułość mikrofonu musi mieścić się w zakresie 1–100%.")
         if not 2 <= self.overlay_duration <= 60:
             errors.append("Czas nakładki musi mieścić się w zakresie 2–60 sekund.")
+        if self.publish_disk_stats and not self.disk_mounts:
+            errors.append("Wybierz co najmniej jeden dysk do monitorowania.")
 
         enabled = [app for app in self.apps if app.enabled]
         slugs = [app.slug for app in enabled]

@@ -517,9 +517,7 @@ def test_power_action_and_notification_commands_are_dispatched() -> None:
         audio=FakeAudio(),
         power_actions=power,
         notification_callback=lambda title, message: notifications.append((title, message)),
-        overlay_callback=lambda title, message, data: overlays.append(
-            (title, message, data)
-        ),
+        overlay_callback=lambda title, message, data: overlays.append((title, message, data)),
     )
     bridge.client = FakeClient()
     bridge._connected.set()
@@ -570,7 +568,11 @@ def test_power_action_and_notification_commands_are_dispatched() -> None:
         ("HA", "Front door is open"),
     ]
     assert overlays == [
-        ("Update", "50%", {"action": "show", "id": "job", "progress": 50}),
+        (
+            "Update",
+            "50%",
+            {"action": "show", "id": "job", "progress": 50, "monitor": 0},
+        ),
         ("Home Assistant", "", {"action": "clear"}),
     ]
 

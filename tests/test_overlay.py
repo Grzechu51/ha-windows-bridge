@@ -38,7 +38,8 @@ def test_overlay_request_is_bounded_and_uses_safe_defaults() -> None:
     assert request["icon"] == "12345678"
 
     default_request = manager._validated_request("Title", "Message", {})  # noqa: SLF001
-    assert default_request["opacity"] == 0.92
+    assert default_request["opacity"] == 0.88
+    assert default_request["icon"] == ""
 
 
 def test_overlay_queue_can_update_remove_and_clear_messages() -> None:
@@ -47,9 +48,7 @@ def test_overlay_queue_can_update_remove_and_clear_messages() -> None:
 
     assert manager.handle_message("One", "First", {"id": "one", "pinned": True})
     assert manager.handle_message("Two", "Second", {"id": "two"})
-    assert manager.handle_message(
-        "Two updated", "Changed", {"action": "update", "id": "two"}
-    )
+    assert manager.handle_message("Two updated", "Changed", {"action": "update", "id": "two"})
     assert len(manager._queue) == 1  # noqa: SLF001
     assert manager._queue[0]["title"] == "Two updated"  # noqa: SLF001
 
@@ -66,30 +65,26 @@ def test_overlay_update_keeps_unspecified_options_and_requires_existing_id() -> 
     assert manager.handle_message(
         "Download", "Starting", {"id": "job", "pinned": True, "preset": "info"}
     )
-    assert manager.handle_message(
-        "", "Halfway", {"action": "update", "id": "job", "progress": 50}
-    )
+    assert manager.handle_message("", "Halfway", {"action": "update", "id": "job", "progress": 50})
     assert manager._current is not None  # noqa: SLF001
     assert manager._current["title"] == "Download"  # noqa: SLF001
     assert manager._current["pinned"] is True  # noqa: SLF001
     assert manager._current["preset"] == "info"  # noqa: SLF001
     assert manager._current["progress"] == 50  # noqa: SLF001
-    assert not manager.handle_message(
-        "Missing", "No item", {"action": "update", "id": "unknown"}
-    )
+    assert not manager.handle_message("Missing", "No item", {"action": "update", "id": "unknown"})
 
 
 def test_overlay_is_placed_close_to_each_screen_corner() -> None:
     area = QRect(100, 50, 1000, 600)
 
-    assert OverlayManager._position_for_geometry(area, 420, 120, "top_left") == (104, 54)
-    assert OverlayManager._position_for_geometry(area, 420, 120, "top_right") == (676, 54)
-    assert OverlayManager._position_for_geometry(area, 420, 120, "bottom_left") == (104, 526)
+    assert OverlayManager._position_for_geometry(area, 420, 120, "top_left") == (100, 50)
+    assert OverlayManager._position_for_geometry(area, 420, 120, "top_right") == (680, 50)
+    assert OverlayManager._position_for_geometry(area, 420, 120, "bottom_left") == (100, 530)
     assert OverlayManager._position_for_geometry(area, 420, 120, "bottom_right") == (
-        676,
-        526,
+        680,
+        530,
     )
     assert OverlayManager._position_for_geometry(area, 420, 120, "top_center") == (
         390,
-        54,
+        50,
     )
