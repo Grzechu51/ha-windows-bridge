@@ -188,16 +188,24 @@ def test_active_power_plan_decodes_windows_oem_output(monkeypatch, tmp_path) -> 
     executable.parent.mkdir(parents=True)
     executable.write_bytes(b"MZ")
     monkeypatch.setenv("SYSTEMROOT", str(system_root))
+    label = "Wysoka wydajność"
+    try:
+        encoded_label = label.encode("oem")
+    except UnicodeEncodeError:
+        # An English GitHub runner uses a different OEM code page than Polish Windows.
+        label = "High performance"
+        encoded_label = label.encode("oem")
     output = (
-        b"Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  "
-        b"(Wysoka wydajno\x98\x86)"
+        b"Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  ("
+        + encoded_label
+        + b")"
     )
     monkeypatch.setattr(
         "ha_windows_bridge.system_monitor.subprocess.run",
         lambda *_args, **_kwargs: SimpleNamespace(stdout=output),
     )
 
-    assert WindowsSystemMonitor._active_power_plan() == "Wysoka wydajność"
+    assert WindowsSystemMonitor._active_power_plan() == label
 
 
 def test_zero_physical_disk_health_status_means_healthy(monkeypatch) -> None:
