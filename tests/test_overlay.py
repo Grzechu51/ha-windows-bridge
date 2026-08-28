@@ -28,40 +28,52 @@ def test_overlay_request_is_bounded_and_uses_safe_defaults() -> None:
     assert len(request["message"]) == 2048
     assert request["id"].startswith("message-")
     assert request["corner"] == "top_right"
-    assert request["size"] == "medium"
+    assert request["size_mode"] == "auto"
+    assert request["width"] == 400
+    assert request["height"] == 160
     assert request["layout"] == "default"
     assert request["preset"] == "default"
     assert request["progress"] == 100
     assert request["duration"] == 60
-    assert request["opacity"] == 0.65
+    assert request["opacity"] == 0.01
     assert request["monitor"] == 15
-    assert request["icon"] == "12345678"
+    assert request["icon"] == "1234567890"
 
     default_request = manager._validated_request("Title", "Message", {})  # noqa: SLF001
     assert default_request["opacity"] == 0.94
     assert default_request["icon"] == ""
-    assert default_request["show_close_button"] is True
+    assert default_request["show_close_button"] is False
     assert default_request["close_on_click"] is False
 
 
-def test_overlay_uses_configured_defaults() -> None:
-    manager = OverlayManager(
-        default_monitor=2,
-        default_corner="bottom_left",
-        default_size="large",
-        default_opacity=0.8,
-        default_show_close_button=False,
-        default_close_on_click=True,
-    )
+def test_overlay_uses_action_defaults_and_configured_monitor() -> None:
+    manager = OverlayManager(default_monitor=2)
 
     request = manager._validated_request("Title", "Message", {})  # noqa: SLF001
 
     assert request["monitor"] == 2
-    assert request["corner"] == "bottom_left"
-    assert request["size"] == "large"
-    assert request["opacity"] == 0.8
+    assert request["corner"] == "top_right"
+    assert request["size_mode"] == "auto"
+    assert request["opacity"] == 0.94
     assert request["show_close_button"] is False
-    assert request["close_on_click"] is True
+    assert request["close_on_click"] is False
+
+
+def test_overlay_manual_size_and_legacy_size_are_supported() -> None:
+    manager = OverlayManager()
+
+    manual = manager._validated_request(  # noqa: SLF001
+        "Title", "Message", {"size_mode": "manual", "width": 730, "height": 410}
+    )
+    legacy = manager._validated_request("Title", "Message", {"size": "large"})  # noqa: SLF001
+
+    assert (manual["size_mode"], manual["width"], manual["height"]) == (
+        "manual",
+        730,
+        410,
+    )
+    assert legacy["size_mode"] == "manual"
+    assert legacy["width"] == 520
 
 
 def test_overlay_queue_can_update_remove_and_clear_messages() -> None:

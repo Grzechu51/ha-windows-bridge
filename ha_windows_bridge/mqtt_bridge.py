@@ -190,10 +190,6 @@ class MqttBridge:
         self._monitor_thread.start()
 
     def stop(self) -> None:
-        if self._ducked_volumes:
-            for process_name, volume in self._ducked_volumes.items():
-                self.audio.set_volume(process_name, volume)
-            self._ducked_volumes.clear()
         client = self.client
         if client is None:
             return
@@ -836,6 +832,7 @@ class MqttBridge:
             metrics = self.system.system_metrics(
                 include_cpu=self.config.publish_cpu_stats,
                 include_gpu=self.config.publish_gpu_stats,
+                include_ram=False,
             )
             candidates: dict[str, float | str | None] = {}
             if self.config.publish_cpu_stats:
@@ -864,7 +861,7 @@ class MqttBridge:
             )
         if self.config.publish_windows_health:
             health = self.system.windows_health()
-            hardware_metrics.update(("pending_restart", "windows_update"))
+            hardware_metrics.update(("pending_restart", "windows_update", "uptime"))
             if health.battery_percent is not None:
                 hardware_metrics.update(("battery", "ac_power"))
             if health.power_plan:
@@ -964,7 +961,7 @@ class MqttBridge:
                     next_context = now + 1.0
                     self._monitor_context()
                 if now >= next_system and (
-                    self.config.publish_system_stats
+                    self.config.publish_ram_stats
                     or self.config.publish_cpu_stats
                     or self.config.publish_gpu_stats
                 ):
@@ -1165,15 +1162,30 @@ class MqttBridge:
         metrics = self.system.system_metrics(
             include_cpu=self.config.publish_cpu_stats,
             include_gpu=self.config.publish_gpu_stats,
+            include_ram=self.config.publish_ram_stats,
         )
         values: dict[str, float | int | str | None] = {}
-        if self.config.publish_system_stats or self.config.publish_cpu_stats:
+        if self.config.publish_cpu_stats:
             values["cpu"] = round(metrics.cpu_percent, 1)
-        if self.config.publish_system_stats:
+        if self.config.publish_ram_stats:
             values.update(
                 {
                     "ram": round(metrics.ram_percent, 1),
-                    "uptime": metrics.uptime_seconds,
+                    "ram_used": (
+                        round(metrics.ram_used_gb, 2)
+                        if metrics.ram_used_gb is not None
+                        else None
+                    ),
+                    "ram_available": (
+                        round(metrics.ram_available_gb, 2)
+                        if metrics.ram_available_gb is not None
+                        else None
+                    ),
+                    "ram_total": (
+                        round(metrics.ram_total_gb, 2)
+                        if metrics.ram_total_gb is not None
+                        else None
+                    ),
                 }
             )
         if self.config.publish_gpu_stats:
@@ -1203,6 +1215,9 @@ class MqttBridge:
 
     def _monitor_windows_health(self) -> None:
         health = self.system.windows_health()
+        self._publish_text_state(
+            system_metric_topic(self.config, "uptime"), health.uptime_seconds
+        )
         if health.battery_percent is not None:
             self._publish_text_state(
                 system_metric_topic(self.config, "battery"), round(health.battery_percent, 1)

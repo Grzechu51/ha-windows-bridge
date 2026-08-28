@@ -68,12 +68,14 @@ def test_gui_defaults_and_minimum_size() -> None:
         assert window.auto_connect_row.switch.isChecked()
         assert window.pages.widget(window.FEATURES_PAGE).isAncestorOf(window.publish_activity_row)
         assert window.pages.widget(window.FEATURES_PAGE).isAncestorOf(window.media_player_row)
+        assert window.feature_tabs.widget(2).isAncestorOf(window.media_player_row)
+        assert not window.feature_tabs.widget(0).isAncestorOf(window.media_player_row)
         assert not window.control_active_row.switch.isChecked()
         assert window.publish_initial_row.switch.isChecked()
         assert not window.publish_activity_row.switch.isChecked()
         assert not window.publish_idle_row.switch.isChecked()
         assert not window.publish_session_lock_row.switch.isChecked()
-        assert not window.publish_system_stats_row.switch.isChecked()
+        assert not window.publish_ram_stats_row.switch.isChecked()
         assert not window.publish_cpu_stats_row.switch.isChecked()
         assert not window.publish_gpu_stats_row.switch.isChecked()
         assert not window.media_player_row.switch.isChecked()
@@ -322,8 +324,9 @@ def test_overlay_defaults_and_device_filters_are_user_facing() -> None:
     window = make_window(config)
     try:
         saved = window._config_from_form()
-        assert saved.overlay_show_close_button is True
-        assert saved.overlay_corner == "top_right"
+        assert saved.overlay_monitor == 0
+        assert not hasattr(saved, "overlay_show_close_button")
+        assert not hasattr(window, "overlay_opacity")
         assert window.device_filter_combo.count() == 3
         assert window.device_filter_combo.itemText(1) == "Aktywne"
 
@@ -345,10 +348,29 @@ def test_overlay_defaults_and_device_filters_are_user_facing() -> None:
         assert manager._title.text() == "Don't encode this"
         assert manager._label.text() == "Plain <text>"
         assert "rgba(242, 184, 75, 165)" in manager._window.styleSheet()
+        assert manager._icon.isHidden()
         assert manager._close_button.isHidden()
         QTest.mouseClick(manager._label, Qt.MouseButton.LeftButton)
         QApplication.processEvents()
         assert manager._current is None
+    finally:
+        close_window(window)
+
+
+def test_overlay_renders_a_selected_home_assistant_mdi_icon() -> None:
+    window = make_window(AppConfig(overlay_enabled=True))
+    try:
+        manager = window.overlay_manager
+        assert manager is not None
+        manager.allow_fullscreen = True
+        assert manager.handle_message(
+            "Music", "Playing", {"id": "mdi", "icon": "mdi:music", "pinned": True}
+        )
+        QApplication.processEvents()
+
+        assert not manager._icon.isHidden()
+        assert manager._icon.pixmap() is not None
+        assert not manager._icon.pixmap().isNull()
     finally:
         close_window(window)
 

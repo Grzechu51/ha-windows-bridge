@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import math
 import os
 import subprocess  # nosec B404
@@ -15,7 +16,7 @@ import win32con
 import win32gui
 import win32process
 
-# Security note: subprocess is used only for a fixed nvidia-smi path with shell=False.
+# Security note: subprocess is used only for fixed, trusted executable paths with shell=False.
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,9 @@ class SystemMetrics:
     gpu_fan_rpm: float | None = None
     cpu_vendor: str = ""
     gpu_vendor: str = ""
+    ram_used_gb: float | None = None
+    ram_available_gb: float | None = None
+    ram_total_gb: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +57,7 @@ class WindowsHealth:
     pending_restart: bool = False
     power_plan: str = ""
     windows_update_status: str = "Checking"
+    uptime_seconds: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +186,7 @@ class WindowsSystemMonitor:
         self,
         include_cpu: bool = True,
         include_gpu: bool = True,
+        include_ram: bool = True,
     ) -> SystemMetrics:
         gpu: dict[str, float] = {}
         if include_gpu:
@@ -198,11 +204,15 @@ class WindowsSystemMonitor:
                     if key.startswith("gpu_") and value is not None
                 }
             )
-        cpu_vendor, gpu_vendor = self._hardware_identity()
+        cpu_vendor, gpu_vendor = (
+            self._hardware_identity() if include_cpu or include_gpu else ("", "")
+        )
         frequency = psutil.cpu_freq() if include_cpu else None
+        memory = psutil.virtual_memory() if include_ram else None
+        gibibyte = 1024**3
         return SystemMetrics(
-            cpu_percent=float(psutil.cpu_percent(interval=None)),
-            ram_percent=float(psutil.virtual_memory().percent),
+            cpu_percent=float(psutil.cpu_percent(interval=None)) if include_cpu else 0.0,
+            ram_percent=float(memory.percent) if memory is not None else 0.0,
             uptime_seconds=max(0, int(time.time() - psutil.boot_time())),
             gpu_percent=gpu.get("gpu_percent"),
             gpu_temperature=gpu.get("gpu_temperature"),
@@ -216,6 +226,11 @@ class WindowsSystemMonitor:
             gpu_fan_rpm=gpu.get("gpu_fan_rpm"),
             cpu_vendor=cpu_vendor if include_cpu else "",
             gpu_vendor=gpu_vendor if include_gpu and gpu_vendor in {"NVIDIA", "AMD"} else "",
+            ram_used_gb=float(memory.used) / gibibyte if memory is not None else None,
+            ram_available_gb=(
+                float(memory.available) / gibibyte if memory is not None else None
+            ),
+            ram_total_gb=float(memory.total) / gibibyte if memory is not None else None,
         )
 
     def windows_health(self) -> WindowsHealth:
@@ -252,6 +267,7 @@ class WindowsSystemMonitor:
             pending_restart=pending_restart,
             power_plan=self._active_power_plan(),
             windows_update_status=update_status,
+            uptime_seconds=max(0, int(time.time() - psutil.boot_time())),
         )
 
     def _schedule_windows_update_check(self) -> None:
@@ -396,28 +412,14 @@ class WindowsSystemMonitor:
                 pass
         return health, temperature
 
-    @staticmethod
-    def list_pnp_devices() -> list[PnpDevice]:
-        """Return user-facing removable/peripheral devices through read-only WMI."""
-        allowed = {
-            "AudioEndpoint",
-            "Battery",
-            "Bluetooth",
-            "Camera",
-            "DiskDrive",
-            "HIDClass",
-            "Image",
-            "Keyboard",
-            "Media",
-            "Monitor",
-            "Mouse",
-            "Printer",
-            "Sensor",
-            "SmartCardReader",
-            "USB",
-            "USBDevice",
-            "WPD",
-        }
+    @classmethod
+    def list_pnp_devices(cls, include_disconnected: bool = False) -> list[PnpDevice]:
+        """Return physical/user-facing peripherals, optionally including device history."""
+        if include_disconnected:
+            historical = cls._pnp_devices_from_powershell()
+            if historical:
+                return cls._sorted_pnp_devices(historical)
+
         devices: dict[str, PnpDevice] = {}
         try:
             import win32com.client
@@ -431,7 +433,7 @@ class WindowsSystemMonitor:
                 instance_id = str(getattr(item, "PNPDeviceID", "") or "").strip()
                 name = str(getattr(item, "Name", "") or "").strip()
                 category = str(getattr(item, "PNPClass", "") or "Device").strip()
-                if not instance_id or not name or category not in allowed:
+                if not cls._is_user_facing_pnp_device(instance_id, name, category):
                     continue
                 raw_present = getattr(item, "Present", None)
                 present = (
@@ -442,9 +444,183 @@ class WindowsSystemMonitor:
                 devices[instance_id.casefold()] = PnpDevice(instance_id, name, category, present)
         except Exception:
             return []
+        return cls._sorted_pnp_devices(devices)
+
+    @classmethod
+    def _pnp_devices_from_powershell(cls) -> dict[str, PnpDevice]:
+        """Read connected and remembered PnP devices from Windows' signed cmdlet."""
+        system_root = Path(os.environ.get("SYSTEMROOT", "C:/Windows"))
+        powershell = system_root / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        if not powershell.is_file():
+            return {}
+        script = (
+            "$OutputEncoding=[Console]::OutputEncoding="
+            "[System.Text.UTF8Encoding]::new($false);"
+            "@(Get-PnpDevice -ErrorAction Stop | Select-Object "
+            "@{n='category';e={$_.Class}},@{n='name';e={$_.FriendlyName}},"
+            "@{n='instance_id';e={$_.InstanceId}},@{n='present';e={[bool]$_.Present}})"
+            "|ConvertTo-Json -Compress"
+        )
+        try:
+            completed = subprocess.run(  # nosec B603
+                [
+                    str(powershell),
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    script,
+                ],
+                capture_output=True,
+                timeout=20,
+                check=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            raw_output = completed.stdout or b""
+            text = (
+                raw_output.decode("utf-8-sig", errors="strict")
+                if isinstance(raw_output, bytes)
+                else str(raw_output)
+            )
+            payload = json.loads(text)
+        except (OSError, subprocess.SubprocessError, UnicodeError, json.JSONDecodeError):
+            return {}
+
+        rows = payload if isinstance(payload, list) else [payload]
+        devices: dict[str, PnpDevice] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            instance_id = str(row.get("instance_id", "") or "").strip()
+            name = str(row.get("name", "") or "").strip()
+            category = str(row.get("category", "") or "Device").strip()
+            if not cls._is_user_facing_pnp_device(instance_id, name, category):
+                continue
+            devices[instance_id.casefold()] = PnpDevice(
+                instance_id,
+                name,
+                category,
+                bool(row.get("present", False)),
+            )
+        return devices
+
+    @staticmethod
+    def _is_user_facing_pnp_device(instance_id: str, name: str, category: str) -> bool:
+        if not instance_id or not name:
+            return False
+        category_key = category.casefold()
+        allowed = {
+            "audioendpoint",
+            "battery",
+            "bluetooth",
+            "camera",
+            "diskdrive",
+            "hidclass",
+            "image",
+            "monitor",
+            "ports",
+            "printer",
+            "printqueue",
+            "sensor",
+            "smartcardreader",
+            "usb",
+            "usbdevice",
+            "wpd",
+        }
+        if category_key not in allowed:
+            return False
+
+        identity = instance_id.casefold()
+        label = name.casefold().strip()
+        if category_key == "bluetooth" and not identity.startswith(
+            ("bthenum\\dev_", "bthle\\dev_", "usb\\vid_")
+        ):
+            return False
+
+        if category_key == "hidclass":
+            generic_hid_names = {
+                "hid-compliant game controller",
+                "hid-compliant consumer control device",
+                "hid-compliant device",
+                "hid-compliant system controller",
+                "hid-compliant vendor-defined device",
+                "usb input device",
+                "kontroler gier zgodny z hid",
+                "kontroler systemu zgodny z hid",
+                "urządzenie hid zgodne z interfejsem xinput",
+                "urządzenie hid wirtualnej struktury hid (vhf)",
+                "urządzenie sterujące użytkownika zgodne z hid",
+                "urządzenie zgodne z hid",
+                "urządzenie wejściowe usb",
+                "urządzenie zgodne ze standardem hid",
+                "urządzenie zdefiniowane przez dostawcę zgodne z hid",
+            }
+            recognizable_hid_terms = (
+                "flight stick",
+                "gamepad",
+                "joystick",
+                "racing wheel",
+                "steering wheel",
+                "kierownica",
+            )
+            if label in generic_hid_names or not any(
+                fragment in label for fragment in recognizable_hid_terms
+            ):
+                return False
+
+        if category_key == "printqueue":
+            virtual_printer_names = (
+                "adobe pdf",
+                "fax",
+                "microsoft print",
+                "onenote",
+                "root print queue",
+                "solid edge ps printer",
+                "xps document writer",
+                "główna kolejka wydruku",
+            )
+            if any(fragment in label for fragment in virtual_printer_names):
+                return False
+
+        infrastructure_names = (
+            "generic usb hub",
+            "host controller",
+            "root hub",
+            "usb composite device",
+            "główny koncentrator usb",
+            "kontroler hosta",
+            "rodzajowy koncentrator usb",
+            "urządzenie kompozytowe usb",
+        )
+        return not (
+            category_key in {"usb", "usbdevice"}
+            and (
+                identity.startswith(("pci\\", "root\\", "usb\\root_hub"))
+                or any(fragment in label for fragment in infrastructure_names)
+            )
+        )
+
+    @staticmethod
+    def _sorted_pnp_devices(devices: dict[str, PnpDevice]) -> list[PnpDevice]:
+        visible: dict[tuple[str, str], PnpDevice] = {}
+        collapse_by_name = {"audioendpoint", "bluetooth", "monitor"}
+        for device in devices.values():
+            category = device.category.casefold()
+            key = (
+                (category, device.display_name.casefold())
+                if category in collapse_by_name
+                else (category, device.instance_id.casefold())
+            )
+            previous = visible.get(key)
+            if previous is None or (device.present and not previous.present):
+                visible[key] = device
         return sorted(
-            devices.values(),
-            key=lambda item: (item.category.casefold(), item.display_name.casefold()),
+            visible.values(),
+            key=lambda item: (
+                not item.present,
+                item.category.casefold(),
+                item.display_name.casefold(),
+            ),
         )[:300]
 
     @classmethod

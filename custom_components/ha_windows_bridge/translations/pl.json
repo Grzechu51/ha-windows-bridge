@@ -23,15 +23,14 @@
   "selector": {
     "overlay_style": {
       "options": {
-        "default": "Neutralny",
         "success": "Sukces",
         "warning": "Ostrzeżenie",
         "error": "Błąd",
         "info": "Informacja"
       }
     },
-    "overlay_size": {
-      "options": {"small": "Mały", "medium": "Średni", "large": "Duży"}
+    "overlay_size_mode": {
+      "options": {"auto": "Automatyczny", "manual": "Ręczny"}
     },
     "overlay_corner": {
       "options": {
@@ -46,13 +45,13 @@
   "services": {
     "show_overlay": {
       "name": "Pokaż nakładkę Windows",
-      "description": "Wyświetla zweryfikowaną, pasywną wiadomość na wybranym komputerze z Windows.",
+      "description": "Wyświetla wiadomość lub bieżące multimedia na wybranym komputerze.",
       "fields": {
         "title": {"name": "Tytuł"},
-        "message": {"name": "Wiadomość", "description": "Opcjonalna po włączeniu bieżących multimediów Windows."},
-        "media": {"name": "Użyj bieżących multimediów Windows", "description": "Automatycznie używa aktywnej sesji z okładką, tytułem i rzeczywistym postępem odtwarzania."},
-        "notification_id": {"name": "ID wiadomości", "description": "Stałe ID używane później do aktualizacji lub usunięcia wiadomości."},
-        "icon": {"name": "Ikona", "description": "Do ośmiu znaków, na przykład emoji."},
+        "message": {"name": "Wiadomość", "description": "Nie jest wymagana dla bieżących multimediów Windows."},
+        "media": {"name": "Użyj bieżących multimediów Windows", "description": "Pokazuje okładkę, tytuł i aktualny postęp odtwarzania."},
+        "notification_id": {"name": "ID wiadomości", "description": "Użyj tego samego ID do aktualizacji lub usunięcia wiadomości."},
+        "icon": {"name": "Ikona", "description": "Wybierz ikonę MDI z Home Assistant."},
         "image": {"name": "Osadzony obraz", "description": "URI danych PNG, JPEG, GIF lub WebP do 512 KiB."},
         "qr": {"name": "Treść kodu QR"},
         "progress": {"name": "Postęp", "description": "Stała wartość od 0 do 100."},
@@ -60,21 +59,24 @@
         "progress_attribute": {"name": "Atrybut postępu"},
         "progress_min": {"name": "Minimum źródła", "description": "Wartość przeliczana na 0%."},
         "progress_max": {"name": "Maksimum źródła", "description": "Wartość przeliczana na 100%."},
-        "duration": {"name": "Czas", "description": "Stały czas wyświetlania w sekundach."},
+        "duration": {"name": "Czas", "description": "Czas wyświetlania w sekundach."},
         "duration_entity": {"name": "Źródło czasu", "description": "Odczytuje czas wyświetlania ze stanu albo wskazanego atrybutu encji."},
         "duration_attribute": {"name": "Atrybut czasu"},
-        "pinned": {"name": "Pozostaw do ręcznego zamknięcia", "description": "Wyłącza automatyczne zamknięcie po ustawionym czasie."},
-        "show_close_button": {"name": "Pokaż przycisk zamknięcia", "description": "Nadpisuje domyślne ustawienie aplikacji dla tej wiadomości."},
-        "close_on_click": {"name": "Zamknij po kliknięciu karty", "description": "Nadpisuje domyślne ustawienie aplikacji dla tej wiadomości."},
+        "pinned": {"name": "Pozostaw do ręcznego zamknięcia"},
+        "show_close_button": {"name": "Pokaż przycisk zamknięcia"},
+        "close_on_click": {"name": "Zamknij po kliknięciu karty"},
         "corner": {"name": "Narożnik"},
         "monitor": {"name": "Nadpisanie monitora", "description": "Opcjonalny numer liczony od zera. Zwykle użyj encji Monitor nakładki na urządzeniu."},
-        "size": {"name": "Rozmiar"},
-        "opacity": {"name": "Krycie tła", "description": "Tekst, ikony i okładka pozostają w pełni widoczne."},
-        "preset": {"name": "Styl", "description": "Zmienia ramkę, odcień tła i kolor postępu."}
+        "size_mode": {"name": "Skalowanie", "description": "Tryb automatyczny dopasowuje kartę do treści."},
+        "width": {"name": "Ręczna szerokość"},
+        "height": {"name": "Ręczna wysokość"},
+        "opacity": {"name": "Krycie tła", "description": "0 oznacza całkowicie przezroczyste tło."},
+        "preset": {"name": "Styl", "description": "Pozostaw wyłączone, aby użyć stylu neutralnego."}
       },
       "sections": {
         "content": {"name": "Treść"},
         "appearance": {"name": "Wygląd"},
+        "sizing": {"name": "Rozmiar"},
         "progress_options": {"name": "Postęp"},
         "timing": {"name": "Czas i zamykanie"},
         "placement": {"name": "Położenie"}
@@ -90,6 +92,10 @@
         "media": {"name": "Odśwież z bieżących multimediów Windows"},
         "preset": {"name": "Styl"},
         "icon": {"name": "Ikona"},
+        "opacity": {"name": "Krycie tła"},
+        "size_mode": {"name": "Skalowanie"},
+        "width": {"name": "Ręczna szerokość"},
+        "height": {"name": "Ręczna wysokość"},
         "progress": {"name": "Postęp"},
         "progress_entity": {"name": "Źródło postępu"},
         "progress_attribute": {"name": "Atrybut postępu"},

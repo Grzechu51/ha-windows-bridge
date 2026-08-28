@@ -1,0 +1,67 @@
+warning: in the working copy of 'CHANGELOG.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'HAWindowsBridge.spec', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'HOME_ASSISTANT_INTEGRATION.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'RELEASING.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'assets/version_info.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'constraints.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'custom_components/ha_windows_bridge/__init__.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'custom_components/ha_windows_bridge/manifest.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'custom_components/ha_windows_bridge/services.yaml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'custom_components/ha_windows_bridge/strings.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'custom_components/ha_windows_bridge/translations/en.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'custom_components/ha_windows_bridge/translations/pl.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/__init__.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/config.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/discovery.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/gui.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/i18n.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/mqtt_bridge.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/overlay.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/system_monitor.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/theme.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/ui_components.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'installer/HAWindowsBridge.iss', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'pyproject.toml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_config.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_discovery.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_gui.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_media.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_mqtt_bridge.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_overlay.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_system_monitor.py', LF will be replaced by CRLF the next time Git touches it
+ CHANGELOG.md                                       |  15 [32m+[m[31m-[m
+ HAWindowsBridge.spec                               |   4 [32m+[m[31m-[m
+ HOME_ASSISTANT_INTEGRATION.md                      |  95 [32m++[m[31m---[m
+ README.md                                          | 400 [32m+++++[m[31m----------------[m
+ RELEASING.md                                       |  22 [32m+[m[31m-[m
+ assets/version_info.txt                            |   8 [32m+[m[31m-[m
+ constraints.txt                                    |   2 [32m+[m
+ custom_components/ha_windows_bridge/__init__.py    |  45 [32m++[m[31m-[m
+ custom_components/ha_windows_bridge/manifest.json  |   2 [32m+[m[31m-[m
+ custom_components/ha_windows_bridge/services.yaml  |  99 [32m+++[m[31m--[m
+ custom_components/ha_windows_bridge/strings.json   |  36 [32m+[m[31m-[m
+ .../ha_windows_bridge/translations/en.json         |  36 [32m+[m[31m-[m
+ .../ha_windows_bridge/translations/pl.json         |  36 [32m+[m[31m-[m
+ ha_windows_bridge/__init__.py                      |   2 [32m+[m[31m-[m
+ ha_windows_bridge/app.py                           |   3 [32m+[m[31m-[m
+ ha_windows_bridge/config.py                        |  42 [32m+[m[31m--[m
+ ha_windows_bridge/discovery.py                     |  35 [32m+[m[31m-[m
+ ha_windows_bridge/gui.py                           | 157 [32m++[m[31m------[m
+ ha_windows_bridge/i18n.py                          |  12 [32m+[m
+ ha_windows_bridge/mqtt_bridge.py                   |  33 [32m+[m[31m-[m
+ ha_windows_bridge/overlay.py                       | 117 [32m++++[m[31m--[m
+ ha_windows_bridge/system_monitor.py                | 234 [32m++++++++++[m[31m--[m
+ ha_windows_bridge/theme.py                         |  18 [32m+[m
+ ha_windows_bridge/ui_components.py                 |   3 [32m+[m[31m-[m
+ installer/HAWindowsBridge.iss                      |   2 [32m+[m[31m-[m
+ pyproject.toml                                     |   3 [32m+[m[31m-[m
+ tests/test_config.py                               |  32 [32m+[m[31m-[m
+ tests/test_discovery.py                            |  10 [32m+[m[31m-[m
+ tests/test_gui.py                                  |  28 [32m+[m[31m-[m
+ tests/test_media.py                                |  28 [32m+[m[31m-[m
+ tests/test_mqtt_bridge.py                          |  30 [32m+[m[31m-[m
+ tests/test_overlay.py                              |  46 [32m++[m[31m-[m
+ tests/test_system_monitor.py                       |  87 [32m++++[m[31m-[m
+ 33 files changed, 962 insertions(+), 760 deletions(-)

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
-from ha_windows_bridge.system_monitor import WindowsSystemMonitor
+from ha_windows_bridge.system_monitor import PnpDevice, WindowsSystemMonitor
 
 
 def test_context_snapshot_has_safe_windows_values() -> None:
@@ -148,6 +149,29 @@ def test_gpu_metrics_are_cached_for_ten_seconds(monkeypatch) -> None:
     assert len(calls) == 2
 
 
+def test_ram_metrics_include_used_available_and_total_memory(monkeypatch) -> None:
+    monitor = WindowsSystemMonitor()
+    gibibyte = 1024**3
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.psutil.virtual_memory",
+        lambda: SimpleNamespace(
+            percent=37.5,
+            used=12 * gibibyte,
+            available=20 * gibibyte,
+            total=32 * gibibyte,
+        ),
+    )
+
+    metrics = monitor.system_metrics(
+        include_cpu=False, include_gpu=False, include_ram=True
+    )
+
+    assert metrics.ram_percent == 37.5
+    assert metrics.ram_used_gb == 12
+    assert metrics.ram_available_gb == 20
+    assert metrics.ram_total_gb == 32
+
+
 def test_windows_update_status_is_derived_without_blocking(monkeypatch) -> None:
     monitor = WindowsSystemMonitor()
     monkeypatch.setattr(monitor, "_schedule_windows_update_check", lambda: None)
@@ -157,6 +181,8 @@ def test_windows_update_status_is_derived_without_blocking(monkeypatch) -> None:
         "ha_windows_bridge.system_monitor.psutil.sensors_battery",
         lambda: None,
     )
+    monkeypatch.setattr("ha_windows_bridge.system_monitor.time.time", lambda: 1000)
+    monkeypatch.setattr("ha_windows_bridge.system_monitor.psutil.boot_time", lambda: 400)
     monitor._pending_updates = 3
 
     health = monitor.windows_health()
@@ -164,6 +190,7 @@ def test_windows_update_status_is_derived_without_blocking(monkeypatch) -> None:
     assert health.windows_update_status == "3 update(s) available"
     assert health.pending_restart is False
     assert health.power_plan == "Balanced"
+    assert health.uptime_seconds == 600
 
 
 def test_active_power_plan_handles_missing_command_output(monkeypatch, tmp_path) -> None:
@@ -269,3 +296,61 @@ def test_pnp_presence_uses_windows_present_property(monkeypatch) -> None:
     assert len(devices) == 1
     assert devices[0].present is False
     assert WindowsSystemMonitor.present_device_ids() == set()
+
+
+def test_pnp_history_filters_internal_nodes_and_preserves_presence(monkeypatch, tmp_path) -> None:
+    system_root = tmp_path / "Windows"
+    executable = system_root / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"MZ")
+    monkeypatch.setenv("SYSTEMROOT", str(system_root))
+    payload = [
+        {
+            "category": "HIDClass",
+            "name": "Urządzenie wejściowe USB",
+            "instance_id": r"USB\VID_0001&PID_0001\HID",
+            "present": True,
+        },
+        {
+            "category": "USB",
+            "name": "Główny koncentrator USB",
+            "instance_id": r"USB\ROOT_HUB30\1",
+            "present": True,
+        },
+        {
+            "category": "Bluetooth",
+            "name": "Xbox Wireless Controller",
+            "instance_id": r"BTHENUM\DEV_1234\1",
+            "present": True,
+        },
+        {
+            "category": "Ports",
+            "name": "USB-SERIAL CH340 (COM3)",
+            "instance_id": r"USB\VID_1A86&PID_7523\1",
+            "present": False,
+        },
+    ]
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout=json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        ),
+    )
+
+    devices = WindowsSystemMonitor.list_pnp_devices(include_disconnected=True)
+
+    assert [(item.display_name, item.present) for item in devices] == [
+        ("Xbox Wireless Controller", True),
+        ("USB-SERIAL CH340 (COM3)", False),
+    ]
+
+
+def test_pnp_list_collapses_duplicate_bluetooth_names() -> None:
+    devices = {
+        "first": PnpDevice("first", "ExpressLRS Joystick", "Bluetooth", False),
+        "second": PnpDevice("second", "ExpressLRS Joystick", "Bluetooth", True),
+    }
+
+    visible = WindowsSystemMonitor._sorted_pnp_devices(devices)
+
+    assert visible == [PnpDevice("second", "ExpressLRS Joystick", "Bluetooth", True)]

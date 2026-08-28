@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 APP_NAME = "HA Windows Bridge"
-CONFIG_SCHEMA_VERSION = 10
+CONFIG_SCHEMA_VERSION = 11
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_SECRET_BYTES = 64 * 1024
@@ -215,7 +215,7 @@ class AppConfig:
     publish_idle: bool = False
     idle_threshold: int = 300
     publish_session_lock: bool = False
-    publish_system_stats: bool = False
+    publish_ram_stats: bool = False
     publish_cpu_stats: bool = False
     publish_gpu_stats: bool = False
     control_microphone: bool = False
@@ -237,13 +237,7 @@ class AppConfig:
     tracked_devices: list[TrackedDeviceConfig] = field(default_factory=list)
     overlay_enabled: bool = False
     overlay_allow_fullscreen: bool = False
-    overlay_duration: int = 8
     overlay_monitor: int = 0
-    overlay_corner: str = "top_right"
-    overlay_size: str = "medium"
-    overlay_opacity: float = 0.94
-    overlay_show_close_button: bool = True
-    overlay_close_on_click: bool = False
 
     def __post_init__(self) -> None:
         self.language = self.language.strip().lower()
@@ -268,24 +262,14 @@ class AppConfig:
             )
         )
         self.overlay_monitor = max(0, min(15, int(self.overlay_monitor)))
-        self.overlay_corner = self.overlay_corner.strip().lower()
-        if self.overlay_corner not in {
-            "top_left",
-            "top_right",
-            "bottom_left",
-            "bottom_right",
-            "top_center",
-        }:
-            self.overlay_corner = "top_right"
-        self.overlay_size = self.overlay_size.strip().lower()
-        if self.overlay_size not in {"small", "medium", "large"}:
-            self.overlay_size = "medium"
-        self.overlay_opacity = max(0.65, min(1.0, float(self.overlay_opacity)))
 
     @classmethod
     def from_dict(cls, data: dict) -> AppConfig:
         stored_schema = int(data.get("schema_version", 1))
         reset_legacy_optional_features = stored_schema < 2
+        legacy_system_stats = not reset_legacy_optional_features and bool(
+            data.get("publish_system_stats", False)
+        )
         raw_apps = data.get("apps")
         apps = _remove_unused_legacy_defaults(
             [AudioAppConfig.from_dict(item) for item in raw_apps]
@@ -326,10 +310,10 @@ class AppConfig:
                 if reset_legacy_optional_features
                 else bool(data.get("publish_session_lock", False))
             ),
-            publish_system_stats=(
+            publish_ram_stats=(
                 False
                 if reset_legacy_optional_features
-                else bool(data.get("publish_system_stats", False))
+                else bool(data.get("publish_ram_stats", legacy_system_stats))
             ),
             publish_cpu_stats=(
                 False
@@ -358,7 +342,9 @@ class AppConfig:
             allow_power_actions=bool(data.get("allow_power_actions", False)),
             enable_windows_notifications=bool(data.get("enable_windows_notifications", False)),
             auto_check_updates=bool(data.get("auto_check_updates", True)),
-            publish_windows_health=bool(data.get("publish_windows_health", False)),
+            publish_windows_health=bool(
+                data.get("publish_windows_health", False) or legacy_system_stats
+            ),
             publish_disk_stats=bool(data.get("publish_disk_stats", False)),
             disk_mounts=[str(mount) for mount in data.get("disk_mounts", []) if str(mount).strip()],
             audio_enhancements_enabled=bool(data.get("audio_enhancements_enabled", False)),
@@ -379,13 +365,7 @@ class AppConfig:
             ],
             overlay_enabled=bool(data.get("overlay_enabled", False)),
             overlay_allow_fullscreen=bool(data.get("overlay_allow_fullscreen", False)),
-            overlay_duration=int(data.get("overlay_duration", 8)),
             overlay_monitor=int(data.get("overlay_monitor", 0)),
-            overlay_corner=str(data.get("overlay_corner", "top_right")),
-            overlay_size=str(data.get("overlay_size", "medium")),
-            overlay_opacity=float(data.get("overlay_opacity", 0.94)),
-            overlay_show_close_button=bool(data.get("overlay_show_close_button", True)),
-            overlay_close_on_click=bool(data.get("overlay_close_on_click", False)),
         )
 
     def to_dict(self) -> dict:
@@ -419,8 +399,6 @@ class AppConfig:
             errors.append("Interwał odczytu musi mieścić się w zakresie 0,2–10 sekund.")
         if not 30 <= self.idle_threshold <= 7200:
             errors.append("Próg bezczynności musi mieścić się w zakresie 30–7200 sekund.")
-        if not 2 <= self.overlay_duration <= 60:
-            errors.append("Czas nakładki musi mieścić się w zakresie 2–60 sekund.")
         if self.publish_disk_stats and not self.disk_mounts:
             errors.append("Wybierz co najmniej jeden dysk do monitorowania.")
 

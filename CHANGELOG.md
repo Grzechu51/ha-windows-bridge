@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.2
+
+- uproszczony formularz nakładki w Home Assistant: pojedyncze przełączniki, natywny
+  wybór ikon MDI, automatyczny lub ręczny rozmiar i krycie tła od 0 do 100%;
+- usunięty powielony styl neutralny oraz duplikaty ustawień nakładki z aplikacji Windows;
+- osobna telemetria RAM z pamięcią zajętą, dostępną i całkowitą; czas działania
+  przeniesiony do połączonego modułu stanu Windows;
+- wyraźnie przygaszone listy dysków i urządzeń po wyłączeniu modułu oraz poprawiona
+  ikona połączenia w jasnym motywie;
+- biblioteka ikon dołączona do gotowej aplikacji i skrócona dokumentacja użytkownika.
+
 ## 1.3.1
 
 - nowoczesna nakładka bez zastępczej ikony, z widocznymi stylami, poprawnym tekstem,
@@ -13,7 +24,9 @@
   programów;
 - łączny sensor sesji audio Windows oraz poprawione ikony sensorów sesji aplikacji;
 - wybór monitorowanych woluminów i osobne sensory zajętego oraz wolnego miejsca;
-- filtrowanie urządzeń Windows według stanu aktywne/nieaktywne;
+- filtrowanie urządzeń Windows według stanu aktywne/nieaktywne, z pominięciem
+  technicznych interfejsów HID, usług Bluetooth, koncentratorów i wirtualnych drukarek;
+- poprawiony zapis ustawień po usunięciu funkcji automatycznego ściszania;
 - poprawione uruchamianie w zasobniku wyłącznie przy autostarcie Windows;
 - zweryfikowane lokalne ikony integracji i udokumentowane ograniczenie ikony na liście
   HACS wynikające z błędu jego frontendu.

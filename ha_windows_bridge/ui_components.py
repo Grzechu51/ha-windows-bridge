@@ -893,9 +893,10 @@ class WifiStatusBadge(QWidget):
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        light = QApplication.instance().property("bridgeTheme") == "light"
         accent = QColor("#43ce89" if self._connected else "#68757a")
         painter.setPen(QPen(accent, 1.2))
-        painter.setBrush(QColor("#0d1214"))
+        painter.setBrush(QColor("#f7fbf9" if light else "#0d1214"))
         painter.drawEllipse(QRectF(1.5, 1.5, 59, 59))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         pen = QPen(accent, 2.35)

@@ -34,7 +34,8 @@ def sample_config() -> AppConfig:
         publish_activity=True,
         publish_idle=True,
         publish_session_lock=True,
-        publish_system_stats=True,
+        publish_ram_stats=True,
+        publish_cpu_stats=True,
         publish_gpu_stats=True,
         control_microphone=True,
         control_audio_output=True,
@@ -59,6 +60,8 @@ def test_discovery_creates_grouped_entities() -> None:
     assert "homeassistant/binary_sensor/gaming_pc_123/pc_active/config" in topics
     assert "homeassistant/binary_sensor/gaming_pc_123/windows_locked/config" in topics
     assert "homeassistant/sensor/gaming_pc_123/cpu/config" in topics
+    assert "homeassistant/sensor/gaming_pc_123/ram/config" in topics
+    assert "homeassistant/sensor/gaming_pc_123/ram_available/config" in topics
     assert "homeassistant/sensor/gaming_pc_123/gpu_temperature/config" in topics
     assert "homeassistant/number/gaming_pc_123/microphone_volume/config" in topics
     assert "homeassistant/switch/gaming_pc_123/microphone_mute/config" in topics
@@ -87,7 +90,8 @@ def test_optional_feature_entities_can_be_disabled() -> None:
     config.publish_activity = False
     config.publish_idle = False
     config.publish_session_lock = False
-    config.publish_system_stats = False
+    config.publish_ram_stats = False
+    config.publish_cpu_stats = False
     config.publish_gpu_stats = False
     config.control_microphone = False
     config.control_audio_output = False
@@ -161,6 +165,7 @@ def test_modular_system_audio_device_and_overlay_entities_are_capability_filtere
         "pending_restart",
         "power_plan",
         "windows_update",
+        "uptime",
         "disk_c_used",
         "disk_c_free",
         "disk_d_used",
@@ -180,6 +185,7 @@ def test_modular_system_audio_device_and_overlay_entities_are_capability_filtere
     assert "homeassistant/sensor/gaming_pc_123/disk_d_free/config" in topics
     assert "homeassistant/binary_sensor/gaming_pc_123/pending_restart/config" in topics
     assert "homeassistant/sensor/gaming_pc_123/windows_update/config" in topics
+    assert "homeassistant/sensor/gaming_pc_123/uptime/config" in topics
     assert "homeassistant/binary_sensor/gaming_pc_123/device_controller/config" in topics
     assert "homeassistant/notify/gaming_pc_123/windows_overlay/config" in topics
     assert "homeassistant/select/gaming_pc_123/overlay_monitor/config" in topics

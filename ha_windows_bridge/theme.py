@@ -23,6 +23,15 @@ QScrollArea#pageScroll > QWidget > QWidget {
 QTabWidget#featureTabs::pane, QTabBar::tab, QListWidget#devicesList {
     background: #08090a;
 }
+QListWidget#devicesList:disabled {
+    background: #040506;
+    color: #515b57;
+    border-color: #202528;
+}
+QListWidget#devicesList::item:disabled {
+    color: #515b57;
+    border-bottom-color: #161a1c;
+}
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
 QFrame#passwordBox, QPushButton#outlineButton, QPushButton#secondaryButton {
     background: #0c0e10;
@@ -131,6 +140,15 @@ QListWidget#devicesList::item {
 QListWidget#devicesList::item:selected {
     background: #d8eee3;
     color: #102019;
+}
+QListWidget#devicesList:disabled {
+    background: #e2e6e8;
+    color: #929d98;
+    border-color: #d0d6d9;
+}
+QListWidget#devicesList::item:disabled {
+    color: #929d98;
+    border-bottom-color: #d5dade;
 }
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
 QFrame#passwordBox {

@@ -38,8 +38,8 @@ PLATFORMS = [
 ]
 
 _OVERLAY_ID = vol.All(cv.string, vol.Length(min=1, max=64), vol.Match(r"^[A-Za-z0-9_.:-]+$"))
-_OVERLAY_OPTIONS = {
-    vol.Optional("icon"): vol.All(cv.string, vol.Length(max=8)),
+_OVERLAY_COMMON_OPTIONS = {
+    vol.Optional("icon"): vol.All(cv.string, vol.Length(max=128)),
     vol.Optional("image"): vol.All(cv.string, vol.Length(max=700 * 1024)),
     vol.Optional("qr"): vol.All(cv.string, vol.Length(max=512)),
     vol.Optional("progress"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
@@ -47,9 +47,16 @@ _OVERLAY_OPTIONS = {
     vol.Optional("progress_attribute"): vol.All(cv.string, vol.Length(max=128)),
     vol.Optional("progress_min"): vol.Coerce(float),
     vol.Optional("progress_max"): vol.Coerce(float),
-    vol.Optional("duration"): vol.All(vol.Coerce(int), vol.Range(min=2, max=60)),
     vol.Optional("duration_entity"): cv.entity_id,
     vol.Optional("duration_attribute"): vol.All(cv.string, vol.Length(max=128)),
+    vol.Optional("monitor"): vol.All(vol.Coerce(int), vol.Range(min=0, max=15)),
+    # Kept for existing YAML automations; the visual editor now uses size_mode.
+    vol.Optional("size"): vol.In({"small", "medium", "large"}),
+    vol.Optional("preset"): vol.In({"default", "success", "warning", "error", "info"}),
+}
+_OVERLAY_UPDATE_OPTIONS = {
+    **_OVERLAY_COMMON_OPTIONS,
+    vol.Optional("duration"): vol.All(vol.Coerce(int), vol.Range(min=2, max=60)),
     vol.Optional("pinned"): cv.boolean,
     vol.Optional("show_close_button"): cv.boolean,
     vol.Optional("close_on_click"): cv.boolean,
@@ -57,17 +64,37 @@ _OVERLAY_OPTIONS = {
     vol.Optional("corner"): vol.In(
         {"top_left", "top_right", "bottom_left", "bottom_right", "top_center"}
     ),
-    vol.Optional("monitor"): vol.All(vol.Coerce(int), vol.Range(min=0, max=15)),
-    vol.Optional("size"): vol.In({"small", "medium", "large"}),
-    vol.Optional("opacity"): vol.All(vol.Coerce(float), vol.Range(min=0.65, max=1.0)),
-    vol.Optional("preset"): vol.In({"default", "success", "warning", "error", "info"}),
+    vol.Optional("size_mode"): vol.In({"auto", "manual"}),
+    vol.Optional("width"): vol.All(vol.Coerce(int), vol.Range(min=240, max=1200)),
+    vol.Optional("height"): vol.All(vol.Coerce(int), vol.Range(min=90, max=900)),
+    vol.Optional("opacity"): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
 }
 _SHOW_OVERLAY_SCHEMA = cv.make_entity_service_schema(
     {
         vol.Optional("message"): vol.All(cv.string, vol.Length(max=2048)),
         vol.Optional("title"): vol.All(cv.string, vol.Length(max=128)),
         vol.Optional("notification_id"): _OVERLAY_ID,
-        **_OVERLAY_OPTIONS,
+        **_OVERLAY_COMMON_OPTIONS,
+    vol.Optional("media"): cv.boolean,
+        vol.Required("opacity", default=0.94): vol.All(
+            vol.Coerce(float), vol.Range(min=0.0, max=1.0)
+        ),
+        vol.Required("size_mode", default="auto"): vol.In({"auto", "manual"}),
+        vol.Required("width", default=400): vol.All(
+            vol.Coerce(int), vol.Range(min=240, max=1200)
+        ),
+        vol.Required("height", default=160): vol.All(
+            vol.Coerce(int), vol.Range(min=90, max=900)
+        ),
+        vol.Required("duration", default=8): vol.All(
+            vol.Coerce(int), vol.Range(min=2, max=60)
+        ),
+        vol.Optional("pinned"): cv.boolean,
+        vol.Optional("show_close_button"): cv.boolean,
+        vol.Optional("close_on_click"): cv.boolean,
+        vol.Required("corner", default="top_right"): vol.In(
+            {"top_left", "top_right", "bottom_left", "bottom_right", "top_center"}
+        ),
     }
 )
 _UPDATE_OVERLAY_SCHEMA = cv.make_entity_service_schema(
@@ -75,7 +102,7 @@ _UPDATE_OVERLAY_SCHEMA = cv.make_entity_service_schema(
         vol.Required("notification_id"): _OVERLAY_ID,
         vol.Optional("message"): vol.All(cv.string, vol.Length(max=2048)),
         vol.Optional("title"): vol.All(cv.string, vol.Length(max=128)),
-        **_OVERLAY_OPTIONS,
+        **_OVERLAY_UPDATE_OPTIONS,
     }
 )
 _REMOVE_OVERLAY_SCHEMA = cv.make_entity_service_schema(

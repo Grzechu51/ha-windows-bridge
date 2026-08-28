@@ -311,9 +311,35 @@ def test_home_assistant_integration_files_are_valid_json() -> None:
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["dependencies"] == ["mqtt"]
     assert manifest["mqtt"] == ["ha-windows-bridge/devices/+"]
-    assert manifest["version"] == "1.3.1"
+    assert manifest["version"] == "1.3.2"
     assert manifest["codeowners"] == ["@Grzechu51"]
     assert manifest["documentation"] == "https://github.com/Grzechu51/ha-windows-bridge"
     assert manifest["issue_tracker"].endswith("/Grzechu51/ha-windows-bridge/issues")
     for brand_file in ("icon.png", "dark_icon.png", "logo.png", "dark_logo.png"):
         assert (root / "brand" / brand_file).read_bytes().startswith(b"\x89PNG")
+
+
+def test_overlay_service_form_uses_single_booleans_and_native_icon_selector() -> None:
+    project_root = Path(__file__).parents[1]
+    root = project_root / "custom_components" / "ha_windows_bridge"
+    services = (root / "services.yaml").read_text(encoding="utf-8")
+    strings = json.loads((root / "strings.json").read_text(encoding="utf-8"))
+
+    assert "media:\n          selector:\n            constant:\n              value: true" in services
+    assert "pinned:\n          selector:\n            constant:\n              value: true" in services
+    assert (
+        "show_close_button:\n          selector:\n            constant:\n              value: true"
+        in services
+    )
+    assert "icon:\n          selector:\n            icon:" in services
+    assert "min: 0\n              max: 1" in services
+    assert set(strings["selector"]["overlay_style"]["options"]) == {
+        "success",
+        "warning",
+        "error",
+        "info",
+    }
+    assert set(strings["selector"]["overlay_size_mode"]["options"]) == {
+        "auto",
+        "manual",
+    }

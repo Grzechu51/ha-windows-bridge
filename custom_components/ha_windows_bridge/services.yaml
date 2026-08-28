@@ -18,9 +18,9 @@ show_overlay:
             text:
               multiline: true
         media:
-          default: false
           selector:
-            boolean:
+            constant:
+              value: true
     appearance:
       collapsed: true
       fields:
@@ -29,26 +29,19 @@ show_overlay:
             select:
               translation_key: overlay_style
               options:
-                - default
                 - success
                 - warning
                 - error
                 - info
         icon:
           selector:
-            text:
-        size:
-          selector:
-            select:
-              translation_key: overlay_size
-              options:
-                - small
-                - medium
-                - large
+            icon:
         opacity:
+          required: true
+          default: 0.94
           selector:
             number:
-              min: 0.65
+              min: 0
               max: 1
               step: 0.05
               mode: slider
@@ -59,6 +52,38 @@ show_overlay:
           selector:
             text:
               multiline: true
+    sizing:
+      collapsed: true
+      fields:
+        size_mode:
+          required: true
+          default: auto
+          selector:
+            select:
+              translation_key: overlay_size_mode
+              options:
+                - auto
+                - manual
+        width:
+          required: true
+          default: 400
+          selector:
+            number:
+              min: 240
+              max: 1200
+              step: 10
+              unit_of_measurement: px
+              mode: box
+        height:
+          required: true
+          default: 160
+          selector:
+            number:
+              min: 90
+              max: 900
+              step: 10
+              unit_of_measurement: px
+              mode: box
     progress_options:
       collapsed: true
       fields:
@@ -90,6 +115,8 @@ show_overlay:
       collapsed: true
       fields:
         duration:
+          required: true
+          default: 8
           selector:
             number:
               min: 2
@@ -106,19 +133,23 @@ show_overlay:
           selector:
             text:
         pinned:
-          default: false
           selector:
-            boolean:
+            constant:
+              value: true
         show_close_button:
           selector:
-            boolean:
+            constant:
+              value: true
         close_on_click:
           selector:
-            boolean:
+            constant:
+              value: true
     placement:
       collapsed: true
       fields:
         corner:
+          required: true
+          default: top_right
           selector:
             select:
               translation_key: overlay_corner
@@ -154,20 +185,48 @@ update_overlay:
           multiline: true
     media:
       selector:
-        boolean:
+        constant:
+          value: true
     preset:
       selector:
         select:
           translation_key: overlay_style
           options:
-            - default
             - success
             - warning
             - error
             - info
     icon:
       selector:
-        text:
+        icon:
+    opacity:
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.05
+          mode: slider
+    size_mode:
+      selector:
+        select:
+          translation_key: overlay_size_mode
+          options:
+            - auto
+            - manual
+    width:
+      selector:
+        number:
+          min: 240
+          max: 1200
+          step: 10
+          mode: box
+    height:
+      selector:
+        number:
+          min: 90
+          max: 900
+          step: 10
+          mode: box
     progress:
       selector:
         number:

@@ -56,6 +56,14 @@ def test_parse_volume_rejects_text() -> None:
         MqttBridge.parse_volume("loud")
 
 
+def test_stop_before_start_is_safe() -> None:
+    bridge = MqttBridge(AppConfig(mqtt=MqttConfig(host="broker")), audio=FakeAudio())
+
+    bridge.stop()
+
+    assert bridge.client is None
+
+
 @pytest.mark.parametrize("payload", ["nan", "inf", "-inf", "1e9999"])
 def test_parse_volume_rejects_non_finite_numbers(payload) -> None:
     with pytest.raises(ValueError):
@@ -139,8 +147,20 @@ class FakeSystem:
     def context_snapshot(self):
         return PcContext("Cyberpunk2077.exe", "Cyberpunk 2077", True, 12, False)
 
-    def system_metrics(self, include_cpu=True, include_gpu=True):
-        return SystemMetrics(18.5, 43.2, 3600, 97.0, 71.0, 238.0, 6800.0, 8192.0)
+    def system_metrics(self, include_cpu=True, include_gpu=True, include_ram=True):
+        return SystemMetrics(
+            18.5,
+            43.2,
+            3600,
+            97.0,
+            71.0,
+            238.0,
+            6800.0,
+            8192.0,
+            ram_used_gb=13.5,
+            ram_available_gb=18.5,
+            ram_total_gb=32.0,
+        )
 
 
 class FakeMedia:
@@ -300,7 +320,8 @@ def test_pc_context_and_system_metrics_are_published() -> None:
         publish_activity=True,
         publish_idle=True,
         publish_session_lock=True,
-        publish_system_stats=True,
+        publish_ram_stats=True,
+        publish_cpu_stats=True,
         publish_gpu_stats=True,
     )
     bridge = MqttBridge(config, audio=FakeAudio(), system_monitor=FakeSystem())
@@ -318,6 +339,9 @@ def test_pc_context_and_system_metrics_are_published() -> None:
     assert (pc_active_topic(config), "ON", 1, True) in published
     assert (session_locked_topic(config), "OFF", 1, True) in published
     assert (system_metric_topic(config, "cpu"), "18.5", 1, True) in published
+    assert (system_metric_topic(config, "ram"), "43.2", 1, True) in published
+    assert (system_metric_topic(config, "ram_used"), "13.5", 1, True) in published
+    assert (system_metric_topic(config, "ram_total"), "32.0", 1, True) in published
     assert (system_metric_topic(config, "gpu_temperature"), "71.0", 1, True) in published
 
 

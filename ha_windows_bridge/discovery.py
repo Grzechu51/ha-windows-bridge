@@ -531,35 +531,33 @@ def discovery_messages(
             )
         )
 
-    if config.publish_system_stats or config.publish_cpu_stats:
+    if config.publish_cpu_stats or config.publish_ram_stats:
         system_entities = []
-        if config.publish_system_stats or config.publish_cpu_stats:
-            system_entities.append(("cpu", "CPU Usage", "%", "mdi:cpu-64-bit", "measurement"))
-        if config.publish_system_stats:
+        if config.publish_cpu_stats:
+            system_entities.append(("cpu", "CPU Usage", "%", "mdi:cpu-64-bit"))
+        if config.publish_ram_stats:
             system_entities.extend(
                 (
-                    ("ram", "RAM Usage", "%", "mdi:memory", "measurement"),
-                    (
-                        "uptime",
-                        "System Uptime",
-                        "s",
-                        "mdi:clock-outline",
-                        "total_increasing",
-                    ),
+                    ("ram", "RAM Usage", "%", "mdi:memory"),
+                    ("ram_used", "RAM Used", "GiB", "mdi:memory"),
+                    ("ram_available", "RAM Available", "GiB", "mdi:memory-arrow-down"),
+                    ("ram_total", "RAM Total", "GiB", "mdi:memory"),
                 )
             )
-        for metric, name, unit, icon, state_class in system_entities:
+        for metric, name, unit, icon in system_entities:
             metric_payload = _base_entity(config, f"{object_root}_{metric}")
             metric_payload.update(
                 {
                     "name": name,
                     "state_topic": system_metric_topic(config, metric),
                     "unit_of_measurement": unit,
-                    "state_class": state_class,
+                    "state_class": "measurement",
                     "icon": icon,
                     "entity_category": "diagnostic",
                 }
             )
+            if unit == "GiB":
+                metric_payload["device_class"] = "data_size"
             messages.append(
                 DiscoveryMessage(
                     f"{prefix}/sensor/{object_root}/{metric}/config",
@@ -635,6 +633,13 @@ def discovery_messages(
             ("battery", "Battery", "%", "mdi:battery", "measurement"),
             ("power_plan", "Windows Power Plan", None, "mdi:power-settings", None),
             ("windows_update", "Windows Update", None, "mdi:update", None),
+            (
+                "uptime",
+                "System Uptime",
+                "s",
+                "mdi:clock-outline",
+                "total_increasing",
+            ),
         )
         for metric, name, unit, icon, state_class in health_entities:
             if hardware_metrics is not None and metric not in hardware_metrics:
@@ -966,7 +971,7 @@ def all_possible_discovery_messages(config: AppConfig) -> list[DiscoveryMessage]
     expanded.publish_activity = True
     expanded.publish_idle = True
     expanded.publish_session_lock = True
-    expanded.publish_system_stats = True
+    expanded.publish_ram_stats = True
     expanded.publish_cpu_stats = True
     expanded.publish_gpu_stats = True
     expanded.publish_windows_health = True

@@ -8,7 +8,8 @@ import time
 from collections import deque
 from typing import Any
 
-from PySide6.QtCore import QEvent, QObject, QRect, Qt, QTimer
+import qtawesome as qta
+from PySide6.QtCore import QEvent, QObject, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -43,24 +44,12 @@ class OverlayManager(QObject):
         allow_fullscreen: bool = False,
         *,
         default_monitor: int = 0,
-        default_corner: str = "top_right",
-        default_size: str = "medium",
-        default_opacity: float = 0.94,
-        default_show_close_button: bool = True,
-        default_close_on_click: bool = False,
         close_tooltip: str = "Close overlay",
     ):
         super().__init__()
         self.duration_seconds = max(2, min(60, int(duration_seconds)))
         self.allow_fullscreen = bool(allow_fullscreen)
         self.default_monitor = max(0, min(15, int(default_monitor)))
-        self.default_corner = default_corner if default_corner in _CORNERS else "top_right"
-        self.default_size = (
-            default_size if default_size in {"small", "medium", "large"} else "medium"
-        )
-        self.default_opacity = max(0.65, min(1.0, float(default_opacity)))
-        self.default_show_close_button = bool(default_show_close_button)
-        self.default_close_on_click = bool(default_close_on_click)
         self.close_tooltip = close_tooltip
         self._monitor = WindowsSystemMonitor()
         self._queue: deque[dict[str, Any]] = deque(maxlen=20)
@@ -211,13 +200,14 @@ class OverlayManager(QObject):
         self._title.setText(request["title"])
         self._label.setText(request["message"])
         self._label.setVisible(bool(request["message"]))
-        self._icon.setText(request["icon"])
-        self._icon.setVisible(bool(request["icon"]))
         pixmap = self._decode_qr(request.get("qr", "")) or self._decode_image(
             request.get("image", "")
         )
-        widths = {"small": 320, "medium": 400, "large": 520}
-        card_width = widths[request["size"]]
+        card_width = (
+            request["width"]
+            if request["size_mode"] == "manual"
+            else self._automatic_width(request, pixmap is not None)
+        )
         if pixmap is not None:
             if request["layout"] == "media":
                 self._cover.setPixmap(
@@ -235,7 +225,9 @@ class OverlayManager(QObject):
                 self._image.setPixmap(
                     pixmap.scaled(
                         card_width - 48,
-                        240,
+                        min(500, max(80, request["height"] - 90))
+                        if request["size_mode"] == "manual"
+                        else 240,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
@@ -271,6 +263,7 @@ class OverlayManager(QObject):
         icon_background = (
             f"rgba({accent_color.red()}, {accent_color.green()}, {accent_color.blue()}, 36)"
         )
+        self._set_icon(request["icon"], accent)
         self._window.setStyleSheet(
             "QFrame#windowsOverlay { background: transparent; border: none; } "
             f"QFrame#overlayCard {{ background-color: rgba({background[0]}, "
@@ -310,7 +303,15 @@ class OverlayManager(QObject):
         self._card.setFixedWidth(card_width)
         self._window.setFixedWidth(card_width + 20)
         self._window.ensurePolished()
-        self._window.adjustSize()
+        if request["size_mode"] == "manual":
+            self._card.setFixedHeight(request["height"])
+            self._window.setFixedHeight(request["height"] + 12)
+        else:
+            self._card.setMinimumHeight(0)
+            self._card.setMaximumHeight(16_777_215)
+            self._window.setMinimumHeight(0)
+            self._window.setMaximumHeight(16_777_215)
+            self._window.adjustSize()
         self._position(request["monitor"], request["corner"])
         self._window.show()
         self._window.raise_()
@@ -324,6 +325,44 @@ class OverlayManager(QObject):
         else:
             self._timer.start(request["duration"] * 1000)
         return True
+
+    @staticmethod
+    def _automatic_width(request: dict[str, Any], has_image: bool) -> int:
+        longest_line = max(
+            (len(line) for line in f"{request['title']}\n{request['message']}".splitlines()),
+            default=0,
+        )
+        text_width = max(170, min(430, longest_line * 7))
+        chrome = 54
+        if request["icon"]:
+            chrome += 44
+        if request["show_close_button"]:
+            chrome += 30
+        if request["layout"] == "media" and has_image:
+            chrome += 126
+        width = text_width + chrome
+        if has_image and request["layout"] != "media":
+            width = max(width, 440)
+        return max(280, min(600, width))
+
+    def _set_icon(self, value: str, color: str) -> None:
+        if self._icon is None:
+            return
+        self._icon.clear()
+        if not value:
+            self._icon.setVisible(False)
+            return
+        if value.casefold().startswith("mdi:"):
+            name = value.split(":", 1)[1].strip().casefold()
+            try:
+                pixmap = qta.icon(f"mdi6.{name}", color=color).pixmap(QSize(21, 21))
+            except Exception:
+                self._icon.setVisible(False)
+                return
+            self._icon.setPixmap(pixmap)
+        else:
+            self._icon.setText(value[:8])
+        self._icon.setVisible(True)
 
     def _position(self, monitor: int, corner: str) -> None:
         if self._window is None:
@@ -484,12 +523,26 @@ class OverlayManager(QObject):
         preset = str(options.get("preset", "default")).strip().lower()
         if preset not in _PRESET_COLORS:
             preset = "default"
-        corner = str(options.get("corner", self.default_corner)).strip().lower()
+        corner = str(options.get("corner", "top_right")).strip().lower()
         if corner not in _CORNERS:
-            corner = self.default_corner
-        size = str(options.get("size", self.default_size)).strip().lower()
-        if size not in {"small", "medium", "large"}:
-            size = self.default_size
+            corner = "top_right"
+        size_mode = str(options.get("size_mode", "auto")).strip().lower()
+        if size_mode not in {"auto", "manual"}:
+            size_mode = "auto"
+        legacy_size = str(options.get("size", "")).strip().lower()
+        if "size_mode" not in options and legacy_size in {"small", "medium", "large"}:
+            size_mode = "manual"
+        try:
+            legacy_width = {"small": 320, "medium": 400, "large": 520}.get(
+                legacy_size, 400
+            )
+            width = max(240, min(1200, int(options.get("width", legacy_width))))
+        except (TypeError, ValueError):
+            width = 400
+        try:
+            height = max(90, min(900, int(options.get("height", 160))))
+        except (TypeError, ValueError):
+            height = 160
         layout = str(options.get("layout", "default")).strip().lower()
         if layout not in {"default", "media"}:
             layout = "default"
@@ -503,9 +556,9 @@ class OverlayManager(QObject):
         except (TypeError, ValueError):
             duration = self.duration_seconds
         try:
-            opacity = max(0.65, min(1.0, float(options.get("opacity", self.default_opacity))))
+            opacity = max(0.0, min(1.0, float(options.get("opacity", 0.94))))
         except (TypeError, ValueError):
-            opacity = self.default_opacity
+            opacity = 0.94
         try:
             monitor = max(0, min(15, int(options.get("monitor", self.default_monitor))))
         except (TypeError, ValueError):
@@ -526,18 +579,18 @@ class OverlayManager(QObject):
             "id": message_id,
             "title": str(title).strip()[:128] or "Home Assistant",
             "message": str(message).strip()[:2048],
-            "icon": str(options.get("icon", "")).strip()[:8],
+            "icon": str(options.get("icon", "")).strip()[:128],
             "image": str(options.get("image", "")).strip(),
             "qr": str(options.get("qr", "")).strip()[:512],
             "progress": progress,
             "duration": duration,
             "pinned": bool(options.get("pinned", False)),
-            "show_close_button": bool(
-                options.get("show_close_button", self.default_show_close_button)
-            ),
-            "close_on_click": bool(options.get("close_on_click", self.default_close_on_click)),
+            "show_close_button": bool(options.get("show_close_button", False)),
+            "close_on_click": bool(options.get("close_on_click", False)),
             "corner": corner,
-            "size": size,
+            "size_mode": size_mode,
+            "width": width,
+            "height": height,
             "layout": layout,
             "opacity": opacity,
             "preset": preset,

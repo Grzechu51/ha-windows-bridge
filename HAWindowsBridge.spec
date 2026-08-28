@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 hiddenimports = (
     collect_submodules("pycaw")
@@ -15,7 +15,7 @@ a = Analysis(
     ["main.py"],
     pathex=["."],
     binaries=[],
-    datas=[("assets/icon.png", "assets")],
+    datas=[("assets/icon.png", "assets")] + collect_data_files("qtawesome"),
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

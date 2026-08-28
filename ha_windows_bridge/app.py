@@ -7,6 +7,7 @@ import subprocess  # nosec B404
 from contextlib import suppress
 from logging.handlers import RotatingFileHandler
 
+import qtawesome as qta
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QApplication, QMessageBox, QProxyStyle, QStyle
@@ -620,7 +621,7 @@ def main(argv: list[str] | None = None) -> int:
     app.setStyle(bridge_style)
 
     if args.smoke_test:
-        return 0
+        return int(qta.icon("mdi6.music").isNull())
     app._bridge_style = bridge_style
 
     def apply_theme(theme: str) -> None:

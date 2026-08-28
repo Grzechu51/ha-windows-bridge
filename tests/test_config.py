@@ -112,18 +112,15 @@ def test_first_run_defaults_are_user_friendly() -> None:
     assert config.publish_idle is False
     assert config.idle_threshold == 300
     assert config.publish_session_lock is False
-    assert config.publish_system_stats is False
+    assert config.publish_ram_stats is False
     assert config.publish_cpu_stats is False
     assert config.publish_gpu_stats is False
     assert not hasattr(config, "ducking_sensitivity")
     assert config.control_microphone is False
     assert config.control_audio_output is False
     assert config.media_player_enabled is False
-    assert config.overlay_corner == "top_right"
-    assert config.overlay_size == "medium"
-    assert config.overlay_opacity == 0.94
-    assert config.overlay_show_close_button is True
-    assert config.overlay_close_on_click is False
+    assert not hasattr(config, "overlay_corner")
+    assert not hasattr(config, "overlay_opacity")
     assert {app.display_name for app in default_apps()} == {"Chrome", "Discord", "Spotify"}
 
 
@@ -179,12 +176,12 @@ def test_version_04_optional_features_are_disabled_during_migration() -> None:
         }
     )
 
-    assert legacy.schema_version == 10
+    assert legacy.schema_version == 11
     assert legacy.control_active_app is False
     assert legacy.publish_activity is False
     assert legacy.publish_idle is False
     assert legacy.publish_session_lock is False
-    assert legacy.publish_system_stats is False
+    assert legacy.publish_ram_stats is False
     assert legacy.publish_gpu_stats is False
     assert legacy.control_microphone is False
     assert legacy.control_audio_output is False
@@ -199,7 +196,7 @@ def test_version_12_hardware_telemetry_is_migrated_to_cpu_and_gpu() -> None:
         }
     )
 
-    assert migrated.schema_version == 10
+    assert migrated.schema_version == 11
     assert migrated.publish_cpu_stats is True
     assert migrated.publish_gpu_stats is True
 
@@ -223,7 +220,7 @@ def test_disk_monitoring_requires_a_selected_volume() -> None:
     assert "Wybierz co najmniej jeden dysk do monitorowania." in config.validation_errors()
 
 
-def test_removed_ducking_settings_are_ignored_and_overlay_defaults_are_normalized() -> None:
+def test_removed_ducking_and_overlay_defaults_are_ignored() -> None:
     config = AppConfig.from_dict(
         {
             "schema_version": 9,
@@ -237,6 +234,15 @@ def test_removed_ducking_settings_are_ignored_and_overlay_defaults_are_normalize
     )
 
     assert not hasattr(config, "automatic_ducking")
-    assert config.overlay_corner == "top_right"
-    assert config.overlay_size == "medium"
-    assert config.overlay_opacity == 0.65
+    assert not hasattr(config, "overlay_corner")
+    assert not hasattr(config, "overlay_size")
+    assert not hasattr(config, "overlay_opacity")
+
+
+def test_legacy_system_stats_are_split_between_ram_and_windows_status() -> None:
+    config = AppConfig.from_dict(
+        {"schema_version": 10, "publish_system_stats": True}
+    )
+
+    assert config.publish_ram_stats is True
+    assert config.publish_windows_health is True

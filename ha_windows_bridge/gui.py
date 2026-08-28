@@ -568,10 +568,6 @@ class MainWindow(QMainWindow):
             return card
 
         general = add_tab("Ogólne")
-        self.media_player_row = SettingRow(
-            "Media Player",
-            "Utwórz w Home Assistant odtwarzacz aktywnej sesji multimediów Windows.",
-        )
         self.power_actions_row = SettingRow(
             "Bezpieczne akcje systemowe",
             "Dodaj blokadę, uśpienie, restart i wyłączenie z 30-sekundowym anulowaniem.",
@@ -593,7 +589,6 @@ class MainWindow(QMainWindow):
             "Informuj, czy bieżąca sesja Windows jest zablokowana.",
         )
         for row in (
-            self.media_player_row,
             self.power_actions_row,
             self.windows_notifications_row,
             self.publish_activity_row,
@@ -615,13 +610,13 @@ class MainWindow(QMainWindow):
         general.addStretch()
 
         system = add_tab("System i dyski")
-        self.publish_system_stats_row = SettingRow(
-            "Statystyki systemu",
-            "Publikuj użycie CPU, RAM i czas działania Windows.",
-        )
         self.publish_windows_health_row = SettingRow(
-            "Stan Windows i zasilania",
-            "Publikuj Windows Update, wymagany restart, plan zasilania oraz baterię, jeśli jest dostępna.",
+            "Stan Windows",
+            "Windows Update, restart, czas działania, zasilanie i bateria.",
+        )
+        self.publish_ram_stats_row = SettingRow(
+            "Telemetria RAM",
+            "Użycie oraz zajęta, dostępna i całkowita pamięć.",
         )
         self.publish_disk_stats_row = SettingRow(
             "Stan i aktywność dysków",
@@ -629,18 +624,18 @@ class MainWindow(QMainWindow):
         )
         self.publish_cpu_stats_row = SettingRow(
             "Telemetria CPU",
-            "Automatycznie wykryj procesor i publikuj dostępne dane.",
+            "Użycie, taktowanie i dostępne dane procesora.",
         )
         self.publish_gpu_stats_row = SettingRow(
             "Telemetria GPU",
-            "Automatycznie wykryj kartę NVIDIA lub AMD i publikuj dostępne dane.",
+            "Użycie i dostępne dane karty NVIDIA lub AMD.",
         )
         for row in (
-            self.publish_system_stats_row,
             self.publish_windows_health_row,
-            self.publish_disk_stats_row,
             self.publish_cpu_stats_row,
+            self.publish_ram_stats_row,
             self.publish_gpu_stats_row,
+            self.publish_disk_stats_row,
         ):
             system.addWidget(row)
         disk_controls = QHBoxLayout()
@@ -659,6 +654,10 @@ class MainWindow(QMainWindow):
         system.addStretch()
 
         audio = add_tab("Audio")
+        self.media_player_row = SettingRow(
+            "Media Player",
+            "Utwórz w Home Assistant odtwarzacz aktywnej sesji multimediów Windows.",
+        )
         self.audio_enhancements_row = SettingRow(
             "Rozszerzone funkcje audio",
             "Włącz balans kanałów, liczniki sesji i profile pełnego miksu.",
@@ -680,6 +679,7 @@ class MainWindow(QMainWindow):
             "Automatyczne reguły profili",
             "Zastosuj profil, gdy uruchomi się przypisana do niego aplikacja.",
         )
+        audio.addWidget(self.media_player_row)
         audio.addWidget(self.audio_enhancements_row)
         audio.addWidget(self.channel_balance_row)
         audio.addWidget(self.publish_audio_sessions_row)
@@ -741,7 +741,7 @@ class MainWindow(QMainWindow):
 
         overlay = add_tab("Nakładka")
         overlay_info = QLabel(
-            "Zwykła wiadomość używa tytułu i treści. Opcja „Użyj bieżących multimediów Windows” automatycznie dodaje okładkę, wykonawcę i rzeczywisty czas utworu."
+            "Treść, wygląd, rozmiar, położenie, czas i zamykanie ustawiasz w akcji Home Assistant."
         )
         overlay_info.setObjectName("settingDescription")
         overlay_info.setWordWrap(True)
@@ -752,34 +752,7 @@ class MainWindow(QMainWindow):
         )
         self.overlay_fullscreen_row = SettingRow(
             "Zezwalaj w pełnym ekranie",
-            "Domyślnie nakładka nie pojawia się nad grą lub aplikacją pełnoekranową.",
-        )
-        self.overlay_duration = QSpinBox()
-        self.overlay_duration.setRange(2, 60)
-        self.overlay_duration.setSuffix(" s")
-        self.overlay_corner_combo = QComboBox()
-        for label_text, value in (
-            ("Prawy górny", "top_right"),
-            ("Lewy górny", "top_left"),
-            ("Środek u góry", "top_center"),
-            ("Prawy dolny", "bottom_right"),
-            ("Lewy dolny", "bottom_left"),
-        ):
-            self.overlay_corner_combo.addItem(label_text, value)
-        self.overlay_size_combo = QComboBox()
-        self.overlay_size_combo.addItem("Mały", "small")
-        self.overlay_size_combo.addItem("Średni", "medium")
-        self.overlay_size_combo.addItem("Duży", "large")
-        self.overlay_opacity = QSpinBox()
-        self.overlay_opacity.setRange(65, 100)
-        self.overlay_opacity.setSuffix(" %")
-        self.overlay_show_close_row = SettingRow(
-            "Przycisk zamknięcia",
-            "Domyślnie pokazuj przycisk × także na wiadomościach z limitem czasu.",
-        )
-        self.overlay_close_on_click_row = SettingRow(
-            "Zamknij po kliknięciu",
-            "Kliknięcie dowolnego miejsca karty zamknie bieżącą wiadomość.",
+            "Pozwala wyświetlać nakładkę nad aplikacją pełnoekranową.",
         )
         self.overlay_monitor_combo = QComboBox()
         for index, screen in enumerate(QApplication.screens()):
@@ -792,47 +765,15 @@ class MainWindow(QMainWindow):
         self.overlay_monitor_combo.setMinimumWidth(280)
         overlay.addWidget(self.overlay_enabled_row)
         overlay.addWidget(self.overlay_fullscreen_row)
-        overlay.addWidget(
-            number_card(
-                "Czas wyświetlania",
-                "Domyślny czas zwykłej wiadomości. Przypięte wiadomości nie zamykają się automatycznie.",
-                self.overlay_duration,
-            )
-        )
-        overlay.addWidget(
-            number_card(
-                "Domyślne położenie",
-                "Akcja Home Assistant może jednorazowo nadpisać ten wybór.",
-                self.overlay_corner_combo,
-                180,
-            )
-        )
-        overlay.addWidget(
-            number_card(
-                "Domyślny rozmiar",
-                "Określa szerokość nowych wiadomości i kart multimediów.",
-                self.overlay_size_combo,
-                180,
-            )
-        )
-        overlay.addWidget(
-            number_card(
-                "Krycie tła",
-                "Zmienia tylko tło; tekst, ikony i okładka pozostają czytelne.",
-                self.overlay_opacity,
-            )
-        )
-        overlay.addWidget(self.overlay_show_close_row)
-        overlay.addWidget(self.overlay_close_on_click_row)
         monitor_card = QFrame()
         monitor_card.setObjectName("settingRow")
         monitor_row = QHBoxLayout(monitor_card)
         monitor_row.setContentsMargins(16, 14, 16, 14)
         monitor_text = QVBoxLayout()
-        monitor_title = QLabel("Domyślny monitor")
+        monitor_title = QLabel("Monitor nakładki")
         monitor_title.setObjectName("settingTitle")
         monitor_description = QLabel(
-            "Dostępne ekrany pojawią się również jako encja wyboru w Home Assistant."
+            "Wybierz ekran tutaj albo encją wyboru w Home Assistant."
         )
         monitor_description.setObjectName("settingDescription")
         monitor_description.setWordWrap(True)
@@ -842,7 +783,7 @@ class MainWindow(QMainWindow):
         monitor_row.addWidget(self.overlay_monitor_combo)
         overlay.addWidget(monitor_card)
         warning = QLabel(
-            "Obraz jest pojedynczą grafiką PNG, JPEG, GIF lub WebP do 512 KiB, a nie transmisją wideo. Nakładka nie używa hooków ani pamięci gry, ale zgodność zależy od regulaminu konkretnego anty-cheata."
+            "Obraz jest pojedynczą grafiką, nie transmisją wideo. Nakładka nie ingeruje w proces gry."
         )
         warning.setObjectName("settingDescription")
         warning.setWordWrap(True)
@@ -1244,28 +1185,6 @@ class MainWindow(QMainWindow):
             self.device_filter_combo.setItemText(
                 index, english if self._language == "en" else polish
             )
-        corner_labels = {
-            "top_right": ("Top right", "Prawy górny"),
-            "top_left": ("Top left", "Lewy górny"),
-            "top_center": ("Top center", "Środek u góry"),
-            "bottom_right": ("Bottom right", "Prawy dolny"),
-            "bottom_left": ("Bottom left", "Lewy dolny"),
-        }
-        for index in range(self.overlay_corner_combo.count()):
-            english, polish = corner_labels[str(self.overlay_corner_combo.itemData(index))]
-            self.overlay_corner_combo.setItemText(
-                index, english if self._language == "en" else polish
-            )
-        size_labels = {
-            "small": ("Small", "Mały"),
-            "medium": ("Medium", "Średni"),
-            "large": ("Large", "Duży"),
-        }
-        for index in range(self.overlay_size_combo.count()):
-            english, polish = size_labels[str(self.overlay_size_combo.itemData(index))]
-            self.overlay_size_combo.setItemText(
-                index, english if self._language == "en" else polish
-            )
         for index in range(self.devices_list.count()):
             self._update_device_item_text(self.devices_list.item(index))
         tab_names = (
@@ -1353,7 +1272,7 @@ class MainWindow(QMainWindow):
         self.publish_idle_row.switch.setChecked(config.publish_idle)
         self.idle_threshold.setValue(config.idle_threshold)
         self.publish_session_lock_row.switch.setChecked(config.publish_session_lock)
-        self.publish_system_stats_row.switch.setChecked(config.publish_system_stats)
+        self.publish_ram_stats_row.switch.setChecked(config.publish_ram_stats)
         self.publish_cpu_stats_row.switch.setChecked(config.publish_cpu_stats)
         self.publish_gpu_stats_row.switch.setChecked(config.publish_gpu_stats)
         self.publish_windows_health_row.switch.setChecked(config.publish_windows_health)
@@ -1371,16 +1290,6 @@ class MainWindow(QMainWindow):
         self._load_tracked_devices(config.tracked_devices)
         self.overlay_enabled_row.switch.setChecked(config.overlay_enabled)
         self.overlay_fullscreen_row.switch.setChecked(config.overlay_allow_fullscreen)
-        self.overlay_duration.setValue(config.overlay_duration)
-        self.overlay_corner_combo.setCurrentIndex(
-            max(0, self.overlay_corner_combo.findData(config.overlay_corner))
-        )
-        self.overlay_size_combo.setCurrentIndex(
-            max(0, self.overlay_size_combo.findData(config.overlay_size))
-        )
-        self.overlay_opacity.setValue(round(config.overlay_opacity * 100))
-        self.overlay_show_close_row.switch.setChecked(config.overlay_show_close_button)
-        self.overlay_close_on_click_row.switch.setChecked(config.overlay_close_on_click)
         self.overlay_monitor_combo.setCurrentIndex(
             max(0, min(self.overlay_monitor_combo.count() - 1, config.overlay_monitor))
         )
@@ -1445,7 +1354,7 @@ class MainWindow(QMainWindow):
             publish_idle=self.publish_idle_row.switch.isChecked(),
             idle_threshold=self.idle_threshold.value(),
             publish_session_lock=self.publish_session_lock_row.switch.isChecked(),
-            publish_system_stats=self.publish_system_stats_row.switch.isChecked(),
+            publish_ram_stats=self.publish_ram_stats_row.switch.isChecked(),
             publish_cpu_stats=self.publish_cpu_stats_row.switch.isChecked(),
             publish_gpu_stats=self.publish_gpu_stats_row.switch.isChecked(),
             control_microphone=self.microphone_card.enabled_switch.isChecked(),
@@ -1467,13 +1376,7 @@ class MainWindow(QMainWindow):
             tracked_devices=self._tracked_devices_from_list(),
             overlay_enabled=self.overlay_enabled_row.switch.isChecked(),
             overlay_allow_fullscreen=self.overlay_fullscreen_row.switch.isChecked(),
-            overlay_duration=self.overlay_duration.value(),
             overlay_monitor=int(self.overlay_monitor_combo.currentData() or 0),
-            overlay_corner=str(self.overlay_corner_combo.currentData() or "top_right"),
-            overlay_size=str(self.overlay_size_combo.currentData() or "medium"),
-            overlay_opacity=self.overlay_opacity.value() / 100.0,
-            overlay_show_close_button=self.overlay_show_close_row.switch.isChecked(),
-            overlay_close_on_click=self.overlay_close_on_click_row.switch.isChecked(),
         )
 
     def save_and_apply(self) -> bool:
@@ -1628,13 +1531,7 @@ class MainWindow(QMainWindow):
     def _apply_overlay_state(self, enabled: bool) -> None:
         for widget in (
             self.overlay_fullscreen_row,
-            self.overlay_duration,
             self.overlay_monitor_combo,
-            self.overlay_corner_combo,
-            self.overlay_size_combo,
-            self.overlay_opacity,
-            self.overlay_show_close_row,
-            self.overlay_close_on_click_row,
         ):
             widget.setEnabled(enabled)
         if not enabled and self.overlay_manager is not None:
@@ -1647,14 +1544,8 @@ class MainWindow(QMainWindow):
             self.overlay_manager = None
         if config.overlay_enabled:
             self.overlay_manager = OverlayManager(
-                duration_seconds=config.overlay_duration,
                 allow_fullscreen=config.overlay_allow_fullscreen,
                 default_monitor=config.overlay_monitor,
-                default_corner=config.overlay_corner,
-                default_size=config.overlay_size,
-                default_opacity=config.overlay_opacity,
-                default_show_close_button=config.overlay_show_close_button,
-                default_close_on_click=config.overlay_close_on_click,
                 close_tooltip=self._t("Zamknij nakładkę"),
             )
 
@@ -1987,7 +1878,9 @@ class MainWindow(QMainWindow):
         self.scan_devices_button.setText(self._t("Wyszukiwanie…"))
 
         def worker() -> None:
-            self.signals.devices_scanned.emit(self.system_monitor.list_pnp_devices())
+            self.signals.devices_scanned.emit(
+                self.system_monitor.list_pnp_devices(include_disconnected=True)
+            )
 
         threading.Thread(target=worker, name="device-scan", daemon=True).start()
 

@@ -1,68 +1,34 @@
-# Integracja HA Windows Bridge dla Home Assistant
+# Integracja HA Windows Bridge
 
-Integracja tworzy pod jednym urządzeniem wszystkie encje udostępniane przez aplikację
-Windows. Do komunikacji używa istniejącej integracji MQTT Home Assistant, dlatego nie
-przechowuje adresu brokera ani hasła.
+Integracja dodaje do Home Assistant funkcje włączone w aplikacji Windows. Korzysta z
+istniejącej integracji MQTT i nie przechowuje hasła do brokera.
 
-## Instalacja przez HACS
+## Instalacja
 
-[![Otwórz repozytorium w HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Grzechu51&repository=ha-windows-bridge&category=integration)
-
-1. Otwórz w HACS **⋮ → Custom repositories**.
-2. Dodaj **https://github.com/Grzechu51/ha-windows-bridge** jako **Integration**.
-3. Wyszukaj **HA Windows Bridge**, wybierz **Download** i uruchom Home Assistant ponownie.
-4. Uruchom połączenie w aplikacji Windows.
+1. W HACS otwórz **⋮ → Custom repositories**.
+2. Dodaj `https://github.com/Grzechu51/ha-windows-bridge` jako **Integration**.
+3. Pobierz **HA Windows Bridge** i uruchom Home Assistant ponownie.
+4. Uruchom połączenie MQTT w aplikacji Windows.
 5. Potwierdź wykryty komputer w **Ustawienia → Urządzenia i usługi**.
 
-Najpierw musi działać integracja **MQTT** Home Assistant oraz lokalny broker. Samo
-zainstalowanie HA Windows Bridge nie instaluje brokera.
+Przy instalacji ręcznej skopiuj `custom_components/ha_windows_bridge` do
+`config/custom_components/ha_windows_bridge` i uruchom HA ponownie.
 
-## Instalacja ręczna
+## Dostępne funkcje
 
-1. Skopiuj `custom_components/ha_windows_bridge` do
-   `config/custom_components/ha_windows_bridge`.
-2. Uruchom Home Assistant ponownie.
-3. Uruchom usługę MQTT w aplikacji Windows.
-4. Potwierdź automatycznie wykrytą integrację.
+- głośność, wyciszenie i stan wybranych programów;
+- Media Player aktywnej sesji Windows;
+- stan Windows, CPU, RAM, GPU i wybrane dyski;
+- wybrane urządzenia Windows;
+- profile audio i wybór wyjścia;
+- bezpieczne akcje komputera;
+- powiadomienia i nakładka ekranowa.
 
-## Obsługiwane encje
+Wyłączenie funkcji w aplikacji usuwa odpowiadające jej encje po zapisaniu ustawień.
 
-- `number`: głośność główna, balans, mikrofon, aktywna aplikacja i wybrane programy;
-- `switch`: wyciszenie główne, mikrofonu i programów;
-- `binary_sensor`: połączenie, uruchomienie programu, aktywność mikrofonu,
-  pełny ekran, aktywność komputera, blokada Windows i śledzone urządzenia;
-- `sensor`: aktywna aplikacja i okno, bezczynność, CPU, RAM, uptime, Windows Update,
-  zasilanie, dyski, liczba sesji audio oraz dostępna telemetria sprzętu;
-- `button`: start lub zamknięcie programu oraz opcjonalne akcje komputera;
-- `select`: domyślne wyjście audio, profile audio i monitor nakładki;
-- `notify`: kontrolowane powiadomienia zasobnika i bezpieczna nakładka Windows;
-- `media_player`: aktywna sesja multimediów Windows z miniaturą.
+## Nakładka
 
-Wyłączenie funkcji w aplikacji usuwa jej encję po zapisaniu i ponownym opublikowaniu
-opisu urządzenia. Identyfikatory pozostałych encji nie zmieniają się.
-
-## Media Player
-
-Media Player może udostępniać tytuł, wykonawcę, album, program źródłowy, czas, pozycję,
-głośność, wyciszenie, okładkę lub miniaturę oraz komendy obsługiwane przez aktywną sesję
-Windows. Obraz jest ograniczony do 1 MB i weryfikowany jako PNG, JPEG, GIF albo WebP.
-
-## Akcje systemowe
-
-Akcje systemowe są domyślnie wyłączone. Aplikacja przyjmuje tylko stałą listę poleceń:
-blokada, uśpienie, restart, wyłączenie i anulowanie. Restart i wyłączenie są opóźnione
-o 30 sekund. Integracja nie udostępnia encji do wykonywania dowolnych komend.
-
-## Nakładka Windows
-
-Prosty komunikat można wysłać encją `notify`. Rozszerzone opcje udostępniają akcje
-`ha_windows_bridge.show_overlay`, `update_overlay`, `remove_overlay` i `clear_overlay`.
-Obsługują kolejkę, stałe ID, obraz osadzony, kod QR, postęp, monitor, narożnik, czas,
-rozmiar, styl, przezroczystość, przycisk **×** i zamknięcie kliknięciem karty. Nakładka
-nie wstrzykuje kodu do gier i domyślnie jest blokowana przy pełnym ekranie.
-
-Najprostsze wyświetlenie aktywnej sesji multimediów Windows wraz z okładką i bieżącym
-czasem:
+Aktualne multimedia wyświetlisz poleceniem:
 
 ```yaml
 action: ha_windows_bridge.show_overlay
@@ -72,16 +38,19 @@ data:
   notification_id: now_playing
   media: true
   pinned: true
+  show_close_button: true
+  size_mode: auto
 ```
 
-**Przypięta** oznacza brak automatycznego zamknięcia. Przycisk **×** oraz zamknięcie
-kliknięciem są niezależne i mają ustawienia domyślne w aplikacji. Postęp i czas mogą
-pochodzić z encji lub atrybutu; własny zakres źródła można zmapować na 0–100% polami
-minimum i maksimum.
+Nakładka pokazuje okładkę, tytuł oraz aktualny czas i postęp utworu. Rozmiar może być
+automatyczny albo ręczny (`width`, `height`). Ikonę wybiera się z biblioteki MDI HA.
+Styl neutralny działa po pozostawieniu pola **Styl** wyłączonego.
+
+`update_overlay` aktualizuje wiadomość o tym samym ID, `remove_overlay` ją usuwa, a
+`clear_overlay` czyści kolejkę.
 
 ## Usuwanie
 
-1. W **Ustawieniach** aplikacji wybierz **Wyczyść dane MQTT**.
-2. Opcjonalnie wybierz osobno **Odinstaluj aplikację**.
-3. Usuń wpis HA Windows Bridge w **Ustawienia → Urządzenia i usługi**.
-4. Usuń integrację w HACS i uruchom Home Assistant ponownie.
+1. W aplikacji wybierz **Wyczyść dane MQTT**.
+2. Usuń wpis HA Windows Bridge w **Ustawienia → Urządzenia i usługi**.
+3. Usuń integrację w HACS i uruchom Home Assistant ponownie.

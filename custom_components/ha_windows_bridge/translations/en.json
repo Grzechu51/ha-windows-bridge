@@ -23,15 +23,14 @@
   "selector": {
     "overlay_style": {
       "options": {
-        "default": "Neutral",
         "success": "Success",
         "warning": "Warning",
         "error": "Error",
         "info": "Information"
       }
     },
-    "overlay_size": {
-      "options": {"small": "Small", "medium": "Medium", "large": "Large"}
+    "overlay_size_mode": {
+      "options": {"auto": "Automatic", "manual": "Manual"}
     },
     "overlay_corner": {
       "options": {
@@ -46,13 +45,13 @@
   "services": {
     "show_overlay": {
       "name": "Show Windows overlay",
-      "description": "Shows a validated, passive message on the selected Windows computer.",
+      "description": "Shows a message or current media on the selected Windows computer.",
       "fields": {
         "title": {"name": "Title"},
-        "message": {"name": "Message", "description": "Optional when current Windows media is enabled."},
-        "media": {"name": "Use current Windows media", "description": "Automatically uses the active Windows session with artwork, title and live playback progress."},
-        "notification_id": {"name": "Message ID", "description": "Stable ID used to update or remove this message later."},
-        "icon": {"name": "Icon", "description": "Up to eight characters, for example an emoji."},
+        "message": {"name": "Message", "description": "Not required for current Windows media."},
+        "media": {"name": "Use current Windows media", "description": "Shows artwork, title and live playback progress."},
+        "notification_id": {"name": "Message ID", "description": "Use the same ID to update or remove the message."},
+        "icon": {"name": "Icon", "description": "Choose a Home Assistant MDI icon."},
         "image": {"name": "Embedded image", "description": "PNG, JPEG, GIF or WebP data URI up to 512 KiB."},
         "qr": {"name": "QR content"},
         "progress": {"name": "Progress", "description": "Fixed value from 0 to 100."},
@@ -60,21 +59,24 @@
         "progress_attribute": {"name": "Progress attribute"},
         "progress_min": {"name": "Source minimum", "description": "Value mapped to 0%."},
         "progress_max": {"name": "Source maximum", "description": "Value mapped to 100%."},
-        "duration": {"name": "Duration", "description": "Fixed display time in seconds."},
+        "duration": {"name": "Duration", "description": "Display time in seconds."},
         "duration_entity": {"name": "Duration source", "description": "Reads the display time from the state or selected attribute of an entity."},
         "duration_attribute": {"name": "Duration attribute"},
-        "pinned": {"name": "Keep until manually closed", "description": "Disables automatic closing after the display duration."},
-        "show_close_button": {"name": "Show close button", "description": "Overrides the application default for this message."},
-        "close_on_click": {"name": "Close by clicking the card", "description": "Overrides the application default for this message."},
+        "pinned": {"name": "Keep until manually closed"},
+        "show_close_button": {"name": "Show close button"},
+        "close_on_click": {"name": "Close by clicking the card"},
         "corner": {"name": "Corner"},
         "monitor": {"name": "Monitor override", "description": "Optional zero-based override. Normally use the Overlay Monitor entity on the device."},
-        "size": {"name": "Size"},
-        "opacity": {"name": "Background opacity", "description": "Text, icons and artwork remain fully opaque."},
-        "preset": {"name": "Style", "description": "Changes the border, tint and progress color."}
+        "size_mode": {"name": "Sizing", "description": "Automatic fits the card to its content."},
+        "width": {"name": "Manual width"},
+        "height": {"name": "Manual height"},
+        "opacity": {"name": "Background opacity", "description": "0 is fully transparent."},
+        "preset": {"name": "Style", "description": "Leave disabled for the neutral style."}
       },
       "sections": {
         "content": {"name": "Content"},
         "appearance": {"name": "Appearance"},
+        "sizing": {"name": "Size"},
         "progress_options": {"name": "Progress"},
         "timing": {"name": "Timing and closing"},
         "placement": {"name": "Placement"}
@@ -90,6 +92,10 @@
         "media": {"name": "Refresh from current Windows media"},
         "preset": {"name": "Style"},
         "icon": {"name": "Icon"},
+        "opacity": {"name": "Background opacity"},
+        "size_mode": {"name": "Sizing"},
+        "width": {"name": "Manual width"},
+        "height": {"name": "Manual height"},
         "progress": {"name": "Progress"},
         "progress_entity": {"name": "Progress source"},
         "progress_attribute": {"name": "Progress attribute"},
