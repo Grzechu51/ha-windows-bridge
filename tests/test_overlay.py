@@ -33,13 +33,35 @@ def test_overlay_request_is_bounded_and_uses_safe_defaults() -> None:
     assert request["preset"] == "default"
     assert request["progress"] == 100
     assert request["duration"] == 60
-    assert request["opacity"] == 0.35
+    assert request["opacity"] == 0.65
     assert request["monitor"] == 15
     assert request["icon"] == "12345678"
 
     default_request = manager._validated_request("Title", "Message", {})  # noqa: SLF001
-    assert default_request["opacity"] == 0.88
+    assert default_request["opacity"] == 0.94
     assert default_request["icon"] == ""
+    assert default_request["show_close_button"] is True
+    assert default_request["close_on_click"] is False
+
+
+def test_overlay_uses_configured_defaults() -> None:
+    manager = OverlayManager(
+        default_monitor=2,
+        default_corner="bottom_left",
+        default_size="large",
+        default_opacity=0.8,
+        default_show_close_button=False,
+        default_close_on_click=True,
+    )
+
+    request = manager._validated_request("Title", "Message", {})  # noqa: SLF001
+
+    assert request["monitor"] == 2
+    assert request["corner"] == "bottom_left"
+    assert request["size"] == "large"
+    assert request["opacity"] == 0.8
+    assert request["show_close_button"] is False
+    assert request["close_on_click"] is True
 
 
 def test_overlay_queue_can_update_remove_and_clear_messages() -> None:

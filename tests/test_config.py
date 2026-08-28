@@ -115,10 +115,15 @@ def test_first_run_defaults_are_user_friendly() -> None:
     assert config.publish_system_stats is False
     assert config.publish_cpu_stats is False
     assert config.publish_gpu_stats is False
-    assert config.ducking_sensitivity == 50
+    assert not hasattr(config, "ducking_sensitivity")
     assert config.control_microphone is False
     assert config.control_audio_output is False
     assert config.media_player_enabled is False
+    assert config.overlay_corner == "top_right"
+    assert config.overlay_size == "medium"
+    assert config.overlay_opacity == 0.94
+    assert config.overlay_show_close_button is True
+    assert config.overlay_close_on_click is False
     assert {app.display_name for app in default_apps()} == {"Chrome", "Discord", "Spotify"}
 
 
@@ -174,7 +179,7 @@ def test_version_04_optional_features_are_disabled_during_migration() -> None:
         }
     )
 
-    assert legacy.schema_version == 9
+    assert legacy.schema_version == 10
     assert legacy.control_active_app is False
     assert legacy.publish_activity is False
     assert legacy.publish_idle is False
@@ -194,7 +199,7 @@ def test_version_12_hardware_telemetry_is_migrated_to_cpu_and_gpu() -> None:
         }
     )
 
-    assert migrated.schema_version == 9
+    assert migrated.schema_version == 10
     assert migrated.publish_cpu_stats is True
     assert migrated.publish_gpu_stats is True
 
@@ -216,3 +221,22 @@ def test_disk_monitoring_requires_a_selected_volume() -> None:
     config = AppConfig(publish_disk_stats=True, disk_mounts=[])
 
     assert "Wybierz co najmniej jeden dysk do monitorowania." in config.validation_errors()
+
+
+def test_removed_ducking_settings_are_ignored_and_overlay_defaults_are_normalized() -> None:
+    config = AppConfig.from_dict(
+        {
+            "schema_version": 9,
+            "automatic_ducking": True,
+            "ducking_volume": 20,
+            "ducking_sensitivity": 90,
+            "overlay_corner": "invalid",
+            "overlay_size": "huge",
+            "overlay_opacity": 0.1,
+        }
+    )
+
+    assert not hasattr(config, "automatic_ducking")
+    assert config.overlay_corner == "top_right"
+    assert config.overlay_size == "medium"
+    assert config.overlay_opacity == 0.65

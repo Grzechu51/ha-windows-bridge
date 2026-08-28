@@ -15,5 +15,6 @@ def _run() -> int:
         raise
     return main()
 
+
 if __name__ == "__main__":
     raise SystemExit(_run())

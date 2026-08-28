@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-windows-bridge"
-version = "1.3.0"
+version = "1.3.1"
 description = "Connect Windows audio, applications and media sessions to Home Assistant over MQTT"
 readme = "README.md"
 license = "AGPL-3.0-only"

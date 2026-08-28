@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 APP_NAME = "HA Windows Bridge"
-CONFIG_SCHEMA_VERSION = 9
+CONFIG_SCHEMA_VERSION = 10
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_SECRET_BYTES = 64 * 1024
@@ -229,9 +229,6 @@ class AppConfig:
     disk_mounts: list[str] = field(default_factory=list)
     audio_enhancements_enabled: bool = False
     control_channel_balance: bool = False
-    automatic_ducking: bool = False
-    ducking_volume: int = 35
-    ducking_sensitivity: int = 50
     publish_audio_sessions: bool = False
     audio_profiles_enabled: bool = False
     automatic_audio_profiles: bool = False
@@ -242,6 +239,11 @@ class AppConfig:
     overlay_allow_fullscreen: bool = False
     overlay_duration: int = 8
     overlay_monitor: int = 0
+    overlay_corner: str = "top_right"
+    overlay_size: str = "medium"
+    overlay_opacity: float = 0.94
+    overlay_show_close_button: bool = True
+    overlay_close_on_click: bool = False
 
     def __post_init__(self) -> None:
         self.language = self.language.strip().lower()
@@ -266,6 +268,19 @@ class AppConfig:
             )
         )
         self.overlay_monitor = max(0, min(15, int(self.overlay_monitor)))
+        self.overlay_corner = self.overlay_corner.strip().lower()
+        if self.overlay_corner not in {
+            "top_left",
+            "top_right",
+            "bottom_left",
+            "bottom_right",
+            "top_center",
+        }:
+            self.overlay_corner = "top_right"
+        self.overlay_size = self.overlay_size.strip().lower()
+        if self.overlay_size not in {"small", "medium", "large"}:
+            self.overlay_size = "medium"
+        self.overlay_opacity = max(0.65, min(1.0, float(self.overlay_opacity)))
 
     @classmethod
     def from_dict(cls, data: dict) -> AppConfig:
@@ -348,9 +363,6 @@ class AppConfig:
             disk_mounts=[str(mount) for mount in data.get("disk_mounts", []) if str(mount).strip()],
             audio_enhancements_enabled=bool(data.get("audio_enhancements_enabled", False)),
             control_channel_balance=bool(data.get("control_channel_balance", False)),
-            automatic_ducking=bool(data.get("automatic_ducking", False)),
-            ducking_volume=int(data.get("ducking_volume", 35)),
-            ducking_sensitivity=int(data.get("ducking_sensitivity", 50)),
             publish_audio_sessions=bool(data.get("publish_audio_sessions", False)),
             audio_profiles_enabled=bool(data.get("audio_profiles_enabled", False)),
             automatic_audio_profiles=bool(data.get("automatic_audio_profiles", False)),
@@ -369,6 +381,11 @@ class AppConfig:
             overlay_allow_fullscreen=bool(data.get("overlay_allow_fullscreen", False)),
             overlay_duration=int(data.get("overlay_duration", 8)),
             overlay_monitor=int(data.get("overlay_monitor", 0)),
+            overlay_corner=str(data.get("overlay_corner", "top_right")),
+            overlay_size=str(data.get("overlay_size", "medium")),
+            overlay_opacity=float(data.get("overlay_opacity", 0.94)),
+            overlay_show_close_button=bool(data.get("overlay_show_close_button", True)),
+            overlay_close_on_click=bool(data.get("overlay_close_on_click", False)),
         )
 
     def to_dict(self) -> dict:
@@ -402,10 +419,6 @@ class AppConfig:
             errors.append("Interwał odczytu musi mieścić się w zakresie 0,2–10 sekund.")
         if not 30 <= self.idle_threshold <= 7200:
             errors.append("Próg bezczynności musi mieścić się w zakresie 30–7200 sekund.")
-        if not 1 <= self.ducking_volume <= 100:
-            errors.append("Poziom wyciszenia rozmowy musi mieścić się w zakresie 1–100%.")
-        if not 1 <= self.ducking_sensitivity <= 100:
-            errors.append("Czułość mikrofonu musi mieścić się w zakresie 1–100%.")
         if not 2 <= self.overlay_duration <= 60:
             errors.append("Czas nakładki musi mieścić się w zakresie 2–60 sekund.")
         if self.publish_disk_stats and not self.disk_mounts:

@@ -20,14 +20,37 @@
       }
     }
   },
+  "selector": {
+    "overlay_style": {
+      "options": {
+        "default": "Neutral",
+        "success": "Success",
+        "warning": "Warning",
+        "error": "Error",
+        "info": "Information"
+      }
+    },
+    "overlay_size": {
+      "options": {"small": "Small", "medium": "Medium", "large": "Large"}
+    },
+    "overlay_corner": {
+      "options": {
+        "top_left": "Top left",
+        "top_right": "Top right",
+        "bottom_left": "Bottom left",
+        "bottom_right": "Bottom right",
+        "top_center": "Top center"
+      }
+    }
+  },
   "services": {
     "show_overlay": {
       "name": "Show Windows overlay",
       "description": "Shows a validated, passive message on the selected Windows computer.",
       "fields": {
         "title": {"name": "Title"},
-        "message": {"name": "Message", "description": "Optional when the current Windows Media Player layout is enabled."},
-        "media": {"name": "Current Windows Media Player", "description": "Uses the active Windows media session, including artwork, title and live playback progress."},
+        "message": {"name": "Message", "description": "Optional when current Windows media is enabled."},
+        "media": {"name": "Use current Windows media", "description": "Automatically uses the active Windows session with artwork, title and live playback progress."},
         "notification_id": {"name": "Message ID", "description": "Stable ID used to update or remove this message later."},
         "icon": {"name": "Icon", "description": "Up to eight characters, for example an emoji."},
         "image": {"name": "Embedded image", "description": "PNG, JPEG, GIF or WebP data URI up to 512 KiB."},
@@ -40,13 +63,14 @@
         "duration": {"name": "Duration", "description": "Fixed display time in seconds."},
         "duration_entity": {"name": "Duration source", "description": "Reads the display time from the state or selected attribute of an entity."},
         "duration_attribute": {"name": "Duration attribute"},
-        "pinned": {"name": "Pinned"},
+        "pinned": {"name": "Keep until manually closed", "description": "Disables automatic closing after the display duration."},
+        "show_close_button": {"name": "Show close button", "description": "Overrides the application default for this message."},
+        "close_on_click": {"name": "Close by clicking the card", "description": "Overrides the application default for this message."},
         "corner": {"name": "Corner"},
         "monitor": {"name": "Monitor override", "description": "Optional zero-based override. Normally use the Overlay Monitor entity on the device."},
         "size": {"name": "Size"},
-        "layout": {"name": "Layout", "description": "Media places a supplied image next to the title and message."},
-        "opacity": {"name": "Opacity"},
-        "preset": {"name": "Preset"}
+        "opacity": {"name": "Background opacity", "description": "Text, icons and artwork remain fully opaque."},
+        "preset": {"name": "Style", "description": "Changes the border, tint and progress color."}
       },
       "sections": {
         "content": {"name": "Content"},
@@ -63,13 +87,17 @@
         "notification_id": {"name": "Message ID"},
         "title": {"name": "Title"},
         "message": {"name": "Message"},
-        "media": {"name": "Refresh from Windows Media Player"},
+        "media": {"name": "Refresh from current Windows media"},
+        "preset": {"name": "Style"},
+        "icon": {"name": "Icon"},
         "progress": {"name": "Progress"},
         "progress_entity": {"name": "Progress source"},
         "progress_attribute": {"name": "Progress attribute"},
         "progress_min": {"name": "Source minimum"},
         "progress_max": {"name": "Source maximum"},
-        "pinned": {"name": "Pinned"}
+        "pinned": {"name": "Keep until manually closed"},
+        "show_close_button": {"name": "Show close button"},
+        "close_on_click": {"name": "Close by clicking the card"}
       }
     },
     "remove_overlay": {

@@ -58,8 +58,8 @@ o 30 sekund. Integracja nie udostępnia encji do wykonywania dowolnych komend.
 Prosty komunikat można wysłać encją `notify`. Rozszerzone opcje udostępniają akcje
 `ha_windows_bridge.show_overlay`, `update_overlay`, `remove_overlay` i `clear_overlay`.
 Obsługują kolejkę, stałe ID, obraz osadzony, kod QR, postęp, monitor, narożnik, czas,
-rozmiar i przezroczystość. Nakładka nie wstrzykuje kodu do gier i domyślnie jest
-blokowana przy pełnym ekranie.
+rozmiar, styl, przezroczystość, przycisk **×** i zamknięcie kliknięciem karty. Nakładka
+nie wstrzykuje kodu do gier i domyślnie jest blokowana przy pełnym ekranie.
 
 Najprostsze wyświetlenie aktywnej sesji multimediów Windows wraz z okładką i bieżącym
 czasem:
@@ -74,8 +74,10 @@ data:
   pinned: true
 ```
 
-Przypięta karta ma przycisk **×**. Postęp i czas mogą pochodzić z encji lub atrybutu;
-własny zakres źródła można zmapować na 0–100% polami minimum i maksimum.
+**Przypięta** oznacza brak automatycznego zamknięcia. Przycisk **×** oraz zamknięcie
+kliknięciem są niezależne i mają ustawienia domyślne w aplikacji. Postęp i czas mogą
+pochodzić z encji lub atrybutu; własny zakres źródła można zmapować na 0–100% polami
+minimum i maksimum.
 
 ## Usuwanie
 

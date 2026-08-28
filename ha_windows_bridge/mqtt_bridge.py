@@ -113,7 +113,6 @@ class MqttBridge:
         self._last_session_counts: dict[str, int] = {}
         self._last_total_session_count: int | None = None
         self._last_device_states: dict[str, bool] = {}
-        self._ducked_volumes: dict[str, float] = {}
         self._last_microphone: tuple[float, bool, bool] | None = None
         self._microphone_active_until = 0.0
         self._last_context: PcContext | None = None
@@ -518,7 +517,7 @@ class MqttBridge:
         media_requested = isinstance(data, dict) and bool(data.get("media", False))
         if (
             action not in {"show", "update", "remove", "clear"}
-            or (action in {"show", "update"} and not message and not media_requested)
+            or (action == "show" and not message and not media_requested)
             or len(title) > 128
             or len(message) > 2048
             or not isinstance(data, dict)
@@ -547,7 +546,7 @@ class MqttBridge:
                         artwork.data
                     ).decode("ascii")
         if self.overlay_callback:
-            if action in {"show", "update"}:
+            if action == "show":
                 data.setdefault("monitor", self.config.overlay_monitor)
             self.overlay_callback(title or "Home Assistant", message, data)
         self.log.info("Przekazano wiadomość do nakładki Windows")
@@ -954,9 +953,7 @@ class MqttBridge:
                     self._monitor_total_audio_sessions()
                 if self.config.control_active_app:
                     self._monitor_active(snapshot)
-                if self.config.control_microphone or (
-                    self.config.audio_enhancements_enabled and self.config.automatic_ducking
-                ):
+                if self.config.control_microphone:
                     self._monitor_microphone()
 
                 if now >= next_context and (
@@ -1105,15 +1102,13 @@ class MqttBridge:
         self._publish_text_state(total_audio_session_count_topic(self.config), count)
 
     def _monitor_microphone(self) -> None:
-        snapshot = self.audio.get_microphone_snapshot(self.config.ducking_sensitivity)
+        snapshot = self.audio.get_microphone_snapshot()
         if snapshot is None:
             return
         now = time.monotonic()
         if snapshot.active and not snapshot.muted:
             self._microphone_active_until = now + 1.25
         active = not snapshot.muted and now < self._microphone_active_until
-        if self.config.audio_enhancements_enabled and self.config.automatic_ducking:
-            self._apply_automatic_ducking(active)
         current = (snapshot.volume, snapshot.muted, active)
         if self._last_microphone is None:
             self._last_microphone = current
@@ -1264,22 +1259,6 @@ class MqttBridge:
                 self._publish_switch_state(
                     tracked_device_topic(self.config, device.slug), connected
                 )
-
-    def _apply_automatic_ducking(self, active: bool) -> None:
-        apps = [app for app in self.config.apps if app.enabled]
-        if active and not self._ducked_volumes:
-            snapshot = self.audio.session_snapshot([app.process_name for app in apps])
-            target = self.config.ducking_volume / 100.0
-            for app in apps:
-                state = snapshot.get(app.process_name.casefold())
-                if state is None or state.volume <= target:
-                    continue
-                self._ducked_volumes[app.process_name] = state.volume
-                self.audio.set_volume(app.process_name, target)
-        elif not active and self._ducked_volumes:
-            for process_name, volume in self._ducked_volumes.items():
-                self.audio.set_volume(process_name, volume)
-            self._ducked_volumes.clear()
 
     def _monitor_audio_output(self) -> None:
         outputs = self.audio.list_output_devices()

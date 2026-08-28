@@ -9,11 +9,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QFileDialog, QLabel, QToolTip
 
 from ha_windows_bridge.audio import AudioApplication
 from ha_windows_bridge.config import AppConfig, AudioAppConfig, MqttConfig
 from ha_windows_bridge.gui import MainWindow
+from ha_windows_bridge.system_monitor import PnpDevice
 from ha_windows_bridge.ui_components import AppCard, HelpButton
 
 
@@ -301,37 +303,75 @@ def test_disabling_audio_profiles_does_not_disable_audio_module() -> None:
     window = make_window(config)
     try:
         assert window.audio_enhancements_row.switch.isChecked()
-        assert window.automatic_ducking_row.isEnabled()
+        assert window.channel_balance_row.isEnabled()
         assert window.audio_profiles_list.isEnabled()
 
         window.audio_profiles_row.switch.setChecked(False)
         QApplication.processEvents()
 
         assert window.audio_enhancements_row.switch.isChecked()
-        assert window.automatic_ducking_row.isEnabled()
+        assert window.channel_balance_row.isEnabled()
         assert not window.audio_profiles_list.isEnabled()
         assert not window.automatic_audio_profiles_row.isEnabled()
     finally:
         close_window(window)
 
 
-def test_ducking_sensitivity_is_saved_and_follows_ducking_switch() -> None:
-    config = AppConfig(
-        audio_enhancements_enabled=True,
-        automatic_ducking=True,
-        ducking_sensitivity=73,
-    )
+def test_overlay_defaults_and_device_filters_are_user_facing() -> None:
+    config = AppConfig(overlay_enabled=True)
     window = make_window(config)
     try:
-        assert window.ducking_sensitivity.isEnabled()
-        assert window.ducking_sensitivity.value() == 73
-        assert window.ducking_sensitivity_value.text().startswith("73%")
-        assert window.ducking_sensitivity_value.text().endswith("0%")
-        assert window._config_from_form().ducking_sensitivity == 73
+        saved = window._config_from_form()
+        assert saved.overlay_show_close_button is True
+        assert saved.overlay_corner == "top_right"
+        assert window.device_filter_combo.count() == 3
+        assert window.device_filter_combo.itemText(1) == "Aktywne"
 
-        window.automatic_ducking_row.switch.setChecked(False)
+        manager = window.overlay_manager
+        assert manager is not None
+        manager.allow_fullscreen = True
+        assert manager.handle_message(
+            "Don't encode this",
+            "Plain <text>",
+            {
+                "id": "test",
+                "preset": "warning",
+                "pinned": True,
+                "show_close_button": False,
+                "close_on_click": True,
+            },
+        )
         QApplication.processEvents()
+        assert manager._title.text() == "Don't encode this"
+        assert manager._label.text() == "Plain <text>"
+        assert "rgba(242, 184, 75, 165)" in manager._window.styleSheet()
+        assert manager._close_button.isHidden()
+        QTest.mouseClick(manager._label, Qt.MouseButton.LeftButton)
+        QApplication.processEvents()
+        assert manager._current is None
+    finally:
+        close_window(window)
 
-        assert not window.ducking_sensitivity.isEnabled()
+
+def test_device_filter_separates_active_and_inactive_devices() -> None:
+    window = make_window()
+    try:
+        window._apply_scanned_devices(
+            [
+                PnpDevice("ACTIVE", "Connected headset", "AudioEndpoint", True),
+                PnpDevice("INACTIVE", "Disconnected headset", "AudioEndpoint", False),
+            ]
+        )
+        assert window.devices_list.count() == 2
+
+        window.device_filter_combo.setCurrentIndex(window.device_filter_combo.findData("active"))
+        QApplication.processEvents()
+        assert not window.devices_list.item(0).isHidden()
+        assert window.devices_list.item(1).isHidden()
+
+        window.device_filter_combo.setCurrentIndex(window.device_filter_combo.findData("inactive"))
+        QApplication.processEvents()
+        assert window.devices_list.item(0).isHidden()
+        assert not window.devices_list.item(1).isHidden()
     finally:
         close_window(window)

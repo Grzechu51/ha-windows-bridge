@@ -128,7 +128,7 @@ class WindowsAudioService:
             except Exception:
                 return False
 
-    def get_microphone_snapshot(self, sensitivity: int = 50) -> MicrophoneSnapshot | None:
+    def get_microphone_snapshot(self) -> MicrophoneSnapshot | None:
         with com_scope():
             try:
                 device = AudioUtilities.GetMicrophone()
@@ -148,20 +148,15 @@ class WindowsAudioService:
                 return MicrophoneSnapshot(
                     float(endpoint.GetMasterVolumeLevelScalar()),
                     muted,
-                    self._microphone_signal_active(peaks, muted, sensitivity),
+                    self._microphone_signal_active(peaks, muted),
                     max(peaks, default=0.0),
                 )
             except Exception:
                 return None
 
     @staticmethod
-    def _microphone_signal_active(peaks: list[float], muted: bool, sensitivity: int = 50) -> bool:
-        sensitivity = max(1, min(100, int(sensitivity)))
-        # Audio peak values are logarithmic in practice. A logarithmic mapping
-        # gives useful adjustment across quiet and noisy microphones while
-        # keeping the slider intuitive: higher means more sensitive.
-        threshold = 0.0005 * (200 ** ((100 - sensitivity) / 99))
-        return not muted and any(peak > threshold for peak in peaks)
+    def _microphone_signal_active(peaks: list[float], muted: bool) -> bool:
+        return not muted and any(peak >= 0.008 for peak in peaks)
 
     def set_microphone_volume(self, volume: float) -> bool:
         return self._set_microphone_endpoint(volume=volume)

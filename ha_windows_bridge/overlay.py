@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import base64
 import binascii
-import html
 import io
 import re
 import time
 from collections import deque
 from typing import Any
 
-from PySide6.QtCore import QObject, QRect, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QToolButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from .system_monitor import WindowsSystemMonitor
@@ -26,7 +26,7 @@ from .system_monitor import WindowsSystemMonitor
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 _CORNERS = {"top_left", "top_right", "bottom_left", "bottom_right", "top_center"}
 _PRESET_COLORS = {
-    "default": "#36c98a",
+    "default": "#91a1a8",
     "success": "#43ce89",
     "warning": "#f2b84b",
     "error": "#e4656a",
@@ -37,10 +37,31 @@ _PRESET_COLORS = {
 class OverlayManager(QObject):
     """Passive queued overlay; it never injects into or hooks another process."""
 
-    def __init__(self, duration_seconds: int = 8, allow_fullscreen: bool = False):
+    def __init__(
+        self,
+        duration_seconds: int = 8,
+        allow_fullscreen: bool = False,
+        *,
+        default_monitor: int = 0,
+        default_corner: str = "top_right",
+        default_size: str = "medium",
+        default_opacity: float = 0.94,
+        default_show_close_button: bool = True,
+        default_close_on_click: bool = False,
+        close_tooltip: str = "Close overlay",
+    ):
         super().__init__()
         self.duration_seconds = max(2, min(60, int(duration_seconds)))
         self.allow_fullscreen = bool(allow_fullscreen)
+        self.default_monitor = max(0, min(15, int(default_monitor)))
+        self.default_corner = default_corner if default_corner in _CORNERS else "top_right"
+        self.default_size = (
+            default_size if default_size in {"small", "medium", "large"} else "medium"
+        )
+        self.default_opacity = max(0.65, min(1.0, float(default_opacity)))
+        self.default_show_close_button = bool(default_show_close_button)
+        self.default_close_on_click = bool(default_close_on_click)
+        self.close_tooltip = close_tooltip
         self._monitor = WindowsSystemMonitor()
         self._queue: deque[dict[str, Any]] = deque(maxlen=20)
         self._current: dict[str, Any] | None = None
@@ -141,6 +162,21 @@ class OverlayManager(QObject):
         self._timer = None
         self._progress_timer = None
 
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        card_content = self._card is not None and (
+            watched is self._card
+            or (isinstance(watched, QWidget) and self._card.isAncestorOf(watched))
+        )
+        if (
+            card_content
+            and event.type() == QEvent.Type.MouseButtonRelease
+            and self._current is not None
+            and self._current.get("close_on_click", False)
+        ):
+            self.hide(show_next=True)
+            return True
+        return super().eventFilter(watched, event)
+
     def _show_next(self) -> None:
         if not self._queue:
             return
@@ -172,10 +208,8 @@ class OverlayManager(QObject):
         ):
             return False
 
-        safe_title = html.escape(request["title"])
-        safe_message = html.escape(request["message"]).replace("\n", "<br>")
-        self._title.setText(safe_title)
-        self._label.setText(safe_message)
+        self._title.setText(request["title"])
+        self._label.setText(request["message"])
         self._label.setVisible(bool(request["message"]))
         self._icon.setText(request["icon"])
         self._icon.setVisible(bool(request["icon"]))
@@ -223,14 +257,26 @@ class OverlayManager(QObject):
 
         accent = _PRESET_COLORS[request["preset"]]
         accent_color = QColor(accent)
+        tint_strength = 0.0 if request["preset"] == "default" else 0.08
+        background = tuple(
+            round(base * (1.0 - tint_strength) + value * tint_strength)
+            for base, value in zip(
+                (12, 15, 18),
+                (accent_color.red(), accent_color.green(), accent_color.blue()),
+                strict=True,
+            )
+        )
+        background_alpha = round(255 * request["opacity"])
+        border_alpha = 72 if request["preset"] == "default" else 165
         icon_background = (
             f"rgba({accent_color.red()}, {accent_color.green()}, {accent_color.blue()}, 36)"
         )
-        opacity = request["opacity"]
         self._window.setStyleSheet(
             "QFrame#windowsOverlay { background: transparent; border: none; } "
-            "QFrame#overlayCard { background-color: rgba(12, 15, 18, 232); "
-            "border: 1px solid rgba(214, 225, 229, 42); border-radius: 17px; } "
+            f"QFrame#overlayCard {{ background-color: rgba({background[0]}, "
+            f"{background[1]}, {background[2]}, {background_alpha}); "
+            f"border: 1px solid rgba({accent_color.red()}, {accent_color.green()}, "
+            f"{accent_color.blue()}, {border_alpha}); border-radius: 17px; }} "
             "QLabel { background: transparent; } "
             "QLabel#overlayTitle { color: #f5f8f7; font-size: 15px; "
             "font-weight: 700; } "
@@ -249,11 +295,17 @@ class OverlayManager(QObject):
             "border-radius: 3px; } "
             "QLabel#overlayProgressTime { color: #93a0a5; font-size: 11px; }"
         )
-        self._window.setWindowOpacity(opacity)
-        self._close_button.setVisible(request["pinned"])
+        self._window.setWindowOpacity(1.0)
+        self._close_button.setVisible(request["show_close_button"])
+        interactive = request["show_close_button"] or request["close_on_click"]
         self._window.setAttribute(
             Qt.WidgetAttribute.WA_TransparentForMouseEvents,
-            not request["pinned"],
+            not interactive,
+        )
+        self._card.setCursor(
+            Qt.CursorShape.PointingHandCursor
+            if request["close_on_click"]
+            else Qt.CursorShape.ArrowCursor
         )
         self._card.setFixedWidth(card_width)
         self._window.setFixedWidth(card_width + 20)
@@ -327,6 +379,7 @@ class OverlayManager(QObject):
 
         card = QFrame()
         card.setObjectName("overlayCard")
+        card.installEventFilter(self)
         shadow = QGraphicsDropShadowEffect(card)
         shadow.setBlurRadius(24)
         shadow.setOffset(0, 4)
@@ -358,12 +411,13 @@ class OverlayManager(QObject):
         title = QLabel()
         title.setObjectName("overlayTitle")
         title.setWordWrap(True)
+        title.setTextFormat(Qt.TextFormat.PlainText)
         top.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
         top.addWidget(title, 1, Qt.AlignmentFlag.AlignVCenter)
         close_button = QToolButton()
         close_button.setObjectName("overlayClose")
         close_button.setText("×")
-        close_button.setToolTip("Zamknij")
+        close_button.setToolTip(self.close_tooltip)
         close_button.setFixedSize(26, 26)
         close_button.setVisible(False)
         close_button.clicked.connect(lambda: self.hide(show_next=True))
@@ -371,7 +425,7 @@ class OverlayManager(QObject):
         label = QLabel()
         label.setObjectName("overlayMessage")
         label.setWordWrap(True)
-        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setTextFormat(Qt.TextFormat.PlainText)
         image = QLabel()
         image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         progress = QProgressBar()
@@ -391,6 +445,8 @@ class OverlayManager(QObject):
         progress_time.setObjectName("overlayProgressTime")
         progress_time.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         progress_time.setVisible(False)
+        for clickable in (card, cover, icon, title, label, image, progress, progress_time):
+            clickable.installEventFilter(self)
         progress_row.addWidget(progress, 1)
         progress_row.addWidget(progress_time)
         content.addLayout(progress_row)
@@ -428,12 +484,12 @@ class OverlayManager(QObject):
         preset = str(options.get("preset", "default")).strip().lower()
         if preset not in _PRESET_COLORS:
             preset = "default"
-        corner = str(options.get("corner", "top_right")).strip().lower()
+        corner = str(options.get("corner", self.default_corner)).strip().lower()
         if corner not in _CORNERS:
-            corner = "top_right"
-        size = str(options.get("size", "medium")).strip().lower()
+            corner = self.default_corner
+        size = str(options.get("size", self.default_size)).strip().lower()
         if size not in {"small", "medium", "large"}:
-            size = "medium"
+            size = self.default_size
         layout = str(options.get("layout", "default")).strip().lower()
         if layout not in {"default", "media"}:
             layout = "default"
@@ -447,11 +503,11 @@ class OverlayManager(QObject):
         except (TypeError, ValueError):
             duration = self.duration_seconds
         try:
-            opacity = max(0.35, min(1.0, float(options.get("opacity", 0.88))))
+            opacity = max(0.65, min(1.0, float(options.get("opacity", self.default_opacity))))
         except (TypeError, ValueError):
-            opacity = 0.88
+            opacity = self.default_opacity
         try:
-            monitor = max(0, min(15, int(options.get("monitor", 0))))
+            monitor = max(0, min(15, int(options.get("monitor", self.default_monitor))))
         except (TypeError, ValueError):
             monitor = 0
         try:
@@ -476,6 +532,10 @@ class OverlayManager(QObject):
             "progress": progress,
             "duration": duration,
             "pinned": bool(options.get("pinned", False)),
+            "show_close_button": bool(
+                options.get("show_close_button", self.default_show_close_button)
+            ),
+            "close_on_click": bool(options.get("close_on_click", self.default_close_on_click)),
             "corner": corner,
             "size": size,
             "layout": layout,

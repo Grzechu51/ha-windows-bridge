@@ -365,10 +365,9 @@ def test_microphone_activity_is_held_long_enough_to_be_visible(monkeypatch) -> N
         mqtt=MqttConfig(host="broker"),
         apps=[],
         control_microphone=True,
-        ducking_sensitivity=73,
     )
     audio = FakeAudio()
-    received_sensitivity = []
+    reads = []
     snapshots = iter(
         [
             MicrophoneSnapshot(0.6, False, True),
@@ -376,9 +375,7 @@ def test_microphone_activity_is_held_long_enough_to_be_visible(monkeypatch) -> N
             MicrophoneSnapshot(0.6, False, False),
         ]
     )
-    audio.get_microphone_snapshot = lambda sensitivity=50: (
-        received_sensitivity.append(sensitivity) or next(snapshots)
-    )
+    audio.get_microphone_snapshot = lambda: reads.append(True) or next(snapshots)
     bridge = MqttBridge(config, audio=audio)
     bridge.client = FakeClient()
     bridge._connected.set()
@@ -389,7 +386,7 @@ def test_microphone_activity_is_held_long_enough_to_be_visible(monkeypatch) -> N
     bridge._monitor_microphone()
     bridge._monitor_microphone()
 
-    assert received_sensitivity == [73, 73, 73]
+    assert reads == [True, True, True]
 
     active_states = [
         payload
@@ -557,6 +554,15 @@ def test_power_action_and_notification_commands_are_dispatched() -> None:
         None,
         FakeMessage(
             overlay_notification_topic(config),
+            b'{"title":"","message":"","data":{"action":"update","id":"job","preset":"warning"}}',
+            False,
+        ),
+    )
+    bridge._on_message(
+        None,
+        None,
+        FakeMessage(
+            overlay_notification_topic(config),
             b'{"title":"","message":"","data":{"action":"clear"}}',
             False,
         ),
@@ -573,6 +579,7 @@ def test_power_action_and_notification_commands_are_dispatched() -> None:
             "50%",
             {"action": "show", "id": "job", "progress": 50, "monitor": 0},
         ),
+        ("Home Assistant", "", {"action": "update", "id": "job", "preset": "warning"}),
         ("Home Assistant", "", {"action": "clear"}),
     ]
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.3.1
+
+- nowoczesna nakładka bez zastępczej ikony, z widocznymi stylami, poprawnym tekstem,
+  konfigurowalnym przyciskiem zamknięcia i zamykaniem po kliknięciu;
+- domyślne położenie, monitor, rozmiar i krycie nakładki przeniesione do aplikacji oraz
+  rzeczywisty czas i postęp aktywnej sesji multimediów;
+- czytelniejsze pola akcji Home Assistant bez ręcznego wyboru układu oraz źródła
+  postępu i czasu z encji wraz z mapowaniem własnego zakresu;
+- uproszczone Audio bez automatycznego ściszania i regulacji czułości mikrofonu;
+- edycja pełnych profilów miksu i możliwość uruchamiania jednego profilu przez kilka
+  programów;
+- łączny sensor sesji audio Windows oraz poprawione ikony sensorów sesji aplikacji;
+- wybór monitorowanych woluminów i osobne sensory zajętego oraz wolnego miejsca;
+- filtrowanie urządzeń Windows według stanu aktywne/nieaktywne;
+- poprawione uruchamianie w zasobniku wyłącznie przy autostarcie Windows;
+- zweryfikowane lokalne ikony integracji i udokumentowane ograniczenie ikony na liście
+  HACS wynikające z błędu jego frontendu.
+
 ## 1.3.0
 
 - nowoczesna nakładka bez zastępczej ikony, z przyciskiem zamknięcia przypiętej karty,

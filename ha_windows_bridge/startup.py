@@ -14,9 +14,9 @@ class WindowsStartupManager:
     @staticmethod
     def command() -> str:
         if getattr(sys, "frozen", False):
-            parts = [sys.executable, "--minimized"]
+            parts = [sys.executable, "--autostart"]
         else:
-            parts = [sys.executable, "-m", "ha_windows_bridge", "--minimized"]
+            parts = [sys.executable, "-m", "ha_windows_bridge", "--autostart"]
         return subprocess.list2cmdline(parts)
 
     def is_enabled(self) -> bool:

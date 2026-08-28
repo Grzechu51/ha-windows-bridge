@@ -20,14 +20,37 @@
       }
     }
   },
+  "selector": {
+    "overlay_style": {
+      "options": {
+        "default": "Neutralny",
+        "success": "Sukces",
+        "warning": "Ostrzeżenie",
+        "error": "Błąd",
+        "info": "Informacja"
+      }
+    },
+    "overlay_size": {
+      "options": {"small": "Mały", "medium": "Średni", "large": "Duży"}
+    },
+    "overlay_corner": {
+      "options": {
+        "top_left": "Lewy górny",
+        "top_right": "Prawy górny",
+        "bottom_left": "Lewy dolny",
+        "bottom_right": "Prawy dolny",
+        "top_center": "Środek u góry"
+      }
+    }
+  },
   "services": {
     "show_overlay": {
       "name": "Pokaż nakładkę Windows",
       "description": "Wyświetla zweryfikowaną, pasywną wiadomość na wybranym komputerze z Windows.",
       "fields": {
         "title": {"name": "Tytuł"},
-        "message": {"name": "Wiadomość", "description": "Opcjonalna po włączeniu układu bieżącego Media Playera Windows."},
-        "media": {"name": "Bieżący Media Player Windows", "description": "Używa aktywnej sesji Windows wraz z okładką, tytułem i żywym postępem odtwarzania."},
+        "message": {"name": "Wiadomość", "description": "Opcjonalna po włączeniu bieżących multimediów Windows."},
+        "media": {"name": "Użyj bieżących multimediów Windows", "description": "Automatycznie używa aktywnej sesji z okładką, tytułem i rzeczywistym postępem odtwarzania."},
         "notification_id": {"name": "ID wiadomości", "description": "Stałe ID używane później do aktualizacji lub usunięcia wiadomości."},
         "icon": {"name": "Ikona", "description": "Do ośmiu znaków, na przykład emoji."},
         "image": {"name": "Osadzony obraz", "description": "URI danych PNG, JPEG, GIF lub WebP do 512 KiB."},
@@ -40,13 +63,14 @@
         "duration": {"name": "Czas", "description": "Stały czas wyświetlania w sekundach."},
         "duration_entity": {"name": "Źródło czasu", "description": "Odczytuje czas wyświetlania ze stanu albo wskazanego atrybutu encji."},
         "duration_attribute": {"name": "Atrybut czasu"},
-        "pinned": {"name": "Przypięta"},
+        "pinned": {"name": "Pozostaw do ręcznego zamknięcia", "description": "Wyłącza automatyczne zamknięcie po ustawionym czasie."},
+        "show_close_button": {"name": "Pokaż przycisk zamknięcia", "description": "Nadpisuje domyślne ustawienie aplikacji dla tej wiadomości."},
+        "close_on_click": {"name": "Zamknij po kliknięciu karty", "description": "Nadpisuje domyślne ustawienie aplikacji dla tej wiadomości."},
         "corner": {"name": "Narożnik"},
         "monitor": {"name": "Nadpisanie monitora", "description": "Opcjonalny numer liczony od zera. Zwykle użyj encji Monitor nakładki na urządzeniu."},
         "size": {"name": "Rozmiar"},
-        "layout": {"name": "Układ", "description": "Media umieszcza przekazany obraz obok tytułu i wiadomości."},
-        "opacity": {"name": "Przezroczystość"},
-        "preset": {"name": "Styl"}
+        "opacity": {"name": "Krycie tła", "description": "Tekst, ikony i okładka pozostają w pełni widoczne."},
+        "preset": {"name": "Styl", "description": "Zmienia ramkę, odcień tła i kolor postępu."}
       },
       "sections": {
         "content": {"name": "Treść"},
@@ -63,13 +87,17 @@
         "notification_id": {"name": "ID wiadomości"},
         "title": {"name": "Tytuł"},
         "message": {"name": "Wiadomość"},
-        "media": {"name": "Odśwież z Media Playera Windows"},
+        "media": {"name": "Odśwież z bieżących multimediów Windows"},
+        "preset": {"name": "Styl"},
+        "icon": {"name": "Ikona"},
         "progress": {"name": "Postęp"},
         "progress_entity": {"name": "Źródło postępu"},
         "progress_attribute": {"name": "Atrybut postępu"},
         "progress_min": {"name": "Minimum źródła"},
         "progress_max": {"name": "Maksimum źródła"},
-        "pinned": {"name": "Przypięta"}
+        "pinned": {"name": "Pozostaw do ręcznego zamknięcia"},
+        "show_close_button": {"name": "Pokaż przycisk zamknięcia"},
+        "close_on_click": {"name": "Zamknij po kliknięciu karty"}
       }
     },
     "remove_overlay": {

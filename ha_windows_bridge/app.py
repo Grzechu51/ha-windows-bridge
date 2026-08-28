@@ -114,15 +114,6 @@ QProgressBar#resourceBar::chunk {
     background: #37835f;
     border-radius: 3px;
 }
-QProgressBar#microphoneLevelBar {
-    background: #252a2e;
-    border: none;
-    border-radius: 2px;
-}
-QProgressBar#microphoneLevelBar::chunk {
-    background: #43ba7d;
-    border-radius: 2px;
-}
 QLabel#versionLabel {
     color: #90989e;
 }
@@ -614,6 +605,7 @@ def configure_logging() -> logging.Logger:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--minimized", action="store_true")
+    parser.add_argument("--autostart", action="store_true")
     parser.add_argument("--smoke-test", action="store_true")
     args, _ = parser.parse_known_args(argv)
 
@@ -662,8 +654,7 @@ def main(argv: list[str] | None = None) -> int:
     apply_theme(config.theme)
     set_active_language(config.language)
 
-    configured = not config.validation_errors()
-    launch_minimized = configured and (args.minimized or config.start_minimized)
+    launch_minimized = args.minimized or (args.autostart and config.start_minimized)
     window = MainWindow(
         config,
         store,

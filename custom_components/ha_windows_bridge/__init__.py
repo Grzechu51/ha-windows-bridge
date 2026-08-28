@@ -51,14 +51,15 @@ _OVERLAY_OPTIONS = {
     vol.Optional("duration_entity"): cv.entity_id,
     vol.Optional("duration_attribute"): vol.All(cv.string, vol.Length(max=128)),
     vol.Optional("pinned"): cv.boolean,
+    vol.Optional("show_close_button"): cv.boolean,
+    vol.Optional("close_on_click"): cv.boolean,
     vol.Optional("media"): cv.boolean,
     vol.Optional("corner"): vol.In(
         {"top_left", "top_right", "bottom_left", "bottom_right", "top_center"}
     ),
     vol.Optional("monitor"): vol.All(vol.Coerce(int), vol.Range(min=0, max=15)),
     vol.Optional("size"): vol.In({"small", "medium", "large"}),
-    vol.Optional("layout"): vol.In({"default", "media"}),
-    vol.Optional("opacity"): vol.All(vol.Coerce(float), vol.Range(min=0.35, max=1.0)),
+    vol.Optional("opacity"): vol.All(vol.Coerce(float), vol.Range(min=0.65, max=1.0)),
     vol.Optional("preset"): vol.In({"default", "success", "warning", "error", "info"}),
 }
 _SHOW_OVERLAY_SCHEMA = cv.make_entity_service_schema(
@@ -164,8 +165,8 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
         if notification_id := call.data.get("notification_id"):
             options["id"] = notification_id
         message = str(call.data.get("message", ""))
-        if action in {"show", "update"} and not message and not options.get("media"):
-            raise HomeAssistantError("Provide a message or enable the Media Player layout")
+        if action == "show" and not message and not options.get("media"):
+            raise HomeAssistantError("Provide a message or enable current Windows media")
         payload = json.dumps(
             {
                 "title": call.data.get("title", "Home Assistant" if action == "show" else ""),
