@@ -14,6 +14,6 @@ winrt-Windows.Media.Control==3.2.1
 winrt-Windows.Storage.Streams==3.2.1
 PyInstaller==6.22.0
 pytest==9.1.1
-ruff==0.16.2
+ruff==0.16.4
 bandit==1.9.4
 pip-audit==2.10.1
