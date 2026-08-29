@@ -1,0 +1,132 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "This device is already configured.",
+      "discovery_only": "HA Windows Bridge is discovered automatically after the Windows application connects to MQTT.",
+      "invalid_discovery": "The MQTT discovery message is invalid.",
+      "no_entities": "No entities are enabled in the Windows application."
+    },
+    "step": {
+      "confirm": {
+        "title": "Add {name}",
+        "description": "Do you want to add **{name}**? All enabled controls, switches, sensors and the Media Player will appear in one HA Windows Bridge integration."
+      }
+    }
+  },
+  "entity": {
+    "media_player": {
+      "media_player": {
+        "name": "Media Player"
+      }
+    }
+  },
+  "selector": {
+    "overlay_style": {
+      "options": {
+        "success": "Success",
+        "warning": "Warning",
+        "error": "Error",
+        "info": "Information"
+      }
+    },
+    "overlay_size_mode": {
+      "options": {"auto": "Automatic", "manual": "Manual"}
+    },
+    "overlay_background_effect": {
+      "options": {
+        "none": "Solid",
+        "blur": "Standard blur",
+        "liquid": "Liquid Glass"
+      }
+    },
+    "overlay_corner": {
+      "options": {
+        "top_left": "Top left",
+        "top_right": "Top right",
+        "bottom_left": "Bottom left",
+        "bottom_right": "Bottom right",
+        "top_center": "Top center"
+      }
+    }
+  },
+  "services": {
+    "show_overlay": {
+      "name": "Display Windows overlay",
+      "description": "Displays a customizable card with a message or information about currently playing media.",
+      "fields": {
+        "title": {"name": "Title", "description": "Short heading displayed at the top of the card."},
+        "message": {"name": "Message", "description": "Main card content. Optional when a media source is selected."},
+        "media": {"name": "Current Windows media", "description": "Uses the active media session on the target Windows computer."},
+        "media_player_entity": {"name": "Home Assistant media player", "description": "Uses the selected player's title, artist, artwork and playback progress."},
+        "notification_id": {"name": "Message ID", "description": "Identifier used to update or remove this card later."},
+        "icon": {"name": "Icon", "description": "MDI icon displayed next to the title."},
+        "image": {"name": "Image", "description": "PNG, JPEG, GIF or WebP image supplied as a data URI (up to 512 KiB)."},
+        "qr": {"name": "QR code", "description": "Text or URL encoded as a QR code."},
+        "progress": {"name": "Progress value", "description": "Fills the progress bar from 0 to 100%."},
+        "progress_entity": {"name": "Progress entity", "description": "Reads the value from an entity state or selected attribute."},
+        "progress_attribute": {"name": "Progress attribute"},
+        "progress_min": {"name": "Range start", "description": "Source value corresponding to 0%."},
+        "progress_max": {"name": "Range end", "description": "Source value corresponding to 100%."},
+        "duration": {"name": "Display duration", "description": "Time before the card closes automatically."},
+        "duration_entity": {"name": "Duration entity", "description": "Reads the display duration from an entity state or selected attribute."},
+        "duration_attribute": {"name": "Duration attribute"},
+        "pinned": {"name": "Keep visible"},
+        "show_close_button": {"name": "Close button"},
+        "close_on_click": {"name": "Close on card click"},
+        "corner": {"name": "Screen position"},
+        "edge_offset": {"name": "Edge offset", "description": "Moves the visible card inward from the selected screen edges."},
+        "monitor": {"name": "Monitor", "description": "Optional monitor number. When omitted, uses the setting from the Windows app."},
+        "size_mode": {"name": "Size adjustment", "description": "Automatic mode fits the card to its content; manual mode accepts custom dimensions."},
+        "width": {"name": "Width", "description": "Available with manual sizing."},
+        "height": {"name": "Height", "description": "Available with manual sizing."},
+        "opacity": {"name": "Background opacity", "description": "Controls the card surface without dimming text or icons."},
+        "background_effect": {"name": "Background effect", "description": "Choose a solid surface, standard background blur or layered Liquid Glass."},
+        "preset": {"name": "Accent color", "description": "Applies a contextual color to the border, icon and progress bar."}
+      },
+      "sections": {
+        "content": {"name": "Content"},
+        "appearance": {"name": "Appearance"},
+        "sizing": {"name": "Size"},
+        "progress_options": {"name": "Progress"},
+        "timing": {"name": "Timing and interaction"},
+        "placement": {"name": "Placement"}
+      }
+    },
+    "update_overlay": {
+      "name": "Update Windows overlay",
+      "description": "Updates a displayed or queued card with the selected ID.",
+      "fields": {
+        "notification_id": {"name": "Message ID"},
+        "title": {"name": "Title"},
+        "message": {"name": "Message"},
+        "media": {"name": "Current Windows media"},
+        "media_player_entity": {"name": "Home Assistant media player"},
+        "preset": {"name": "Accent color"},
+        "icon": {"name": "Icon"},
+        "opacity": {"name": "Background opacity"},
+        "background_effect": {"name": "Background effect"},
+        "size_mode": {"name": "Size adjustment"},
+        "width": {"name": "Width"},
+        "height": {"name": "Height"},
+        "edge_offset": {"name": "Edge offset"},
+        "progress": {"name": "Progress value"},
+        "progress_entity": {"name": "Progress entity"},
+        "progress_attribute": {"name": "Progress attribute"},
+        "progress_min": {"name": "Source minimum"},
+        "progress_max": {"name": "Source maximum"},
+        "pinned": {"name": "Keep visible"},
+        "show_close_button": {"name": "Close button"},
+        "close_on_click": {"name": "Close on card click"}
+      }
+    },
+    "remove_overlay": {
+      "name": "Remove Windows overlay",
+      "description": "Removes the displayed or queued card with the selected ID.",
+      "fields": {"notification_id": {"name": "Message ID"}}
+    },
+    "clear_overlay": {
+      "name": "Clear Windows overlays",
+      "description": "Closes the current card and removes all queued cards."
+    }
+  }
+}

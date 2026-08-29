@@ -1,0 +1,322 @@
+show_overlay:
+  target:
+    entity:
+      domain: notify
+      integration: ha_windows_bridge
+  fields:
+    notification_id:
+      selector:
+        text:
+    content:
+      collapsed: false
+      fields:
+        title:
+          selector:
+            text:
+        message:
+          selector:
+            text:
+              multiline: true
+        media:
+          selector:
+            constant:
+              value: true
+        media_player_entity:
+          selector:
+            entity:
+              domain: media_player
+    appearance:
+      collapsed: true
+      fields:
+        preset:
+          selector:
+            select:
+              translation_key: overlay_style
+              options:
+                - success
+                - warning
+                - error
+                - info
+        icon:
+          selector:
+            icon:
+        background_effect:
+          required: true
+          default: none
+          selector:
+            select:
+              translation_key: overlay_background_effect
+              options:
+                - none
+                - blur
+                - liquid
+        opacity:
+          required: true
+          default: 0.94
+          selector:
+            number:
+              min: 0
+              max: 1
+              step: 0.05
+              mode: slider
+        qr:
+          selector:
+            text:
+        image:
+          selector:
+            text:
+              multiline: true
+    sizing:
+      collapsed: true
+      fields:
+        size_mode:
+          required: true
+          default: auto
+          selector:
+            select:
+              translation_key: overlay_size_mode
+              options:
+                - auto
+                - manual
+        width:
+          required: true
+          default: 400
+          selector:
+            number:
+              min: 240
+              max: 1200
+              step: 10
+              unit_of_measurement: px
+              mode: box
+        height:
+          required: true
+          default: 160
+          selector:
+            number:
+              min: 90
+              max: 900
+              step: 10
+              unit_of_measurement: px
+              mode: box
+    progress_options:
+      collapsed: true
+      fields:
+        progress:
+          selector:
+            number:
+              min: 0
+              max: 100
+              mode: slider
+        progress_entity:
+          selector:
+            entity:
+              domain:
+                - sensor
+                - number
+                - input_number
+        progress_attribute:
+          selector:
+            text:
+        progress_min:
+          selector:
+            number:
+              mode: box
+        progress_max:
+          selector:
+            number:
+              mode: box
+    timing:
+      collapsed: true
+      fields:
+        duration:
+          required: true
+          default: 8
+          selector:
+            number:
+              min: 2
+              max: 60
+              unit_of_measurement: s
+        duration_entity:
+          selector:
+            entity:
+              domain:
+                - sensor
+                - number
+                - input_number
+        duration_attribute:
+          selector:
+            text:
+        pinned:
+          selector:
+            constant:
+              value: true
+        show_close_button:
+          selector:
+            constant:
+              value: true
+        close_on_click:
+          selector:
+            constant:
+              value: true
+    placement:
+      collapsed: true
+      fields:
+        corner:
+          required: true
+          default: top_right
+          selector:
+            select:
+              translation_key: overlay_corner
+              options:
+                - top_left
+                - top_right
+                - bottom_left
+                - bottom_right
+                - top_center
+        edge_offset:
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 240
+              step: 1
+              unit_of_measurement: px
+              mode: box
+        monitor:
+          selector:
+            number:
+              min: 0
+              max: 15
+              mode: box
+
+update_overlay:
+  target:
+    entity:
+      domain: notify
+      integration: ha_windows_bridge
+  fields:
+    notification_id:
+      required: true
+      selector:
+        text:
+    title:
+      selector:
+        text:
+    message:
+      selector:
+        text:
+          multiline: true
+    media:
+      selector:
+        constant:
+          value: true
+    media_player_entity:
+      selector:
+        entity:
+          domain: media_player
+    preset:
+      selector:
+        select:
+          translation_key: overlay_style
+          options:
+            - success
+            - warning
+            - error
+            - info
+    icon:
+      selector:
+        icon:
+    background_effect:
+      selector:
+        select:
+          translation_key: overlay_background_effect
+          options:
+            - none
+            - blur
+            - liquid
+    opacity:
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.05
+          mode: slider
+    size_mode:
+      selector:
+        select:
+          translation_key: overlay_size_mode
+          options:
+            - auto
+            - manual
+    width:
+      selector:
+        number:
+          min: 240
+          max: 1200
+          step: 10
+          mode: box
+    height:
+      selector:
+        number:
+          min: 90
+          max: 900
+          step: 10
+          mode: box
+    edge_offset:
+      selector:
+        number:
+          min: 0
+          max: 240
+          step: 1
+          unit_of_measurement: px
+          mode: box
+    progress:
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
+    progress_entity:
+      selector:
+        entity:
+          domain:
+            - sensor
+            - number
+            - input_number
+    progress_attribute:
+      selector:
+        text:
+    progress_min:
+      selector:
+        number:
+          mode: box
+    progress_max:
+      selector:
+        number:
+          mode: box
+    pinned:
+      selector:
+        boolean:
+    show_close_button:
+      selector:
+        boolean:
+    close_on_click:
+      selector:
+        boolean:
+
+remove_overlay:
+  target:
+    entity:
+      domain: notify
+      integration: ha_windows_bridge
+  fields:
+    notification_id:
+      required: true
+      selector:
+        text:
+
+clear_overlay:
+  target:
+    entity:
+      domain: notify
+      integration: ha_windows_bridge

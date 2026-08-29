@@ -1,0 +1,132 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "To urządzenie jest już skonfigurowane.",
+      "discovery_only": "HA Windows Bridge zostanie wykryty automatycznie po połączeniu aplikacji Windows z MQTT.",
+      "invalid_discovery": "Wiadomość wykrywania MQTT jest nieprawidłowa.",
+      "no_entities": "W aplikacji Windows nie włączono żadnych encji."
+    },
+    "step": {
+      "confirm": {
+        "title": "Dodaj {name}",
+        "description": "Czy chcesz dodać komputer **{name}**? Wszystkie włączone regulatory, przełączniki, sensory i Media Player będą widoczne w jednej integracji HA Windows Bridge."
+      }
+    }
+  },
+  "entity": {
+    "media_player": {
+      "media_player": {
+        "name": "Media Player"
+      }
+    }
+  },
+  "selector": {
+    "overlay_style": {
+      "options": {
+        "success": "Sukces",
+        "warning": "Ostrzeżenie",
+        "error": "Błąd",
+        "info": "Informacja"
+      }
+    },
+    "overlay_size_mode": {
+      "options": {"auto": "Automatyczny", "manual": "Ręczny"}
+    },
+    "overlay_background_effect": {
+      "options": {
+        "none": "Jednolite tło",
+        "blur": "Standardowe rozmycie",
+        "liquid": "Liquid Glass"
+      }
+    },
+    "overlay_corner": {
+      "options": {
+        "top_left": "Lewy górny",
+        "top_right": "Prawy górny",
+        "bottom_left": "Lewy dolny",
+        "bottom_right": "Prawy dolny",
+        "top_center": "Środek u góry"
+      }
+    }
+  },
+  "services": {
+    "show_overlay": {
+      "name": "Wyświetl nakładkę Windows",
+      "description": "Wyświetla konfigurowalną kartę z wiadomością lub informacjami o odtwarzanych multimediach.",
+      "fields": {
+        "title": {"name": "Tytuł", "description": "Krótki nagłówek wyświetlany u góry karty."},
+        "message": {"name": "Wiadomość", "description": "Główna treść karty. Może pozostać pusta po wybraniu źródła multimediów."},
+        "media": {"name": "Bieżące multimedia Windows", "description": "Używa aktywnej sesji multimediów na docelowym komputerze."},
+        "media_player_entity": {"name": "Odtwarzacz Home Assistant", "description": "Pobiera tytuł, wykonawcę, okładkę i postęp z wybranego odtwarzacza."},
+        "notification_id": {"name": "ID wiadomości", "description": "Identyfikator używany do późniejszej aktualizacji lub usunięcia karty."},
+        "icon": {"name": "Ikona", "description": "Ikona MDI wyświetlana obok tytułu."},
+        "image": {"name": "Obraz", "description": "Grafika PNG, JPEG, GIF lub WebP przekazana jako data URI (maks. 512 KiB)."},
+        "qr": {"name": "Kod QR", "description": "Tekst lub adres zapisany w kodzie QR."},
+        "progress": {"name": "Wartość postępu", "description": "Wypełnienie paska w zakresie od 0 do 100%."},
+        "progress_entity": {"name": "Encja postępu", "description": "Pobiera wartość ze stanu lub wybranego atrybutu encji."},
+        "progress_attribute": {"name": "Atrybut postępu"},
+        "progress_min": {"name": "Początek zakresu", "description": "Wartość źródłowa odpowiadająca 0%."},
+        "progress_max": {"name": "Koniec zakresu", "description": "Wartość źródłowa odpowiadająca 100%."},
+        "duration": {"name": "Czas wyświetlania", "description": "Czas do automatycznego zamknięcia karty."},
+        "duration_entity": {"name": "Encja czasu", "description": "Pobiera czas wyświetlania ze stanu lub wybranego atrybutu encji."},
+        "duration_attribute": {"name": "Atrybut czasu"},
+        "pinned": {"name": "Wyświetlaj do zamknięcia"},
+        "show_close_button": {"name": "Przycisk zamknięcia"},
+        "close_on_click": {"name": "Zamykanie kliknięciem"},
+        "corner": {"name": "Położenie na ekranie"},
+        "edge_offset": {"name": "Odstęp od krawędzi", "description": "Odsuwa widoczną kartę od wybranych krawędzi ekranu."},
+        "monitor": {"name": "Monitor", "description": "Opcjonalny numer monitora. Brak wartości używa ustawienia z aplikacji Windows."},
+        "size_mode": {"name": "Dopasowanie rozmiaru", "description": "Tryb automatyczny dobiera wymiary do treści; tryb ręczny pozwala podać własne."},
+        "width": {"name": "Szerokość", "description": "Dostępna w trybie ręcznego rozmiaru."},
+        "height": {"name": "Wysokość", "description": "Dostępna w trybie ręcznego rozmiaru."},
+        "opacity": {"name": "Krycie tła", "description": "Reguluje widoczność powierzchni karty bez przyciemniania tekstu i ikon."},
+        "background_effect": {"name": "Efekt tła", "description": "Wybierz jednolite tło, standardowe rozmycie lub warstwowy efekt Liquid Glass."},
+        "preset": {"name": "Kolor akcentu", "description": "Nadaje ramce, ikonie i paskowi postępu kolor odpowiedni do komunikatu."}
+      },
+      "sections": {
+        "content": {"name": "Treść"},
+        "appearance": {"name": "Wygląd"},
+        "sizing": {"name": "Rozmiar"},
+        "progress_options": {"name": "Postęp"},
+        "timing": {"name": "Czas i interakcje"},
+        "placement": {"name": "Położenie"}
+      }
+    },
+    "update_overlay": {
+      "name": "Aktualizuj nakładkę Windows",
+      "description": "Aktualizuje wyświetlaną lub oczekującą kartę o wskazanym ID.",
+      "fields": {
+        "notification_id": {"name": "ID wiadomości"},
+        "title": {"name": "Tytuł"},
+        "message": {"name": "Wiadomość"},
+        "media": {"name": "Bieżące multimedia Windows"},
+        "media_player_entity": {"name": "Odtwarzacz Home Assistant"},
+        "preset": {"name": "Kolor akcentu"},
+        "icon": {"name": "Ikona"},
+        "opacity": {"name": "Krycie tła"},
+        "background_effect": {"name": "Efekt tła"},
+        "size_mode": {"name": "Dopasowanie rozmiaru"},
+        "width": {"name": "Szerokość"},
+        "height": {"name": "Wysokość"},
+        "edge_offset": {"name": "Odstęp od krawędzi"},
+        "progress": {"name": "Wartość postępu"},
+        "progress_entity": {"name": "Encja postępu"},
+        "progress_attribute": {"name": "Atrybut postępu"},
+        "progress_min": {"name": "Minimum źródła"},
+        "progress_max": {"name": "Maksimum źródła"},
+        "pinned": {"name": "Wyświetlaj do zamknięcia"},
+        "show_close_button": {"name": "Przycisk zamknięcia"},
+        "close_on_click": {"name": "Zamykanie kliknięciem"}
+      }
+    },
+    "remove_overlay": {
+      "name": "Usuń nakładkę Windows",
+      "description": "Usuwa wyświetlaną lub oczekującą kartę o wskazanym ID.",
+      "fields": {"notification_id": {"name": "ID wiadomości"}}
+    },
+    "clear_overlay": {
+      "name": "Wyczyść nakładki Windows",
+      "description": "Zamyka bieżącą kartę i usuwa wszystkie oczekujące."
+    }
+  }
+}
