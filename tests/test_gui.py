@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,17 @@ from ha_windows_bridge.gui import MainWindow
 from ha_windows_bridge.overlay import OverlayCard, OverlayManager
 from ha_windows_bridge.system_monitor import PnpDevice
 from ha_windows_bridge.ui_components import AppCard, HelpButton
+
+
+def wait_for_qt_condition(
+    predicate: Callable[[], bool], timeout_ms: int = 2_000, interval_ms: int = 20
+) -> bool:
+    attempts = max(1, (timeout_ms + interval_ms - 1) // interval_ms)
+    for _ in range(attempts):
+        if predicate():
+            return True
+        QTest.qWait(interval_ms)
+    return predicate()
 
 
 class FakeStore:
@@ -717,8 +729,7 @@ def test_overlay_animates_show_resize_and_hide_when_system_allows_it() -> None:
             },
         )
         assert manager._animation is not None
-        QTest.qWait(580)
-        assert manager._animation is None
+        assert wait_for_qt_condition(lambda: manager._animation is None)
         assert manager._card.size() == QSize(420, 180)
         assert manager._window.windowOpacity() == 1.0
 
@@ -728,8 +739,7 @@ def test_overlay_animates_show_resize_and_hide_when_system_allows_it() -> None:
             {"action": "update", "id": "animation", "size_mode": "auto"},
         )
         assert manager._animation is not None
-        QTest.qWait(430)
-        assert manager._animation is None
+        assert wait_for_qt_condition(lambda: manager._animation is None)
         assert manager._card.height() < 120
 
         manager.hide(show_next=False)
@@ -739,8 +749,7 @@ def test_overlay_animates_show_resize_and_hide_when_system_allows_it() -> None:
         assert manager._window.isVisible()
         assert 0.0 < manager._window.windowOpacity() < 1.0
         assert manager._card.width() < start_width
-        QTest.qWait(240)
-        assert manager._window.isHidden()
+        assert wait_for_qt_condition(manager._window.isHidden)
     finally:
         manager.close()
 
