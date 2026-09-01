@@ -9,6 +9,7 @@ from ha_windows_bridge.config import (
     AppConfig,
     AudioAppConfig,
     DpapiSecretBackend,
+    HomeAssistantConfig,
     MqttConfig,
     SettingsStore,
     default_apps,
@@ -61,6 +62,29 @@ def test_settings_round_trip_keeps_password_out_of_json(tmp_path) -> None:
     assert store.load().apps[0].allow_remote_start is True
     assert store.load().apps[0].allow_remote_close is True
     assert store.load().theme == "light"
+
+
+def test_direct_home_assistant_token_is_encrypted_separately(tmp_path) -> None:
+    mqtt_secrets = FakeSecrets()
+    ha_secrets = FakeSecrets()
+    store = SettingsStore(tmp_path, mqtt_secrets, ha_secrets)
+    config = AppConfig(
+        mqtt=MqttConfig(),
+        home_assistant=HomeAssistantConfig(
+            enabled=True,
+            url="https://homeassistant.local:8123/",
+            token="ha-token",
+        ),
+    )
+
+    store.save(config)
+    saved = store.config_path.read_text(encoding="utf-8")
+    loaded = store.load()
+
+    assert "ha-token" not in saved
+    assert loaded.home_assistant.token == "ha-token"
+    assert loaded.home_assistant.url == "https://homeassistant.local:8123"
+    assert loaded.validation_errors() == []
 
 
 def test_duplicate_enabled_slugs_are_rejected() -> None:
@@ -175,7 +199,7 @@ def test_version_04_optional_features_are_disabled_during_migration() -> None:
         }
     )
 
-    assert legacy.schema_version == 12
+    assert legacy.schema_version == 13
     assert legacy.control_active_app is False
     assert legacy.publish_activity is False
     assert legacy.publish_idle is False
@@ -195,7 +219,7 @@ def test_version_12_hardware_telemetry_is_migrated_to_cpu_and_gpu() -> None:
         }
     )
 
-    assert migrated.schema_version == 12
+    assert migrated.schema_version == 13
     assert migrated.publish_cpu_stats is True
     assert migrated.publish_gpu_stats is True
 

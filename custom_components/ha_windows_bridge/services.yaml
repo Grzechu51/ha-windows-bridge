@@ -25,6 +25,41 @@ show_overlay:
           selector:
             entity:
               domain: media_player
+        layout:
+          required: true
+          default: auto
+          selector:
+            select:
+              translation_key: overlay_layout
+              options:
+                - auto
+                - compact
+                - standard
+                - media
+                - camera
+        channel:
+          required: true
+          default: general
+          selector:
+            select:
+              translation_key: overlay_channel
+              options:
+                - general
+                - security
+                - system
+                - media
+                - work
+        priority:
+          required: true
+          default: normal
+          selector:
+            select:
+              translation_key: overlay_priority
+              options:
+                - low
+                - normal
+                - high
+                - critical
     appearance:
       collapsed: true
       fields:
@@ -158,6 +193,14 @@ show_overlay:
           selector:
             constant:
               value: true
+        pause_on_hover:
+          selector:
+            constant:
+              value: true
+        show_lifetime:
+          selector:
+            constant:
+              value: true
     placement:
       collapsed: true
       fields:
@@ -214,6 +257,35 @@ update_overlay:
       selector:
         entity:
           domain: media_player
+    layout:
+      selector:
+        select:
+          translation_key: overlay_layout
+          options:
+            - auto
+            - compact
+            - standard
+            - media
+            - camera
+    channel:
+      selector:
+        select:
+          translation_key: overlay_channel
+          options:
+            - general
+            - security
+            - system
+            - media
+            - work
+    priority:
+      selector:
+        select:
+          translation_key: overlay_priority
+          options:
+            - low
+            - normal
+            - high
+            - critical
     preset:
       selector:
         select:
@@ -303,6 +375,12 @@ update_overlay:
     close_on_click:
       selector:
         boolean:
+    pause_on_hover:
+      selector:
+        boolean:
+    show_lifetime:
+      selector:
+        boolean:
 
 remove_overlay:
   target:
@@ -320,3 +398,14 @@ clear_overlay:
     entity:
       domain: notify
       integration: ha_windows_bridge
+  fields:
+    channel:
+      selector:
+        select:
+          translation_key: overlay_channel
+          options:
+            - general
+            - security
+            - system
+            - media
+            - work

@@ -1,8 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
+
+def _is_foreign_windows_icu(binary):
+    """Reject ICU builds accidentally discovered in an external PATH entry.
+
+    Qt for Windows links against the system ``icuuc.dll``.  Packaging another
+    project's version (for example Poppler's versioned ICU) makes QtCore fail
+    during startup with ERROR_PROC_NOT_FOUND.
+    """
+    target_name = str(binary[0]).replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return target_name == "icuuc.dll" or target_name.startswith("icudt")
+
 hiddenimports = (
     collect_submodules("pycaw")
+    + collect_submodules("dxcam")
     + ["qrcode", "qrcode.image.pil"]
     + collect_submodules("winrt")
 )
@@ -24,6 +36,7 @@ a = Analysis(
     noarchive=False,
     optimize=1,
 )
+a.binaries = [binary for binary in a.binaries if not _is_foreign_windows_icu(binary)]
 pyz = PYZ(a.pure)
 
 exe = EXE(

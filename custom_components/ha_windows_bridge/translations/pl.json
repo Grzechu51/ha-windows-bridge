@@ -10,6 +10,11 @@
       "confirm": {
         "title": "Dodaj {name}",
         "description": "Czy chcesz dodać komputer **{name}**? Wszystkie włączone regulatory, przełączniki, sensory i Media Player będą widoczne w jednej integracji HA Windows Bridge."
+      },
+      "user": {
+        "title": "Dodaj bezpośrednią nakładkę Windows",
+        "description": "Tworzy lokalny kanał WebSocket dla nakładek bez brokera MQTT. Podaj ten sam identyfikator urządzenia, który wyświetla aplikacja Windows.",
+        "data": {"name": "Nazwa komputera", "device_id": "ID urządzenia"}
       }
     }
   },
@@ -39,6 +44,15 @@
         "liquid": "Liquid Glass"
       }
     },
+    "overlay_layout": {
+      "options": {"auto": "Automatyczny", "compact": "Kompaktowy", "standard": "Standardowy", "media": "Multimedia", "camera": "Kamera priorytetowa"}
+    },
+    "overlay_channel": {
+      "options": {"general": "Ogólny", "security": "Bezpieczeństwo", "system": "System", "media": "Multimedia", "work": "Praca"}
+    },
+    "overlay_priority": {
+      "options": {"low": "Niski", "normal": "Normalny", "high": "Wysoki", "critical": "Krytyczny"}
+    },
     "overlay_corner": {
       "options": {
         "top_left": "Lewy górny",
@@ -58,6 +72,9 @@
         "message": {"name": "Wiadomość", "description": "Główna treść karty. Może pozostać pusta po wybraniu źródła multimediów."},
         "media": {"name": "Bieżące multimedia Windows", "description": "Używa aktywnej sesji multimediów na docelowym komputerze."},
         "media_player_entity": {"name": "Odtwarzacz Home Assistant", "description": "Pobiera tytuł, wykonawcę, okładkę i postęp z wybranego odtwarzacza."},
+        "layout": {"name": "Układ treści", "description": "Tryb automatyczny dobiera układ kompaktowy, standardowy, multimedialny lub kamerę do przekazanej treści."},
+        "channel": {"name": "Kanał", "description": "Grupuje powiązane karty i pozwala niezależnie wyczyścić jeden kanał."},
+        "priority": {"name": "Priorytet", "description": "Karty o wyższym priorytecie są wyświetlane przed zwykłymi wiadomościami w kolejce."},
         "notification_id": {"name": "ID wiadomości", "description": "Identyfikator używany do późniejszej aktualizacji lub usunięcia karty."},
         "icon": {"name": "Ikona", "description": "Ikona MDI wyświetlana obok tytułu."},
         "image": {"name": "Obraz", "description": "Grafika PNG, JPEG, GIF lub WebP przekazana jako data URI (maks. 512 KiB)."},
@@ -73,6 +90,8 @@
         "pinned": {"name": "Wyświetlaj do zamknięcia"},
         "show_close_button": {"name": "Przycisk zamknięcia"},
         "close_on_click": {"name": "Zamykanie kliknięciem"},
+        "pause_on_hover": {"name": "Wstrzymaj po najechaniu", "description": "Zatrzymuje odliczanie, gdy wskaźnik znajduje się nad kartą."},
+        "show_lifetime": {"name": "Pasek czasu wyświetlania", "description": "Pokazuje u dołu karty czas pozostały do automatycznego zamknięcia."},
         "corner": {"name": "Położenie na ekranie"},
         "edge_offset": {"name": "Odstęp od krawędzi", "description": "Odsuwa widoczną kartę od wybranych krawędzi ekranu."},
         "monitor": {"name": "Monitor", "description": "Opcjonalny numer monitora. Brak wartości używa ustawienia z aplikacji Windows."},
@@ -101,6 +120,9 @@
         "message": {"name": "Wiadomość"},
         "media": {"name": "Bieżące multimedia Windows"},
         "media_player_entity": {"name": "Odtwarzacz Home Assistant"},
+        "layout": {"name": "Układ treści"},
+        "channel": {"name": "Kanał"},
+        "priority": {"name": "Priorytet"},
         "preset": {"name": "Kolor akcentu"},
         "icon": {"name": "Ikona"},
         "opacity": {"name": "Krycie tła"},
@@ -116,7 +138,9 @@
         "progress_max": {"name": "Maksimum źródła"},
         "pinned": {"name": "Wyświetlaj do zamknięcia"},
         "show_close_button": {"name": "Przycisk zamknięcia"},
-        "close_on_click": {"name": "Zamykanie kliknięciem"}
+        "close_on_click": {"name": "Zamykanie kliknięciem"},
+        "pause_on_hover": {"name": "Wstrzymaj po najechaniu"},
+        "show_lifetime": {"name": "Pasek czasu wyświetlania"}
       }
     },
     "remove_overlay": {
@@ -126,7 +150,8 @@
     },
     "clear_overlay": {
       "name": "Wyczyść nakładki Windows",
-      "description": "Zamyka bieżącą kartę i usuwa wszystkie oczekujące."
+      "description": "Zamyka bieżące i oczekujące karty globalnie albo tylko w wybranym kanale.",
+      "fields": {"channel": {"name": "Kanał"}}
     }
   }
 }

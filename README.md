@@ -54,6 +54,13 @@ Przy instalacji ręcznej skopiuj `custom_components/ha_windows_bridge` do
 `HA-Windows-Bridge-0.9.0-win64.zip` to wersja przenośna. Po rozpakowaniu zachowaj cały
 katalog wraz z folderem `_internal`.
 
+### Wersja testowa 0.10.0-beta.1
+
+W HACS włącz dla tego repozytorium obsługę wersji **pre-release/beta**, a następnie
+wybierz **Redownload → Need a different version? → v0.10.0-beta.1**. Aplikację Windows
+pobierz z wydania oznaczonego **Pre-release** na GitHubie. Stabilne `v0.9.0` pozostaje
+wydaniem domyślnym.
+
 ## Pierwsze uruchomienie
 
 1. Podaj adres, port, użytkownika i hasło MQTT.
@@ -112,12 +119,17 @@ width: 520
 height: 220
 ```
 
-Pole **Efekt tła** pozwala wybrać jednolitą powierzchnię, standardowe rozmycie albo
-warstwowy efekt **Liquid Glass**. Widoczność powierzchni reguluje **Krycie tła**.
-Standardowe rozmycie i Liquid Glass odświeżają pulpit pod widoczną kartą. Przy zdalnym
-pulpicie, błędach przechwytywania lub zbyt wolnym renderowaniu Liquid Glass
-automatycznie użyje lżejszego rozmycia. Pole **Odstęp od krawędzi** odsuwa widoczną
-kartę w głąb ekranu. Ikonę wybiera się z biblioteki MDI Home Assistant.
+Pole **Efekt tła** pozwala wybrać jednolitą powierzchnię, natywny Windows Desktop
+Acrylic albo warstwowy efekt **Liquid Glass**. Liquid Glass przechwytuje pulpit przez
+DXGI Desktop Duplication i automatycznie ogranicza częstotliwość odświeżania, gdy obraz
+się nie zmienia. Przy zdalnym pulpicie, błędach sterownika lub słabszym sprzęcie używany
+jest bezpieczny tryb zgodności. Pole **Odstęp od krawędzi** odsuwa widoczną kartę w głąb
+ekranu. Ikonę wybiera się z biblioteki MDI Home Assistant.
+
+Tryb automatyczny dobiera układ kompaktowy, standardowy, multimedialny albo kamerę.
+Kanały (`general`, `security`, `system`, `media`, `work`) porządkują kolejkę, a priorytet
+decyduje o kolejności wyświetlania. `show_lifetime` włącza pasek pozostałego czasu,
+a `pause_on_hover` zatrzymuje automatyczne zamknięcie po najechaniu.
 
 Zamiast sesji z komputera możesz wskazać dowolną encję `media_player` dostępną w Home
 Assistant. Nakładka pobierze jej tytuł, wykonawcę, postęp i okładkę:
@@ -138,6 +150,64 @@ progress: "{{ (states('sensor.postep') | float * 100) | round }}"
 
 Istniejącą wiadomość z `notification_id` zmienisz akcją `update_overlay`, usuniesz
 przez `remove_overlay`, a całą kolejkę wyczyścisz przez `clear_overlay`.
+
+## Testowanie lokalne przed publikacją
+
+Zmiany można sprawdzać bez commita, taga i GitHuba. W zakładce **Funkcje → Nakładka**
+włącz wiadomości ekranowe i użyj sekcji **Wzorce testowe**. Dostępne są warianty krótkiej
+i długiej treści, Liquid Glass, kamery priorytetowej oraz kanałów.
+
+Uruchomienie z kodu źródłowego:
+
+```powershell
+cd "F:\Codex\HA MQTT PC"
+.\.venv\Scripts\python.exe main.py
+```
+
+Pełne testy lokalne:
+
+```powershell
+.\scripts\test_local.ps1
+```
+
+Skrypt uruchamia lint, 141 testów, buduje lokalną paczkę Windows i sprawdza jej start.
+Gotowy program znajduje się w `dist\HA Windows Bridge`. Żaden z tych kroków nie tworzy
+commita, taga ani wydania na GitHubie.
+
+## Bezpośredni kanał Home Assistant
+
+Nakładki mogą docierać lokalnym WebSocketem bez brokera MQTT:
+
+1. Wgraj bieżący katalog `custom_components/ha_windows_bridge` do
+   `/config/custom_components/ha_windows_bridge` i ponownie uruchom Home Assistant.
+2. W HA wybierz **Ustawienia → Urządzenia i usługi → Dodaj integrację → HA Windows
+   Bridge**. Podaj nazwę komputera i dokładne ID widoczne na stronie połączenia aplikacji.
+3. W profilu użytkownika HA, na karcie **Bezpieczeństwo**, utwórz długoterminowy token.
+4. W aplikacji otwórz **Połączenie**, zaznacz **Włącz połączenie bezpośrednie**, wpisz
+   adres HA z `http://` lub `https://`, wklej token i wybierz **Testuj połączenie**.
+5. Włącz **Funkcje → Nakładka → Wiadomości na ekranie**, zapisz ustawienia i uruchom
+   usługę.
+
+Przykładowe wywołanie w **Narzędzia deweloperskie → Akcje**:
+
+```yaml
+action: ha_windows_bridge.show_overlay
+target:
+  entity_id: notify.windows_pc_overlay
+data:
+  title: Test WebSocket
+  message: Bezpośrednie połączenie z Home Assistant działa.
+  background_effect: liquid
+  duration: 10
+  show_lifetime: true
+  pause_on_hover: true
+```
+
+Zastąp `notify.windows_pc_overlay` encją utworzoną przez integrację. Token jest
+szyfrowany przez Windows DPAPI i nie trafia do pliku konfiguracji ani eksportu.
+
+Ten kanał obsługuje obecnie nakładki i powiadomienia. Telemetria oraz sterowanie Windows
+pozostają dostępne przez MQTT; oba połączenia mogą działać równolegle.
 
 ## Aktualizacje i diagnostyka
 

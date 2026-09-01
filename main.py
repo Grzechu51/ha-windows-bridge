@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
 import sys
+import traceback
+from contextlib import suppress
+from pathlib import Path
 
 
 def _run() -> int:
@@ -11,6 +15,10 @@ def _run() -> int:
         # interactive traceback dialog, otherwise a broken release build can
         # block CI indefinitely.
         if "--smoke-test" in sys.argv:
+            diagnostic_path = os.environ.get("HA_WINDOWS_BRIDGE_SMOKE_LOG", "").strip()
+            if diagnostic_path:
+                with suppress(OSError):
+                    Path(diagnostic_path).write_text(traceback.format_exc(), encoding="utf-8")
             return 86
         raise
     return main()

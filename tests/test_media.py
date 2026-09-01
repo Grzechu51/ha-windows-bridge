@@ -309,9 +309,11 @@ def test_home_assistant_integration_files_are_valid_json() -> None:
         assert isinstance(json.loads(path.read_text(encoding="utf-8")), dict)
 
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["dependencies"] == ["mqtt"]
+    assert manifest["after_dependencies"] == ["mqtt"]
     assert manifest["mqtt"] == ["ha-windows-bridge/devices/+"]
-    assert manifest["version"] == "0.9.0"
+    from ha_windows_bridge import __version__
+
+    assert manifest["version"] == __version__
     assert manifest["codeowners"] == ["@Grzechu51"]
     assert manifest["documentation"] == "https://github.com/Grzechu51/ha-windows-bridge"
     assert manifest["issue_tracker"].endswith("/Grzechu51/ha-windows-bridge/issues")

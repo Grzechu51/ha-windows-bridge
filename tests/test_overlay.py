@@ -1,8 +1,20 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QRect
+from PySide6.QtCore import QPoint, QRect
 
 from ha_windows_bridge.overlay import OverlayManager
+
+
+def test_cpu_capture_bounds_respect_per_monitor_dpi() -> None:
+    bounds = OverlayManager._physical_capture_bounds(  # noqa: SLF001
+        QPoint(-2520, 20),
+        200,
+        100,
+        QRect(-2560, 0, 1707, 960),
+        1.5,
+    )
+
+    assert bounds == (-2500, 30, -2200, 180)
 
 
 def test_overlay_request_is_bounded_and_uses_safe_defaults() -> None:
@@ -111,6 +123,44 @@ def test_overlay_queue_can_update_remove_and_clear_messages() -> None:
     assert not manager._queue  # noqa: SLF001
     assert manager.handle_message("", "", {"action": "clear"})
     assert manager._current is None  # noqa: SLF001
+
+
+def test_overlay_channels_priorities_and_automatic_layouts() -> None:
+    manager = OverlayManager()
+    manager._display = lambda _request: True  # type: ignore[method-assign]  # noqa: SLF001
+
+    assert manager.handle_message(
+        "Routine", "Queued", {"id": "routine", "channel": "general", "priority": "low"}
+    )
+    assert manager.handle_message(
+        "Security", "Motion", {"id": "camera", "channel": "security", "priority": "critical"}
+    )
+    assert manager._current["id"] == "camera"  # noqa: SLF001
+    assert manager._queue[0]["id"] == "routine"  # noqa: SLF001
+
+    assert manager.handle_message("", "", {"action": "clear", "channel": "general"})
+    assert manager._current["id"] == "camera"  # noqa: SLF001
+    assert not manager._queue  # noqa: SLF001
+
+    compact = manager._validated_request("Short", "Text", {})  # noqa: SLF001
+    camera = manager._validated_request("Camera", "Motion", {"layout": "camera"})  # noqa: SLF001
+    assert manager._resolve_layout(compact, False) == "compact"  # noqa: SLF001
+    assert manager._resolve_layout(camera, True) == "camera"  # noqa: SLF001
+    assert camera["channel"] == "general"
+    assert camera["camera"] is True
+
+
+def test_overlay_lifetime_options_are_validated() -> None:
+    manager = OverlayManager()
+    request = manager._validated_request(  # noqa: SLF001
+        "Timed",
+        "Hover",
+        {"show_lifetime": True, "pause_on_hover": True, "priority": "high"},
+    )
+    assert request["show_lifetime"] is True
+    assert request["pause_on_hover"] is True
+    assert request["priority"] == 2
+    assert request["priority_name"] == "high"
 
 
 def test_overlay_update_keeps_unspecified_options_and_requires_existing_id() -> None:

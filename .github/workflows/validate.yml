@@ -47,5 +47,16 @@ jobs:
         run: python -m ruff check ha_windows_bridge custom_components tests main.py mqtt_volume.pyw
       - name: Static security checks
         run: python -m bandit -r ha_windows_bridge custom_components -ll -ii
+      - name: Build Windows package
+        run: python -m PyInstaller --clean --noconfirm HAWindowsBridge.spec
+      - name: Smoke-test Windows package
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $executable = Resolve-Path ".\dist\HA Windows Bridge\HA Windows Bridge.exe"
+          $process = Start-Process -FilePath $executable -ArgumentList "--smoke-test" -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Packaged application smoke test failed with exit code $($process.ExitCode)."
+          }
       - name: Audit installed dependencies
         run: python -m pip_audit --progress-spinner off

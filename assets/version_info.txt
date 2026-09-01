@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(0, 9, 0, 0),
-    prodvers=(0, 9, 0, 0),
+    filevers=(0, 10, 0, 1),
+    prodvers=(0, 10, 0, 1),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'HA Windows Bridge'),
           StringStruct(u'FileDescription', u'HA Windows Bridge'),
-          StringStruct(u'FileVersion', u'0.9.0'),
+          StringStruct(u'FileVersion', u'0.10.0-beta.1'),
           StringStruct(u'InternalName', u'HA Windows Bridge'),
           StringStruct(u'LegalCopyright', u'Copyright (c) 2026 Grzechu51'),
           StringStruct(u'OriginalFilename', u'HA Windows Bridge.exe'),
           StringStruct(u'ProductName', u'HA Windows Bridge'),
-          StringStruct(u'ProductVersion', u'0.9.0')
+          StringStruct(u'ProductVersion', u'0.10.0-beta.1')
         ]
       )
     ]),

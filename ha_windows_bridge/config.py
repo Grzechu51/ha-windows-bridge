@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 APP_NAME = "HA Windows Bridge"
-CONFIG_SCHEMA_VERSION = 12
+CONFIG_SCHEMA_VERSION = 13
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_SECRET_BYTES = 64 * 1024
@@ -116,6 +116,22 @@ class MqttConfig:
         )
 
 
+@dataclass(slots=True)
+class HomeAssistantConfig:
+    enabled: bool = False
+    url: str = ""
+    token: str = field(default="", repr=False)
+    verify_tls: bool = True
+
+    @classmethod
+    def from_dict(cls, data: dict) -> HomeAssistantConfig:
+        return cls(
+            enabled=bool(data.get("enabled", False)),
+            url=str(data.get("url", "")),
+            verify_tls=bool(data.get("verify_tls", True)),
+        )
+
+
 def default_apps() -> list[AudioAppConfig]:
     return [
         AudioAppConfig("chrome.exe", "Chrome", "chrome", False),
@@ -145,6 +161,7 @@ class AppConfig:
     device_name: str = field(default_factory=lambda: platform.node() or "Windows PC")
     device_id: str = field(default_factory=default_device_id)
     mqtt: MqttConfig = field(default_factory=MqttConfig)
+    home_assistant: HomeAssistantConfig = field(default_factory=HomeAssistantConfig)
     apps: list[AudioAppConfig] = field(default_factory=default_apps)
     start_with_windows: bool = True
     start_minimized: bool = True
@@ -196,6 +213,7 @@ class AppConfig:
         self.mqtt.discovery_prefix = (
             self.mqtt.discovery_prefix.strip().strip("/") or "homeassistant"
         )
+        self.home_assistant.url = self.home_assistant.url.strip().rstrip("/")
         self.disk_mounts = list(
             dict.fromkeys(
                 os.path.normpath(str(mount).strip())
@@ -223,6 +241,7 @@ class AppConfig:
             device_name=str(data.get("device_name", platform.node() or "Windows PC")),
             device_id=str(data.get("device_id", default_device_id())),
             mqtt=MqttConfig.from_dict(data.get("mqtt", {})),
+            home_assistant=HomeAssistantConfig.from_dict(data.get("home_assistant", {})),
             apps=apps,
             start_with_windows=bool(data.get("start_with_windows", True)),
             start_minimized=bool(data.get("start_minimized", True)),
@@ -306,15 +325,16 @@ class AppConfig:
     def to_dict(self) -> dict:
         data = asdict(self)
         data["mqtt"].pop("password", None)
+        data["home_assistant"].pop("token", None)
         return data
 
     def validation_errors(self) -> list[str]:
         errors: list[str] = []
         if not self.device_name:
             errors.append("Podaj nazwę urządzenia.")
-        if not self.mqtt.host:
-            errors.append("Podaj adres brokera MQTT.")
-        elif len(self.mqtt.host) > 255 or "\x00" in self.mqtt.host:
+        if not self.mqtt.host and not self.home_assistant.enabled:
+            errors.append("Skonfiguruj MQTT lub bezpośrednie połączenie z Home Assistant.")
+        elif self.mqtt.host and (len(self.mqtt.host) > 255 or "\x00" in self.mqtt.host):
             errors.append("Adres brokera MQTT jest nieprawidłowy.")
         if not 1 <= self.mqtt.port <= 65535:
             errors.append("Port MQTT musi mieścić się w zakresie 1–65535.")
@@ -330,6 +350,11 @@ class AppConfig:
             or len(self.mqtt.discovery_prefix.encode("utf-8")) > 1024
         ):
             errors.append("Discovery prefix zawiera niedozwolony znak lub jest zbyt długi.")
+        if self.home_assistant.enabled:
+            if not self.home_assistant.url.startswith(("http://", "https://")):
+                errors.append("Adres Home Assistant musi zaczynać się od http:// lub https://.")
+            if not self.home_assistant.token:
+                errors.append("Podaj długoterminowy token dostępu Home Assistant.")
         if not math.isfinite(self.poll_interval) or not 0.2 <= self.poll_interval <= 10:
             errors.append("Interwał odczytu musi mieścić się w zakresie 0,2–10 sekund.")
         if not 30 <= self.idle_threshold <= 7200:
@@ -404,11 +429,19 @@ def default_data_dir() -> Path:
 
 
 class SettingsStore:
-    def __init__(self, data_dir: Path | None = None, secrets: SecretBackend | None = None):
+    def __init__(
+        self,
+        data_dir: Path | None = None,
+        secrets: SecretBackend | None = None,
+        home_assistant_secrets: SecretBackend | None = None,
+    ):
         self.data_dir = data_dir or default_data_dir()
         self.config_path = self.data_dir / "config.json"
         self.mqtt_history_path = self.data_dir / "mqtt_topics.json"
         self.secrets = secrets or DpapiSecretBackend(self.data_dir / "credentials.dat")
+        self.home_assistant_secrets = home_assistant_secrets or DpapiSecretBackend(
+            self.data_dir / "home_assistant_credentials.dat"
+        )
 
     def load(self) -> AppConfig:
         if not self.config_path.exists():
@@ -422,6 +455,7 @@ class SettingsStore:
             except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
                 raise RuntimeError(f"Nie można odczytać konfiguracji: {exc}") from exc
         config.mqtt.password = self.secrets.load()
+        config.home_assistant.token = self.home_assistant_secrets.load()
         return config
 
     def save(self, config: AppConfig) -> None:
@@ -436,6 +470,7 @@ class SettingsStore:
         )
         temporary.replace(self.config_path)
         self.secrets.save(config.mqtt.password)
+        self.home_assistant_secrets.save(config.home_assistant.token)
 
     def load_mqtt_topic_history(self) -> set[str]:
         if not self.mqtt_history_path.exists():

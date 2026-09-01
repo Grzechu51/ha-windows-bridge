@@ -25,7 +25,7 @@ Wydanie podpisane z certyfikatem z magazynu Windows:
 ```powershell
 $env:HAWB_SIGNING_THUMBPRINT = "40_ZNAKOWY_ODCISK_CERTYFIKATU"
 .\build.ps1 -Installer
-Get-AuthenticodeSignature ".\dist\HA-Windows-Bridge-Setup-0.9.0.exe"
+Get-AuthenticodeSignature ".\dist\HA-Windows-Bridge-Setup-0.10.0-beta.1.exe"
 ```
 
 Prywatnego klucza i hasła do certyfikatu nigdy nie dodawaj do Git ani do plików
@@ -37,7 +37,7 @@ wydania.
 git add -A
 git status
 git diff --cached --stat
-git commit -m "Release 0.9.0"
+git commit -m "Release 0.10.0-beta.1"
 git push origin main
 ```
 
@@ -45,23 +45,29 @@ Poczekaj, aż workflow **Validate Home Assistant integration** dla gałęzi `mai
 zakończy się powodzeniem. Następnie utwórz tag dokładnie na opublikowanym commicie:
 
 ```powershell
-git tag -a v0.9.0 -m "HA Windows Bridge 0.9.0"
-git push origin v0.9.0
+git tag -a v0.10.0-beta.1 -m "HA Windows Bridge 0.10.0-beta.1"
+git push origin v0.10.0-beta.1
 ```
 
-Jeżeli tag `v0.9.0` już istnieje na złym commicie, usuń nieudane wydanie oraz tag na
+Jeżeli tag `v0.10.0-beta.1` już istnieje na złym commicie, usuń nieudane wydanie oraz tag na
 GitHubie, usuń tag lokalny i utwórz go ponownie. Nie używaj force push do poprawiania
 opublikowanego tagu.
 
 ## 4. Utworzenie Release
 
-Na GitHubie otwórz **Releases → Draft a new release**, wybierz `v0.9.0`, ustaw tytuł
-**HA Windows Bridge 0.9.0** i dołącz:
+Wydanie testowe można utworzyć bezpośrednio przez GitHub CLI:
 
-- `dist/HA-Windows-Bridge-Setup-0.9.0.exe`;
-- `dist/HA-Windows-Bridge-0.9.0-win64.zip`;
-- `dist/HA-Windows-Bridge-HA-Integration-0.9.0.zip`;
-- `dist/SHA256SUMS-0.9.0.txt`.
+```powershell
+gh release create v0.10.0-beta.1 `
+  ".\dist\HA-Windows-Bridge-Setup-0.10.0-beta.1.exe" `
+  ".\dist\HA-Windows-Bridge-0.10.0-beta.1-win64.zip" `
+  ".\dist\HA-Windows-Bridge-HA-Integration-0.10.0-beta.1.zip" `
+  ".\dist\SHA256SUMS-0.10.0-beta.1.txt" `
+  --verify-tag `
+  --prerelease `
+  --title "HA Windows Bridge 0.10.0-beta.1" `
+  --notes "Testowe wydanie nowych funkcji nakładki i bezpośredniego połączenia z Home Assistant."
+```
 
-Nie zaznaczaj **pre-release**, jeśli jest to stabilne wydanie. Po publikacji sprawdź
-badge wydania w README oraz instalację HACS na czystym wpisie testowym.
+Opcja `--prerelease` sprawia, że stabilne `v0.9.0` nadal pozostaje wydaniem `Latest`.
+Po publikacji sprawdź instalację HACS na czystym wpisie testowym.

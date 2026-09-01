@@ -50,13 +50,25 @@ okładkę po prawej stronie. Kolory powierzchni i tekstu są dobierane z grafiki
 zachowaniem kontrastu. Bez wyboru encji opcja bieżących multimediów używa sesji z
 komputera docelowego. Tryb automatyczny dopasowuje kartę do treści i ignoruje pola
 `width` oraz `height`. Pole efektu tła oferuje powierzchnię jednolitą, standardowe
-rozmycie i **Liquid Glass**. Oba efekty odświeżają obraz pulpitu, a Liquid Glass
-automatycznie przechodzi na lżejszy efekt w trybie zdalnym albo przy problemach z
-wydajnością. `edge_offset` odsuwa kartę od wybranych krawędzi ekranu. Ikonę wybiera
-się z biblioteki MDI HA.
+rozmycie i **Liquid Glass**. Standardowe rozmycie korzysta z Desktop Acrylic, a Liquid
+Glass preferuje DXGI Desktop Duplication i adaptacyjne odświeżanie. W trybie zdalnym
+albo przy problemach z wydajnością aplikacja wybiera bezpieczny efekt zastępczy.
+`edge_offset` odsuwa kartę od wybranych krawędzi ekranu. Ikonę wybiera się z biblioteki
+MDI HA. Kanały i priorytety porządkują kolejkę, `show_lifetime` pokazuje pozostały czas,
+a `pause_on_hover` wstrzymuje zamknięcie po najechaniu.
 
 `update_overlay` aktualizuje wiadomość o tym samym ID, `remove_overlay` ją usuwa, a
 `clear_overlay` czyści kolejkę.
+
+Nakładkę można też dodać ręcznie jako bezpośredni endpoint WebSocket. W konfiguracji
+integracji podaj ID urządzenia widoczne w aplikacji Windows, a w aplikacji skonfiguruj
+adres Home Assistant i długoterminowy token. Tryb bezpośredni obsługuje nakładki oraz
+powiadomienia; pozostałe encje nadal używają MQTT.
+
+Po restarcie HA dodaj integrację ręcznie, wybierz jej encję `notify` jako cel akcji
+`ha_windows_bridge.show_overlay`, a następnie uruchom usługę w aplikacji Windows.
+Połączenie jest inicjowane wychodząco przez komputer do `/api/websocket`; nie wymaga
+otwierania portu przychodzącego na komputerze.
 
 ## Usuwanie
 

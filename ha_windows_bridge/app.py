@@ -7,6 +7,9 @@ import subprocess  # nosec B404
 from contextlib import suppress
 from logging.handlers import RotatingFileHandler
 
+# Loading the selected binding before QtPy avoids ambiguous binding discovery
+# in frozen builds that contain QtAwesome.
+import PySide6.QtCore as QtCore
 import qtawesome as qta
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
@@ -610,6 +613,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--smoke-test", action="store_true")
     args, _ = parser.parse_known_args(argv)
 
+    from .windows_effects import enable_per_monitor_v2
+
+    enable_per_monitor_v2()
     with suppress(AttributeError, OSError):
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("HAWindowsBridge.App")
 
@@ -621,7 +627,18 @@ def main(argv: list[str] | None = None) -> int:
     app.setStyle(bridge_style)
 
     if args.smoke_test:
-        return int(qta.icon("mdi6.music").isNull())
+        import dxcam
+        import websocket
+
+        # Hardware enumeration may legitimately be empty in CI, RDP or a
+        # headless session.  The smoke test verifies that the packaged modules
+        # and their native dependencies can be imported.
+        dependencies_ready = (
+            bool(QtCore.qVersion())
+            and callable(dxcam.output_info)
+            and bool(websocket.__version__)
+        )
+        return int(qta.icon("mdi6.music").isNull() or not dependencies_ready)
     app._bridge_style = bridge_style
 
     def apply_theme(theme: str) -> None:

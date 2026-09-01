@@ -53,6 +53,24 @@ if (-not $SkipInstall) {
 
 $AppVersion = (& $VenvPython -c "from ha_windows_bridge import __version__; print(__version__)").Trim()
 Assert-NativeCommandSucceeded "Odczyt wersji aplikacji"
+$VersionMatch = [regex]::Match(
+    $AppVersion,
+    "^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)(?:-(?:alpha|beta|rc)\.(?<pre>\d+))?$"
+)
+if (-not $VersionMatch.Success) {
+    throw "Unsupported application version format: $AppVersion"
+}
+$VersionRevision = if ($VersionMatch.Groups["pre"].Success) {
+    [int]$VersionMatch.Groups["pre"].Value
+} else {
+    0
+}
+$AppNumericVersion = @(
+    $VersionMatch.Groups["major"].Value,
+    $VersionMatch.Groups["minor"].Value,
+    $VersionMatch.Groups["patch"].Value,
+    $VersionRevision
+) -join "."
 
 $BuiltExe = Join-Path $ProjectRoot "dist\HA Windows Bridge\HA Windows Bridge.exe"
 if (Test-Path -LiteralPath $BuiltExe) {
@@ -167,7 +185,7 @@ if ($Installer) {
         }
         $IsccPath = $BundledIscc
     }
-    & $IsccPath "/DMyAppVersion=$AppVersion" "installer\HAWindowsBridge.iss"
+    & $IsccPath "/DMyAppVersion=$AppVersion" "/DMyAppNumericVersion=$AppNumericVersion" "installer\HAWindowsBridge.iss"
     Assert-NativeCommandSucceeded "Budowanie instalatora"
     $InstallerPath = Join-Path $ProjectRoot "dist\HA-Windows-Bridge-Setup-$AppVersion.exe"
     Invoke-CodeSigning -Path $InstallerPath

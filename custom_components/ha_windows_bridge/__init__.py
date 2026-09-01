@@ -25,11 +25,14 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_ENTITIES,
     CONF_MEDIA_PLAYER,
+    CONF_TRANSPORT,
     DOMAIN,
     SERVICE_CLEAR_OVERLAY,
     SERVICE_REMOVE_OVERLAY,
     SERVICE_SHOW_OVERLAY,
     SERVICE_UPDATE_OVERLAY,
+    TRANSPORT_DIRECT,
+    direct_overlay_event,
 )
 
 PLATFORMS = [
@@ -65,6 +68,9 @@ _OVERLAY_COMMON_OPTIONS = {
     # Backward compatibility for automations created before background_effect.
     vol.Optional("glass"): cv.boolean,
     vol.Optional("media_player_entity"): cv.entity_id,
+    vol.Optional("layout"): vol.In({"auto", "compact", "standard", "media", "camera"}),
+    vol.Optional("channel"): vol.In({"general", "security", "system", "media", "work"}),
+    vol.Optional("priority"): vol.In({"low", "normal", "high", "critical"}),
 }
 _OVERLAY_UPDATE_OPTIONS = {
     **_OVERLAY_COMMON_OPTIONS,
@@ -72,6 +78,8 @@ _OVERLAY_UPDATE_OPTIONS = {
     vol.Optional("pinned"): cv.boolean,
     vol.Optional("show_close_button"): cv.boolean,
     vol.Optional("close_on_click"): cv.boolean,
+    vol.Optional("pause_on_hover"): cv.boolean,
+    vol.Optional("show_lifetime"): cv.boolean,
     vol.Optional("media"): cv.boolean,
     vol.Optional("corner"): vol.In(
         {"top_left", "top_right", "bottom_left", "bottom_right", "top_center"}
@@ -104,6 +112,8 @@ _SHOW_OVERLAY_SCHEMA = cv.make_entity_service_schema(
         vol.Optional("pinned"): cv.boolean,
         vol.Optional("show_close_button"): cv.boolean,
         vol.Optional("close_on_click"): cv.boolean,
+        vol.Optional("pause_on_hover"): cv.boolean,
+        vol.Optional("show_lifetime"): cv.boolean,
         vol.Required("corner", default="top_right"): vol.In(
             {"top_left", "top_right", "bottom_left", "bottom_right", "top_center"}
         ),
@@ -120,7 +130,9 @@ _UPDATE_OVERLAY_SCHEMA = cv.make_entity_service_schema(
 _REMOVE_OVERLAY_SCHEMA = cv.make_entity_service_schema(
     {vol.Required("notification_id"): _OVERLAY_ID}
 )
-_CLEAR_OVERLAY_SCHEMA = cv.make_entity_service_schema({})
+_CLEAR_OVERLAY_SCHEMA = cv.make_entity_service_schema(
+    {vol.Optional("channel"): vol.In({"general", "security", "system", "media", "work"})}
+)
 _MAX_MEDIA_IMAGE_BYTES = 512 * 1024
 _MEDIA_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
@@ -204,6 +216,7 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
         )
         entity_ids = referenced.referenced | referenced.indirectly_referenced
         topics: set[str] = set()
+        event_types: set[str] = set()
         for entity_id in entity_ids:
             if call.context.user_id:
                 user = await hass.auth.async_get_user(call.context.user_id)
@@ -217,7 +230,9 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
                 continue
             if topic := runtime.get("overlay_topic"):
                 topics.add(str(topic))
-        if not topics:
+            if event_type := runtime.get("overlay_event_type"):
+                event_types.add(str(event_type))
+        if not topics and not event_types:
             raise HomeAssistantError("Select an enabled HA Windows Bridge overlay entity")
 
         options: dict[str, Any] = {
@@ -338,6 +353,9 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             raise HomeAssistantError("Overlay payload is too large")
         for topic in topics:
             await mqtt.async_publish(hass, topic, payload, qos=1, retain=False)
+        event_data = {"title": title or ("Home Assistant" if action == "show" else ""), "message": message, "data": options}
+        for event_type in event_types:
+            hass.bus.async_fire(event_type, event_data, context=call.context)
 
     hass.services.async_register(
         DOMAIN, SERVICE_SHOW_OVERLAY, publish_overlay, schema=_SHOW_OVERLAY_SCHEMA
@@ -356,7 +374,8 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up every entity announced by one Windows bridge."""
-    if not await mqtt.async_wait_for_mqtt_client(hass):
+    direct = entry.data.get(CONF_TRANSPORT) == TRANSPORT_DIRECT
+    if not direct and not await mqtt.async_wait_for_mqtt_client(hass):
         raise ConfigEntryNotReady("Configure and enable the Home Assistant MQTT integration first")
 
     valid_unique_ids = {
@@ -378,14 +397,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             for definition in entry.data.get(CONF_ENTITIES, [])
             if isinstance(definition, dict)
             and definition.get("platform") == Platform.NOTIFY.value
-            and str(definition.get("command_topic", "")).endswith("/overlay/show/set")
+            and (
+                str(definition.get("command_topic", "")).endswith("/overlay/show/set")
+                or str(definition.get("command_topic", "")).startswith("direct://")
+            )
         ),
         {},
     )
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "unique_ids": valid_unique_ids,
         "overlay_unique_id": overlay_definition.get("unique_id", ""),
-        "overlay_topic": overlay_definition.get("command_topic", ""),
+        "overlay_topic": "" if direct else overlay_definition.get("command_topic", ""),
+        "overlay_event_type": (
+            direct_overlay_event(str(entry.data[CONF_DEVICE_ID])) if direct else ""
+        ),
     }
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

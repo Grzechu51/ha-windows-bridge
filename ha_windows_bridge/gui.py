@@ -49,6 +49,7 @@ from .audio import AudioApplication, AudioOutputDevice, WindowsAudioService
 from .config import (
     AppConfig,
     AudioAppConfig,
+    HomeAssistantConfig,
     MqttConfig,
     SettingsStore,
     TrackedDeviceConfig,
@@ -60,6 +61,7 @@ from .data_exchange import (
     import_configuration,
     save_diagnostic_report,
 )
+from .direct_bridge import DirectHaBridge
 from .discovery import all_possible_mqtt_topics
 from .i18n import LocalizedFormatter, set_active_language, translate
 from .mqtt_bridge import MqttBridge
@@ -148,6 +150,7 @@ class MainWindow(QMainWindow):
         self.system_monitor = WindowsSystemMonitor()
         self.overlay_manager: OverlayManager | None = None
         self.bridge: MqttBridge | None = None
+        self.direct_bridge: DirectHaBridge | None = None
         self.signals = UiSignals()
         self.app_cards: list[AppCard] = []
         self._force_close = False
@@ -362,7 +365,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(30, 24, 30, 28)
         layout.setSpacing(22)
         header, _ = self._page_header(
-            "Połączenie z brokerem MQTT", "Skonfiguruj połączenie z brokerem MQTT."
+            "Połączenie", "Skonfiguruj MQTT oraz opcjonalny bezpośredni kanał Home Assistant."
         )
         layout.addWidget(header)
 
@@ -441,6 +444,46 @@ class MainWindow(QMainWindow):
 
         form.setMaximumWidth(850)
         layout.addWidget(form, 0, Qt.AlignmentFlag.AlignLeft)
+
+        direct_form = QFrame()
+        direct_form.setObjectName("connectionForm")
+        direct_grid = QGridLayout(direct_form)
+        direct_grid.setContentsMargins(0, 12, 0, 0)
+        direct_grid.setHorizontalSpacing(24)
+        direct_grid.setVerticalSpacing(13)
+        direct_grid.setColumnMinimumWidth(0, 165)
+        direct_grid.setColumnStretch(1, 1)
+        direct_title = QLabel("Bezpośrednio z Home Assistant")
+        direct_title.setObjectName("sectionTitle")
+        direct_grid.addWidget(direct_title, 0, 0, 1, 3)
+        direct_description = QLabel(
+            "Lokalny kanał WebSocket dla nakładek. Token jest szyfrowany przez Windows DPAPI."
+        )
+        direct_description.setObjectName("settingDescription")
+        direct_description.setWordWrap(True)
+        direct_grid.addWidget(direct_description, 1, 0, 1, 3)
+        self.direct_enabled = QCheckBox("Włącz połączenie bezpośrednie")
+        direct_grid.addWidget(self.direct_enabled, 2, 1, 1, 2)
+        self.ha_url = QLineEdit()
+        self.ha_url.setPlaceholderText("https://homeassistant.local:8123")
+        direct_grid.addWidget(QLabel("Adres Home Assistant"), 3, 0)
+        direct_grid.addWidget(self.ha_url, 3, 1, 1, 2)
+        self.ha_token = QLineEdit()
+        self.ha_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ha_token.setPlaceholderText("Długoterminowy token dostępu")
+        self.show_ha_token = QCheckBox("Pokaż")
+        direct_grid.addWidget(QLabel("Token dostępu"), 4, 0)
+        direct_grid.addWidget(self.ha_token, 4, 1)
+        direct_grid.addWidget(self.show_ha_token, 4, 2)
+        self.ha_verify_tls = QCheckBox("Weryfikuj certyfikat TLS")
+        self.ha_verify_tls.setChecked(True)
+        direct_grid.addWidget(self.ha_verify_tls, 5, 1, 1, 2)
+        device_hint = QLabel(f"ID urządzenia do integracji: {self.current_config.device_id}")
+        device_hint.setObjectName("settingDescription")
+        device_hint.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        direct_grid.addWidget(device_hint, 6, 1, 1, 2)
+        direct_form.setMaximumWidth(850)
+        layout.addWidget(direct_form, 0, Qt.AlignmentFlag.AlignLeft)
 
         test_row = QHBoxLayout()
         test_row.setSpacing(18)
@@ -744,6 +787,33 @@ class MainWindow(QMainWindow):
         monitor_row.addLayout(monitor_text, 1)
         monitor_row.addWidget(self.overlay_monitor_combo)
         overlay.addWidget(monitor_card)
+        test_card = QFrame()
+        test_card.setObjectName("settingRow")
+        test_row = QHBoxLayout(test_card)
+        test_row.setContentsMargins(16, 14, 16, 14)
+        test_text = QVBoxLayout()
+        test_title = QLabel("Wzorce testowe")
+        test_title.setObjectName("settingTitle")
+        test_description = QLabel(
+            "Sprawdź lokalnie układy, priorytety i efekty bez wysyłania danych z Home Assistant."
+        )
+        test_description.setObjectName("settingDescription")
+        test_description.setWordWrap(True)
+        test_text.addWidget(test_title)
+        test_text.addWidget(test_description)
+        test_row.addLayout(test_text, 1)
+        self.overlay_test_combo = QComboBox()
+        for key, label in OverlayManager.test_pattern_names():
+            self.overlay_test_combo.addItem(label, key)
+        self.overlay_test_combo.setMinimumWidth(190)
+        self.overlay_test_button = QPushButton("Pokaż test")
+        self.overlay_test_button.setObjectName("secondaryButton")
+        test_row.addWidget(self.overlay_test_combo)
+        test_row.addWidget(self.overlay_test_button)
+        overlay.addWidget(test_card)
+        self.overlay_test_result = QLabel("")
+        self.overlay_test_result.setObjectName("settingDescription")
+        overlay.addWidget(self.overlay_test_result)
         warning = QLabel(
             "Obraz jest pojedynczą grafiką, nie transmisją wideo. Nakładka nie ingeruje w proces gry."
         )
@@ -1081,11 +1151,18 @@ class MainWindow(QMainWindow):
                 QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
             )
         )
-        for editor in (self.host, self.username, self.password):
+        self.show_ha_token.toggled.connect(
+            lambda checked: self.ha_token.setEchoMode(
+                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+            )
+        )
+        self.direct_enabled.toggled.connect(self._apply_direct_state)
+        for editor in (self.host, self.username, self.password, self.ha_url, self.ha_token):
             editor.textChanged.connect(self._clear_test_result)
         for editor in (self.port, self.keepalive):
             editor.valueChanged.connect(self._clear_test_result)
         self.tls.toggled.connect(self._clear_test_result)
+        self.ha_verify_tls.toggled.connect(self._clear_test_result)
         self.device_name.textEdited.connect(self._update_automatic_base_topic)
         self.base_topic.textEdited.connect(self._mark_base_topic_as_custom)
         self.scan_apps_button.clicked.connect(self.scan_audio_apps)
@@ -1103,6 +1180,7 @@ class MainWindow(QMainWindow):
         self.publish_devices_row.switch.toggled.connect(self._apply_devices_state)
         self.device_filter_combo.currentIndexChanged.connect(self._apply_device_filter)
         self.overlay_enabled_row.switch.toggled.connect(self._apply_overlay_state)
+        self.overlay_test_button.clicked.connect(self._show_local_overlay_test)
         self.scan_devices_button.clicked.connect(self.scan_devices)
         self.test_button.clicked.connect(self.test_mqtt_connection)
         self.discovery_button.clicked.connect(self._republish_discovery)
@@ -1155,7 +1233,11 @@ class MainWindow(QMainWindow):
             self.feature_tabs.setTabText(index, english if self._language == "en" else polish)
         self._translate_widget_tree(self, self._language)
         self.status_card.set_language(self._language)
-        displayed = "Połączono" if self.bridge and self.bridge.connected else self._last_status_text
+        connected = bool(
+            (self.bridge and self.bridge.connected)
+            or (self.direct_bridge and self.direct_bridge.connected)
+        )
+        displayed = "Połączono" if connected else self._last_status_text
         self.title_bar.status_label.setText(self._t(displayed))
         self.footer_status_label.setText(self._t(displayed))
 
@@ -1215,6 +1297,10 @@ class MainWindow(QMainWindow):
         self.port.setValue(config.mqtt.port)
         self.username.setText(config.mqtt.username)
         self.password.setText(config.mqtt.password)
+        self.direct_enabled.setChecked(config.home_assistant.enabled)
+        self.ha_url.setText(config.home_assistant.url)
+        self.ha_token.setText(config.home_assistant.token)
+        self.ha_verify_tls.setChecked(config.home_assistant.verify_tls)
         self.tls.setChecked(config.mqtt.tls)
         self.discovery_prefix.setText(config.mqtt.discovery_prefix)
         self.keepalive.setValue(config.mqtt.keepalive)
@@ -1258,6 +1344,7 @@ class MainWindow(QMainWindow):
         self._apply_audio_state(config.audio_enhancements_enabled)
         self._apply_disk_state(config.publish_disk_stats)
         self._apply_overlay_state(config.overlay_enabled)
+        self._apply_direct_state(config.home_assistant.enabled)
         self._apply_devices_state(config.publish_devices)
         language_index = self.language_combo.findData(config.language)
         self.language_combo.blockSignals(True)
@@ -1292,6 +1379,12 @@ class MainWindow(QMainWindow):
                 tls=self.tls.isChecked(),
                 base_topic=self.base_topic.text(),
                 discovery_prefix=self.discovery_prefix.text(),
+            ),
+            home_assistant=HomeAssistantConfig(
+                enabled=self.direct_enabled.isChecked(),
+                url=self.ha_url.text().strip(),
+                token=self.ha_token.text(),
+                verify_tls=self.ha_verify_tls.isChecked(),
             ),
             apps=[card.to_config() for card in self.app_cards],
             start_with_windows=self.start_with_windows_row.switch.isChecked(),
@@ -1337,9 +1430,8 @@ class MainWindow(QMainWindow):
             if errors:
                 raise ValueError("\n".join(self._t(error) for error in errors))
             self._remember_mqtt_topics(self.current_config, new_config)
-            if self.bridge:
-                self.bridge.stop()
-                self.bridge = None
+            if self.bridge or self.direct_bridge:
+                self.stop_bridge()
             self.store.save(new_config)
             self.startup.set_enabled(new_config.start_with_windows)
             self.current_config = copy.deepcopy(new_config)
@@ -1370,7 +1462,7 @@ class MainWindow(QMainWindow):
         self.save_button.style().polish(self.save_button)
 
     def start_bridge(self) -> None:
-        if self.bridge is not None:
+        if self.bridge is not None or self.direct_bridge is not None:
             return
         errors = self.current_config.validation_errors()
         if errors:
@@ -1382,25 +1474,45 @@ class MainWindow(QMainWindow):
                 f"{index + 1}: {screen.name()} ({screen.size().width()}×{screen.size().height()})"
                 for index, screen in enumerate(QApplication.screens())
             ]
-            self.bridge = MqttBridge(
-                copy.deepcopy(self.current_config),
-                audio=self.audio,
-                logger=self.logger,
-                status_callback=lambda text, connected: self.signals.status.emit(text, connected),
-                notification_callback=lambda title, message: self.signals.windows_notification.emit(
-                    title, message
-                ),
-                overlay_callback=lambda title, message, data: self.signals.overlay_requested.emit(
-                    title, message, data
-                ),
-                overlay_monitors=overlay_monitors,
-                system_monitor=self.system_monitor,
-            )
-            self.bridge.start()
+            if self.current_config.mqtt.host:
+                self.bridge = MqttBridge(
+                    copy.deepcopy(self.current_config),
+                    audio=self.audio,
+                    logger=self.logger,
+                    status_callback=lambda text, connected: self.signals.status.emit(
+                        text, connected
+                    ),
+                    notification_callback=lambda title, message: self.signals.windows_notification.emit(
+                        title, message
+                    ),
+                    overlay_callback=lambda title, message, data: self.signals.overlay_requested.emit(
+                        title, message, data
+                    ),
+                    overlay_monitors=overlay_monitors,
+                    system_monitor=self.system_monitor,
+                )
+                self.bridge.start()
+            if self.current_config.home_assistant.enabled:
+                self.direct_bridge = DirectHaBridge(
+                    copy.deepcopy(self.current_config),
+                    logger=self.logger,
+                    status_callback=lambda text, connected: self.signals.status.emit(
+                        text, connected
+                    ),
+                    overlay_callback=lambda title, message, data: self.signals.overlay_requested.emit(
+                        title, message, data
+                    ),
+                )
+                self.direct_bridge.start()
             self.start_button.setText(self._t("Zatrzymaj usługę"))
             self.tray_toggle.setText(self._t("Zatrzymaj usługę"))
         except Exception as exc:
+            if self.bridge is not None:
+                self.bridge.stop()
             self.bridge = None
+            if self.direct_bridge is not None:
+                self.direct_bridge.stop()
+            self.direct_bridge = None
             self._set_status(f"Błąd: {exc}", False)
             self.logger.exception("Nie można uruchomić usługi")
 
@@ -1408,6 +1520,9 @@ class MainWindow(QMainWindow):
         if self.bridge:
             self.bridge.stop()
             self.bridge = None
+        if self.direct_bridge:
+            self.direct_bridge.stop()
+            self.direct_bridge = None
         self.start_button.setText(self._t("Uruchom usługę"))
         self.tray_toggle.setText(self._t("Uruchom usługę"))
         self.discovery_button.setEnabled(False)
@@ -1472,11 +1587,17 @@ class MainWindow(QMainWindow):
         for widget in (
             self.overlay_fullscreen_row,
             self.overlay_monitor_combo,
+            self.overlay_test_combo,
+            self.overlay_test_button,
         ):
             widget.setEnabled(enabled)
         if not enabled and self.overlay_manager is not None:
             self.overlay_manager.close()
             self.overlay_manager = None
+
+    def _apply_direct_state(self, enabled: bool) -> None:
+        for widget in (self.ha_url, self.ha_token, self.show_ha_token, self.ha_verify_tls):
+            widget.setEnabled(enabled)
 
     def _configure_overlay(self, config: AppConfig) -> None:
         if self.overlay_manager is not None:
@@ -1488,6 +1609,23 @@ class MainWindow(QMainWindow):
                 default_monitor=config.overlay_monitor,
                 close_tooltip=self._t("Zamknij nakładkę"),
             )
+
+    def _show_local_overlay_test(self) -> None:
+        if self.overlay_manager is None:
+            config = self._config_from_form()
+            if not config.overlay_enabled:
+                self.overlay_test_result.setText(
+                    self._t("Najpierw włącz wiadomości na ekranie.")
+                )
+                return
+            self._configure_overlay(config)
+        pattern = str(self.overlay_test_combo.currentData() or "compact")
+        shown = self.overlay_manager is not None and self.overlay_manager.show_test_pattern(pattern)
+        self.overlay_test_result.setText(
+            self._t("Wyświetlono lokalny wzorzec testowy.")
+            if shown
+            else self._t("Nakładka jest wyłączona w trybie pełnoekranowym.")
+        )
 
     def _show_overlay_message(self, title: str, message: str, data: dict) -> None:
         if self.overlay_manager is None:
@@ -1815,10 +1953,16 @@ class MainWindow(QMainWindow):
         self.test_result.setText(self._t("Łączenie…"))
 
         def worker() -> None:
-            ok, message = MqttBridge.test_connection(config)
+            results: list[tuple[bool, str]] = []
+            if config.mqtt.host:
+                results.append(MqttBridge.test_connection(config))
+            if config.home_assistant.enabled:
+                results.append(DirectHaBridge.test_connection(config))
+            ok = bool(results) and all(result[0] for result in results)
+            message = " ".join(result[1] for result in results)
             self.signals.connection_test.emit(ok, message)
 
-        threading.Thread(target=worker, name="mqtt-test", daemon=True).start()
+        threading.Thread(target=worker, name="connection-test", daemon=True).start()
 
     def _show_test_result(self, ok: bool, message: str) -> None:
         self.test_button.setEnabled(True)
@@ -1853,14 +1997,16 @@ class MainWindow(QMainWindow):
         self.footer_status_dot.setStyleSheet(f"color: {color};")
         self.footer_status_label.setText(self._t("Połączono" if connected else text))
         self.tray_status.setText(f"● {self._t(text)}")
-        self.discovery_button.setEnabled(connected)
+        self.discovery_button.setEnabled(bool(self.bridge and self.bridge.connected))
         if connected:
             self.start_button.setText(self._t("Zatrzymaj usługę"))
             self.tray_toggle.setText(self._t("Zatrzymaj usługę"))
         self._refresh_runtime_status()
 
     def _refresh_runtime_status(self) -> None:
-        connected = bool(self.bridge and self.bridge.connected)
+        mqtt_connected = bool(self.bridge and self.bridge.connected)
+        direct_connected = bool(self.direct_bridge and self.direct_bridge.connected)
+        connected = mqtt_connected or direct_connected
         if self.bridge and self.bridge.started_at:
             elapsed = max(0, int(time.monotonic() - self.bridge.started_at))
             hours, remainder = divmod(elapsed, 3600)
@@ -1870,7 +2016,15 @@ class MainWindow(QMainWindow):
         else:
             uptime = "00:00:00"
             messages = 0
-        detail = "Połączono z brokerem MQTT" if connected else self._last_status_text
+        detail = (
+            "Połączono z MQTT i Home Assistant"
+            if mqtt_connected and direct_connected
+            else "Połączono z brokerem MQTT"
+            if mqtt_connected
+            else "Połączono bezpośrednio z Home Assistant"
+            if direct_connected
+            else self._last_status_text
+        )
         self.status_card.update_status(connected, detail, uptime, messages)
 
     def _refresh_resource_usage(self) -> None:
@@ -1891,14 +2045,14 @@ class MainWindow(QMainWindow):
         self.resource_label.setText(f"CPU {cpu_text}% · RAM {ram_mb:.0f} MB")
 
     def _toggle_bridge(self) -> None:
-        if self.bridge:
+        if self.bridge or self.direct_bridge:
             self.stop_bridge()
             return
         form_config = self._config_from_form()
         if form_config != self.current_config:
             if not self.save_and_apply():
                 return
-            if self.bridge:
+            if self.bridge or self.direct_bridge:
                 return
         self.start_bridge()
 

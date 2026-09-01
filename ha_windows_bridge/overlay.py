@@ -11,7 +11,7 @@ from collections import deque
 from typing import Any
 
 import qtawesome as qta
-from PIL import Image, ImageFilter, ImageGrab
+from PIL import Image, ImageDraw, ImageFilter, ImageGrab
 from PySide6.QtCore import (
     QEasingCurve,
     QEvent,
@@ -48,9 +48,12 @@ from PySide6.QtWidgets import (
 )
 
 from .system_monitor import WindowsSystemMonitor
+from .windows_effects import DesktopDuplicationCapture, NativeBackdrop, on_battery_power
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 _CORNERS = {"top_left", "top_right", "bottom_left", "bottom_right", "top_center"}
+_CHANNELS = {"general", "security", "system", "media", "work"}
+_PRIORITIES = {"low": 0, "normal": 1, "high": 2, "critical": 3}
 _PRESET_COLORS = {
     "default": "#91a1a8",
     "success": "#43ce89",
@@ -249,11 +252,13 @@ class OverlayManager(QObject):
         self._cover: QLabel | None = None
         self._image: QLabel | None = None
         self._progress: QProgressBar | None = None
+        self._lifetime_progress: QProgressBar | None = None
         self._progress_time: QLabel | None = None
         self._close_button: QToolButton | None = None
         self._timer: QTimer | None = None
         self._progress_timer: QTimer | None = None
         self._glass_timer: QTimer | None = None
+        self._lifetime_timer: QTimer | None = None
         self._animation: QVariantAnimation | None = None
         self._progress_started_at = 0.0
         self._animations_allowed = self._system_animations_enabled()
@@ -261,6 +266,19 @@ class OverlayManager(QObject):
         self._glass_capture_failures = 0
         self._glass_slow_frames = 0
         self._glass_text_mode = ""
+        self._native_backdrop = NativeBackdrop()
+        self._desktop_capture = DesktopDuplicationCapture()
+        self._capture_backend = "imagegrab"
+        self._last_capture_signature = b""
+        self._glass_idle_frames = 0
+        self._glass_interval_ms = 220
+        self._last_capture_changed = True
+        self._gpu_capture_failures = 0
+        self._dismiss_deadline = 0.0
+        self._dismiss_remaining_ms = 0
+        self._hover_paused = False
+        self._screen_signals_connected = False
+        self._screen_signal_ids: set[int] = set()
 
     def handle_message(
         self, title: str, message: str, options: dict[str, Any] | None = None
@@ -285,9 +303,19 @@ class OverlayManager(QObject):
         action = clean["action"]
         message_id = clean["id"]
         if action == "clear":
-            self._queue.clear()
-            self._current = None
-            self.hide(show_next=False)
+            channel = clean.get("channel", "")
+            if channel:
+                self._queue = deque(
+                    (item for item in self._queue if item.get("channel") != channel),
+                    maxlen=20,
+                )
+                if self._current and self._current.get("channel") == channel:
+                    self._current = None
+                    self.hide(show_next=True)
+            else:
+                self._queue.clear()
+                self._current = None
+                self.hide(show_next=False)
             return True
         if action == "remove":
             self._queue = deque(
@@ -304,16 +332,106 @@ class OverlayManager(QObject):
             for index, item in enumerate(self._queue):
                 if item["id"] == message_id:
                     self._queue[index] = clean
+                    self._sort_queue()
                     return True
             return False
         if self._current is not None:
+            if (
+                clean["priority"] > self._current.get("priority", 1)
+                and not self._current.get("pinned", False)
+            ):
+                self._queue.append(self._current)
+                self._sort_queue()
+                self._current = clean
+                return self._display(clean)
             self._queue.append(clean)
+            self._sort_queue()
             return True
         self._current = clean
         return self._display(clean)
 
     def show_message(self, title: str, message: str) -> bool:
         return self.handle_message(title, message)
+
+    @staticmethod
+    def test_pattern_names() -> tuple[tuple[str, str], ...]:
+        return (
+            ("compact", "Krótka wiadomość"),
+            ("long", "Długa treść"),
+            ("liquid", "Liquid Glass"),
+            ("camera", "Kamera priorytetowa"),
+            ("channels", "Kanały i priorytety"),
+        )
+
+    @staticmethod
+    def _test_camera_image() -> str:
+        image = Image.new("RGB", (960, 540), "#122636")
+        draw = ImageDraw.Draw(image)
+        for y in range(image.height):
+            ratio = y / max(1, image.height - 1)
+            draw.line(
+                (0, y, image.width, y),
+                fill=(round(18 + 30 * ratio), round(38 + 66 * ratio), round(54 + 70 * ratio)),
+            )
+        draw.ellipse((360, 90, 600, 330), fill="#d5a75b", outline="#f8ddb0", width=8)
+        draw.rectangle((0, 390, 960, 540), fill="#152129")
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=86, optimize=True)
+        return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    def show_test_pattern(self, name: str) -> bool:
+        patterns: dict[str, tuple[str, str, dict[str, Any]]] = {
+            "compact": (
+                "Home Assistant",
+                "Drzwi wejściowe zostały zamknięte.",
+                {"icon": "mdi:door-closed", "layout": "compact", "preset": "success"},
+            ),
+            "long": (
+                "Podsumowanie automatyzacji",
+                "Ogrzewanie przeszło w tryb ekonomiczny, rolety zostały opuszczone, "
+                "a światła w nieużywanych pomieszczeniach wyłączone.",
+                {"icon": "mdi:home-automation", "layout": "standard"},
+            ),
+            "liquid": (
+                "Liquid Glass",
+                "Tło jest przechwytywane przez GPU i odświeżane zależnie od zmian obrazu.",
+                {"icon": "mdi:blur", "background_effect": "liquid"},
+            ),
+            "camera": (
+                "Kamera: podjazd",
+                "Wykryto ruch w strefie wejściowej.",
+                {
+                    "icon": "mdi:cctv",
+                    "layout": "camera",
+                    "image": self._test_camera_image(),
+                    "channel": "security",
+                    "priority": "critical",
+                },
+            ),
+            "channels": (
+                "Kanał systemowy · wysoki priorytet",
+                "Wiadomości o wyższym priorytecie wyprzedzają zwykłą kolejkę.",
+                {"icon": "mdi:layers-triple", "channel": "system", "priority": "high"},
+            ),
+        }
+        title, message, options = patterns.get(name, patterns["compact"])
+        return self.handle_message(
+            title,
+            message,
+            {
+                "id": f"local-test-{name}",
+                "duration": 8,
+                "show_lifetime": True,
+                "pause_on_hover": True,
+                **options,
+            },
+        )
+
+    def _sort_queue(self) -> None:
+        self._queue = deque(
+            sorted(self._queue, key=lambda item: item.get("priority", 1), reverse=True),
+            maxlen=20,
+        )
 
     def hide(self, show_next: bool = True) -> None:
         if self._timer is not None:
@@ -322,6 +440,8 @@ class OverlayManager(QObject):
             self._progress_timer.stop()
         if self._glass_timer is not None:
             self._glass_timer.stop()
+        if self._lifetime_timer is not None:
+            self._lifetime_timer.stop()
         if (
             self._window is not None
             and self._card is not None
@@ -380,6 +500,7 @@ class OverlayManager(QObject):
         if self._window is not None:
             self._window.hide()
             self._window.setWindowOpacity(1.0)
+        self._native_backdrop.disable()
         self._animation = None
         if show_next:
             self._current = None
@@ -474,6 +595,10 @@ class OverlayManager(QObject):
             self._animation = None
         if self._glass_timer is not None:
             self._glass_timer.stop()
+        if self._lifetime_timer is not None:
+            self._lifetime_timer.stop()
+        self._native_backdrop.disable()
+        self._desktop_capture.release()
         if self._window is not None:
             self._window.close()
             self._window.deleteLater()
@@ -486,11 +611,13 @@ class OverlayManager(QObject):
         self._cover = None
         self._image = None
         self._progress = None
+        self._lifetime_progress = None
         self._progress_time = None
         self._close_button = None
         self._timer = None
         self._progress_timer = None
         self._glass_timer = None
+        self._lifetime_timer = None
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         card_content = self._card is not None and (
@@ -505,6 +632,13 @@ class OverlayManager(QObject):
         ):
             self.hide(show_next=True)
             return True
+        if card_content and self._current is not None and self._current.get(
+            "pause_on_hover", False
+        ):
+            if event.type() == QEvent.Type.Enter:
+                self._pause_dismiss_timer()
+            elif event.type() == QEvent.Type.Leave:
+                QTimer.singleShot(0, self._resume_if_pointer_left)
         return super().eventFilter(watched, event)
 
     def _show_next(self) -> None:
@@ -531,11 +665,13 @@ class OverlayManager(QObject):
                 self._cover,
                 self._image,
                 self._progress,
+                self._lifetime_progress,
                 self._progress_time,
                 self._close_button,
                 self._timer,
                 self._progress_timer,
                 self._glass_timer,
+                self._lifetime_timer,
             )
         ):
             return False
@@ -545,7 +681,14 @@ class OverlayManager(QObject):
         was_visible = self._window.isVisible()
         previous_size = QSize(self._card.size())
         self._clear_adaptive_legibility()
-        media_layout = request["layout"] == "media"
+        pixmap = self._decode_qr(request.get("qr", "")) or self._decode_image(
+            request.get("image", "")
+        )
+        resolved_layout = self._resolve_layout(request, pixmap is not None)
+        request["_resolved_layout"] = resolved_layout
+        media_layout = resolved_layout == "media"
+        camera_layout = resolved_layout == "camera"
+        compact_layout = resolved_layout == "compact"
         self._title.setText(
             request["media_source"] or "Media Player"
             if media_layout
@@ -555,9 +698,6 @@ class OverlayManager(QObject):
         self._media_title.setVisible(media_layout)
         self._label.setText(request["message"])
         self._label.setVisible(bool(request["message"]))
-        pixmap = self._decode_qr(request.get("qr", "")) or self._decode_image(
-            request.get("image", "")
-        )
         card_width = (
             request["width"]
             if request["size_mode"] == "manual"
@@ -573,11 +713,13 @@ class OverlayManager(QObject):
             else:
                 self._image.setPixmap(
                     pixmap.scaled(
-                        card_width - 48,
-                        min(500, max(80, request["height"] - 90))
+                        card_width - (30 if camera_layout else 48),
+                        min(620, max(120, request["height"] - 80))
                         if request["size_mode"] == "manual"
-                        else 240,
-                        Qt.AspectRatioMode.KeepAspectRatio,
+                        else 360 if camera_layout else 240,
+                        Qt.AspectRatioMode.KeepAspectRatioByExpanding
+                        if camera_layout
+                        else Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
                 )
@@ -615,7 +757,28 @@ class OverlayManager(QObject):
         )
         background_effect = self._effective_background_effect(request["background_effect"])
         request["_effective_background_effect"] = background_effect
-        surface_alpha = {"none": 255, "blur": 150, "liquid": 92}[background_effect]
+        native_blur = False
+        application = QGuiApplication.instance()
+        native_allowed = (
+            sys.platform == "win32"
+            and application is not None
+            and application.platformName() != "offscreen"
+            and not self._is_remote_session()
+        )
+        if background_effect == "blur" and not media_layout and native_allowed:
+            native_blur = self._native_backdrop.apply_acrylic(
+                int(self._window.winId()), request["opacity"]
+            )
+        else:
+            self._native_backdrop.disable()
+        request["_backdrop_backend"] = (
+            self._native_backdrop.backend if native_blur else "capture"
+        )
+        surface_alpha = (
+            86
+            if native_blur
+            else {"none": 255, "blur": 150, "liquid": 92}[background_effect]
+        )
         background_alpha = round(surface_alpha * request["opacity"])
         border_alpha = (
             132
@@ -701,6 +864,10 @@ class OverlayManager(QObject):
             "border-radius: 3px; } "
             f"QProgressBar#overlayProgress::chunk {{ background: {accent}; "
             "border-radius: 3px; } "
+            "QProgressBar#overlayLifetime { background: rgba(255,255,255,24); "
+            "border: none; border-radius: 1px; } "
+            f"QProgressBar#overlayLifetime::chunk {{ background: {accent}; "
+            "border-radius: 1px; } "
             f"QLabel#overlayProgressTime {{ color: {message_color}; font-size: 11px; }}"
         )
         self._window.setWindowOpacity(1.0)
@@ -708,6 +875,7 @@ class OverlayManager(QObject):
         interactive = (
             request["show_close_button"]
             or request["close_on_click"]
+            or request["pause_on_hover"]
         )
         self._window.setAttribute(
             Qt.WidgetAttribute.WA_TransparentForMouseEvents,
@@ -727,13 +895,21 @@ class OverlayManager(QObject):
         else:
             self._fit_automatic_height(
                 card_width,
-                minimum_height=180 if media_layout else 72,
+                minimum_height=(
+                    180
+                    if media_layout
+                    else 280
+                    if camera_layout
+                    else 72
+                    if compact_layout
+                    else 72
+                ),
             )
         self._position(
             request["monitor"], request["corner"], request["edge_offset"]
         )
         if isinstance(self._card, OverlayCard):
-            if media_artwork:
+            if media_artwork or background_effect == "blur" and native_blur:
                 self._card.set_glass_background(None)
             elif background_effect != "none":
                 captured = self._capture_glass_background(
@@ -751,11 +927,22 @@ class OverlayManager(QObject):
             self._progress_timer.start(500)
         else:
             self._progress_timer.stop()
-        if request["pinned"]:
-            self._timer.stop()
-        else:
-            self._timer.start(request["duration"] * 1000)
+        self._start_dismiss_timer(request)
         return True
+
+    @staticmethod
+    def _resolve_layout(request: dict[str, Any], has_image: bool) -> str:
+        layout = str(request.get("layout", "default"))
+        if layout in {"compact", "standard", "media", "camera"}:
+            return layout
+        if request.get("camera"):
+            return "camera"
+        if request.get("media_source"):
+            return "media"
+        content_length = len(request.get("title", "")) + len(request.get("message", ""))
+        if not has_image and request.get("progress") is None and content_length <= 96:
+            return "compact"
+        return "standard"
 
     @staticmethod
     def _automatic_width(request: dict[str, Any], has_image: bool) -> int:
@@ -776,8 +963,13 @@ class OverlayManager(QObject):
         if request["show_close_button"]:
             chrome += 30
         width = text_width + chrome
-        if request["layout"] == "media":
+        layout = request.get("_resolved_layout", request.get("layout"))
+        if layout == "media":
             width = max(width, 480)
+        elif layout == "camera":
+            width = max(width, 520)
+        elif layout == "compact":
+            width = min(width, 430)
         elif has_image:
             width = max(width, 440)
         return max(280, min(600, width))
@@ -957,14 +1149,43 @@ class OverlayManager(QObject):
         ).copy()
         return QPixmap.fromImage(qimage)
 
-    def _desktop_region(self, top_left: QPoint, width: int, height: int) -> QPixmap | None:
+    def _desktop_region(
+        self,
+        top_left: QPoint,
+        width: int,
+        height: int,
+        *,
+        prefer_gpu: bool = False,
+    ) -> QPixmap | None:
         if width <= 0 or height <= 0:
             return None
-        bounds = (
-            top_left.x(),
-            top_left.y(),
-            top_left.x() + width,
-            top_left.y() + height,
+        screens = QGuiApplication.screens()
+        screen = QGuiApplication.screenAt(top_left + QPoint(width // 2, height // 2))
+        if screen is None and screens:
+            screen = screens[0]
+        if prefer_gpu and screen is not None and self._desktop_capture.available:
+            screen_index = screens.index(screen) if screen in screens else 0
+            origin = screen.geometry().topLeft()
+            local = QRect(top_left - origin, QSize(width, height))
+            result = self._desktop_capture.grab(
+                screen_index,
+                local,
+                screen.devicePixelRatio(),
+                int(self._window.winId()) if self._window is not None else 0,
+            )
+            if result is not None and not result.pixmap.isNull():
+                self._capture_backend = result.backend
+                self._gpu_capture_failures = 0
+                return result.pixmap
+            self._gpu_capture_failures += 1
+            if self._gpu_capture_failures >= 3:
+                self._desktop_capture.disabled = True
+        bounds = self._physical_capture_bounds(
+            top_left,
+            width,
+            height,
+            screen.geometry() if screen is not None else QRect(),
+            screen.devicePixelRatio() if screen is not None else 1.0,
         )
         try:
             capture = ImageGrab.grab(
@@ -974,15 +1195,13 @@ class OverlayManager(QObject):
             )
             pixmap = self._pixmap_from_pil(capture)
             if not pixmap.isNull():
+                self._capture_backend = "imagegrab"
                 return pixmap
         except (OSError, TypeError, ValueError):
             pass
         if self._window is not None and self._window.isVisible():
             return None
         top_left = self._card.mapToGlobal(QPoint(0, 0))
-        screen = QGuiApplication.screenAt(
-            top_left + QPoint(width // 2, height // 2)
-        )
         if screen is None:
             return None
         screen_origin = screen.geometry().topLeft()
@@ -993,7 +1212,48 @@ class OverlayManager(QObject):
             width,
             height,
         )
-        return None if source.isNull() else source
+        if source.isNull():
+            return None
+        self._capture_backend = "qt"
+        return source
+
+    @staticmethod
+    def _physical_capture_bounds(
+        top_left: QPoint,
+        width: int,
+        height: int,
+        screen_geometry: QRect,
+        device_pixel_ratio: float,
+    ) -> tuple[int, int, int, int]:
+        if screen_geometry.isEmpty():
+            return (
+                top_left.x(),
+                top_left.y(),
+                top_left.x() + width,
+                top_left.y() + height,
+            )
+        scale = max(0.5, min(8.0, float(device_pixel_ratio)))
+        local = top_left - screen_geometry.topLeft()
+        left = screen_geometry.left() + round(local.x() * scale)
+        top = screen_geometry.top() + round(local.y() * scale)
+        return (
+            left,
+            top,
+            left + round(width * scale),
+            top + round(height * scale),
+        )
+
+    @staticmethod
+    def _capture_signature(source: QPixmap) -> bytes:
+        if source.isNull():
+            return b""
+        sample = source.toImage().scaled(
+            20,
+            12,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        ).convertToFormat(QImage.Format.Format_RGB888)
+        return bytes(sample.constBits())
 
     def _capture_glass_background(self, opacity: float, effect: str) -> bool:
         if not isinstance(self._card, OverlayCard) or self._window is None:
@@ -1003,9 +1263,23 @@ class OverlayManager(QObject):
             self._clear_adaptive_legibility()
             return True
         top_left = self._card.mapToGlobal(QPoint(0, 0))
-        source = self._desktop_region(top_left, self._card.width(), self._card.height())
+        source = self._desktop_region(
+            top_left,
+            self._card.width(),
+            self._card.height(),
+            prefer_gpu=effect == "liquid" and self._liquid_compatible,
+        )
         if source is None:
             return False
+        signature = self._capture_signature(source)
+        self._last_capture_changed = signature != self._last_capture_signature
+        if (
+            not self._last_capture_changed
+            and self._card._glass_background is not None
+            and self._card._glass_effect == effect
+        ):
+            return True
+        self._last_capture_signature = signature
         radius = 32 if effect == "liquid" else 20
         blurred = self._blur_pixmap(source, radius)
         self._card.set_glass_background(blurred, opacity, effect)
@@ -1065,7 +1339,9 @@ class OverlayManager(QObject):
             self._card.set_text_scrim(None)
 
     def _apply_adaptive_legibility(self, background: QPixmap) -> None:
-        if self._current is None or self._current.get("layout") == "media":
+        if self._current is None or self._current.get(
+            "_resolved_layout", self._current.get("layout")
+        ) == "media":
             return
         luminance = self._backdrop_luminance(background)
         if self._glass_text_mode == "dark":
@@ -1105,13 +1381,30 @@ class OverlayManager(QObject):
         self._current["_effective_background_effect"] = "blur"
         self._glass_capture_failures = 0
         self._glass_slow_frames = 0
-        if self._card._glass_background is not None:
+        native = False
+        application = QGuiApplication.instance()
+        if (
+            self._window is not None
+            and sys.platform == "win32"
+            and application is not None
+            and application.platformName() != "offscreen"
+            and not self._is_remote_session()
+        ):
+            native = self._native_backdrop.apply_acrylic(
+                int(self._window.winId()), self._current.get("opacity", 0.94)
+            )
+        if native:
+            self._current["_backdrop_backend"] = self._native_backdrop.backend
+            self._card.set_glass_background(None)
+            if self._glass_timer is not None:
+                self._glass_timer.stop()
+        elif self._card._glass_background is not None:
             self._card.set_glass_background(
                 self._card._glass_background,
                 self._current.get("opacity", 0.94),
                 "blur",
             )
-        if self._glass_timer is not None and self._window is not None:
+        if not native and self._glass_timer is not None and self._window is not None:
             self._glass_timer.start(320)
 
     def _refresh_glass_background(self) -> None:
@@ -1120,7 +1413,7 @@ class OverlayManager(QObject):
         if (
             request is None
             or effect not in {"blur", "liquid"}
-            or request.get("layout") == "media"
+            or request.get("_resolved_layout", request.get("layout")) == "media"
             or request.get("opacity", 0.0) <= 0
             or self._window is None
             or not self._window.isVisible()
@@ -1149,6 +1442,18 @@ class OverlayManager(QObject):
         elif self._glass_slow_frames >= 3 and self._glass_timer is not None:
             self._glass_timer.setInterval(500)
             self._glass_slow_frames = 0
+        elif captured and self._glass_timer is not None:
+            if self._last_capture_changed:
+                self._glass_idle_frames = 0
+            else:
+                self._glass_idle_frames = min(8, self._glass_idle_frames + 1)
+            base = 100 if self._capture_backend == "dxgi" else 220
+            if on_battery_power():
+                base = max(base, 250)
+            idle_delay = min(900, self._glass_idle_frames * 110)
+            work_delay = max(0, round(elapsed * 1000) - 35)
+            self._glass_interval_ms = max(80, min(1000, base + idle_delay + work_delay))
+            self._glass_timer.setInterval(self._glass_interval_ms)
 
     def _configure_dynamic_glass(self, request: dict[str, Any]) -> None:
         if self._glass_timer is None:
@@ -1157,12 +1462,22 @@ class OverlayManager(QObject):
         effect = request.get("_effective_background_effect")
         if (
             effect in {"blur", "liquid"}
-            and request.get("layout") != "media"
+            and request.get("_resolved_layout", request.get("layout")) != "media"
             and request.get("opacity", 0.0) > 0
+            and request.get("_backdrop_backend") not in {
+                "dwm_acrylic",
+                "legacy_acrylic",
+            }
         ):
             self._glass_capture_failures = 0
             self._glass_slow_frames = 0
-            self._glass_timer.start(220 if effect == "liquid" else 300)
+            self._glass_idle_frames = 0
+            self._last_capture_signature = b""
+            interval = 100 if effect == "liquid" and self._desktop_capture.available else 300
+            if on_battery_power():
+                interval = max(interval, 250)
+            self._glass_interval_ms = interval
+            self._glass_timer.start(interval)
 
     def _set_icon(self, value: str, color: str) -> None:
         if self._icon is None:
@@ -1317,6 +1632,13 @@ class OverlayManager(QObject):
         progress.setRange(0, 100)
         progress.setTextVisible(False)
         progress.setFixedHeight(6)
+        lifetime_progress = QProgressBar()
+        lifetime_progress.setObjectName("overlayLifetime")
+        lifetime_progress.setRange(0, 1000)
+        lifetime_progress.setValue(1000)
+        lifetime_progress.setTextVisible(False)
+        lifetime_progress.setFixedHeight(3)
+        lifetime_progress.setVisible(False)
         text.addLayout(top)
         text.addWidget(media_title)
         text.addWidget(label)
@@ -1339,12 +1661,14 @@ class OverlayManager(QObject):
             label,
             image,
             progress,
+            lifetime_progress,
             progress_time,
         ):
             clickable.installEventFilter(self)
         progress_row.addWidget(progress, 1)
         progress_row.addWidget(progress_time)
         content.addLayout(progress_row)
+        content.addWidget(lifetime_progress)
         card_layout.addLayout(content, 1)
         outer.addWidget(card)
         timer = QTimer(window)
@@ -1354,6 +1678,9 @@ class OverlayManager(QObject):
         progress_timer.timeout.connect(self._refresh_live_progress)
         glass_timer = QTimer(window)
         glass_timer.timeout.connect(self._refresh_glass_background)
+        lifetime_timer = QTimer(window)
+        lifetime_timer.setInterval(50)
+        lifetime_timer.timeout.connect(self._refresh_lifetime_progress)
         self._window = window
         self._card = card
         self._icon = icon
@@ -1363,11 +1690,95 @@ class OverlayManager(QObject):
         self._cover = cover
         self._image = image
         self._progress = progress
+        self._lifetime_progress = lifetime_progress
         self._progress_time = progress_time
         self._close_button = close_button
         self._timer = timer
         self._progress_timer = progress_timer
         self._glass_timer = glass_timer
+        self._lifetime_timer = lifetime_timer
+
+        if not self._screen_signals_connected:
+            application = QGuiApplication.instance()
+            if application is not None:
+                application.screenAdded.connect(self._screen_configuration_changed)
+                application.screenRemoved.connect(self._screen_configuration_changed)
+                self._screen_signals_connected = True
+            self._connect_screen_signals()
+
+    def _connect_screen_signals(self) -> None:
+        for screen in QGuiApplication.screens():
+            screen_id = id(screen)
+            if screen_id in self._screen_signal_ids:
+                continue
+            screen.geometryChanged.connect(self._screen_configuration_changed)
+            screen.availableGeometryChanged.connect(self._screen_configuration_changed)
+            screen.logicalDotsPerInchChanged.connect(self._screen_configuration_changed)
+            self._screen_signal_ids.add(screen_id)
+
+    def _start_dismiss_timer(self, request: dict[str, Any]) -> None:
+        if self._timer is None or self._lifetime_timer is None or self._lifetime_progress is None:
+            return
+        self._timer.stop()
+        self._lifetime_timer.stop()
+        self._hover_paused = False
+        self._dismiss_remaining_ms = request["duration"] * 1000
+        self._dismiss_deadline = time.monotonic() + self._dismiss_remaining_ms / 1000
+        show_lifetime = bool(request.get("show_lifetime", False)) and not request["pinned"]
+        self._lifetime_progress.setVisible(show_lifetime)
+        self._lifetime_progress.setValue(1000)
+        if request["pinned"]:
+            return
+        self._timer.start(self._dismiss_remaining_ms)
+        if show_lifetime:
+            self._lifetime_timer.start()
+
+    def _refresh_lifetime_progress(self) -> None:
+        if self._lifetime_progress is None or self._current is None:
+            return
+        duration_ms = max(1, int(self._current["duration"]) * 1000)
+        if self._hover_paused:
+            remaining = self._dismiss_remaining_ms
+        else:
+            remaining = max(0, round((self._dismiss_deadline - time.monotonic()) * 1000))
+        self._lifetime_progress.setValue(round(remaining / duration_ms * 1000))
+
+    def _pause_dismiss_timer(self) -> None:
+        if (
+            self._hover_paused
+            or self._current is None
+            or self._current.get("pinned", False)
+            or self._timer is None
+        ):
+            return
+        self._dismiss_remaining_ms = max(
+            1, round((self._dismiss_deadline - time.monotonic()) * 1000)
+        )
+        self._timer.stop()
+        self._hover_paused = True
+        self._refresh_lifetime_progress()
+
+    def _resume_if_pointer_left(self) -> None:
+        if self._card is not None and self._card.underMouse():
+            return
+        self._resume_dismiss_timer()
+
+    def _resume_dismiss_timer(self) -> None:
+        if not self._hover_paused or self._timer is None or self._current is None:
+            return
+        self._hover_paused = False
+        self._dismiss_deadline = time.monotonic() + self._dismiss_remaining_ms / 1000
+        self._timer.start(max(1, self._dismiss_remaining_ms))
+
+    def _screen_configuration_changed(self, *_args: object) -> None:
+        self._connect_screen_signals()
+        if self._current is None or self._window is None or not self._window.isVisible():
+            return
+        self._position(
+            self._current["monitor"],
+            self._current["corner"],
+            self._current["edge_offset"],
+        )
 
     def _validated_request(
         self, title: str, message: str, options: dict[str, Any]
@@ -1380,9 +1791,31 @@ class OverlayManager(QObject):
             message_id = ""
         if not message_id:
             message_id = f"message-{id(options):x}"
-        preset = str(options.get("preset", "default")).strip().lower()
+        raw_channel = str(options.get("channel", "")).strip().lower()
+        channel = raw_channel if raw_channel in _CHANNELS else "general"
+        if action == "clear" and not raw_channel:
+            channel = ""
+        default_preset = {
+            "security": "error",
+            "system": "info",
+            "media": "default",
+            "work": "info",
+        }.get(channel, "default")
+        preset = str(options.get("preset", default_preset)).strip().lower()
         if preset not in _PRESET_COLORS:
             preset = "default"
+        raw_priority = options.get("priority", "normal")
+        if isinstance(raw_priority, int):
+            priority = max(0, min(3, raw_priority))
+            priority_name = next(
+                (name for name, score in _PRIORITIES.items() if score == priority),
+                "normal",
+            )
+        else:
+            priority_name = str(raw_priority).strip().lower()
+            if priority_name not in _PRIORITIES:
+                priority_name = "normal"
+            priority = _PRIORITIES[priority_name]
         corner = str(options.get("corner", "top_right")).strip().lower()
         if corner not in _CORNERS:
             corner = "top_right"
@@ -1404,7 +1837,9 @@ class OverlayManager(QObject):
         except (TypeError, ValueError):
             height = 160
         layout = str(options.get("layout", "default")).strip().lower()
-        if layout not in {"default", "media"}:
+        if layout == "auto":
+            layout = "default"
+        if layout not in {"default", "compact", "standard", "media", "camera"}:
             layout = "default"
         progress = options.get("progress")
         try:
@@ -1458,16 +1893,22 @@ class OverlayManager(QObject):
             "pinned": bool(options.get("pinned", False)),
             "show_close_button": bool(options.get("show_close_button", False)),
             "close_on_click": bool(options.get("close_on_click", False)),
+            "pause_on_hover": bool(options.get("pause_on_hover", False)),
+            "show_lifetime": bool(options.get("show_lifetime", False)),
             "corner": corner,
             "size_mode": size_mode,
             "width": width,
             "height": height,
             "layout": layout,
+            "camera": bool(options.get("camera", False)) or layout == "camera",
             "media_source": str(options.get("media_source", "")).strip()[:128],
             "opacity": opacity,
             "background_effect": background_effect,
             "glass": background_effect != "none",
             "preset": preset,
+            "channel": channel,
+            "priority": priority,
+            "priority_name": priority_name,
             "monitor": monitor,
             "edge_offset": edge_offset,
             "media_position": media_position,

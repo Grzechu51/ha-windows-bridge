@@ -10,6 +10,11 @@
       "confirm": {
         "title": "Add {name}",
         "description": "Do you want to add **{name}**? All enabled controls, switches, sensors and the Media Player will appear in one HA Windows Bridge integration."
+      },
+      "user": {
+        "title": "Add direct Windows overlay",
+        "description": "Creates a local WebSocket endpoint for overlays without an MQTT broker. Enter the same device ID shown in the Windows app.",
+        "data": {"name": "Computer name", "device_id": "Device ID"}
       }
     }
   },
@@ -39,6 +44,15 @@
         "liquid": "Liquid Glass"
       }
     },
+    "overlay_layout": {
+      "options": {"auto": "Automatic", "compact": "Compact", "standard": "Standard", "media": "Media", "camera": "Priority camera"}
+    },
+    "overlay_channel": {
+      "options": {"general": "General", "security": "Security", "system": "System", "media": "Media", "work": "Work"}
+    },
+    "overlay_priority": {
+      "options": {"low": "Low", "normal": "Normal", "high": "High", "critical": "Critical"}
+    },
     "overlay_corner": {
       "options": {
         "top_left": "Top left",
@@ -58,6 +72,9 @@
         "message": {"name": "Message", "description": "Main card content. Optional when a media source is selected."},
         "media": {"name": "Current Windows media", "description": "Uses the active media session on the target Windows computer."},
         "media_player_entity": {"name": "Home Assistant media player", "description": "Uses the selected player's title, artist, artwork and playback progress."},
+        "layout": {"name": "Content layout", "description": "Automatic mode selects a compact, standard, media or camera layout from the supplied content."},
+        "channel": {"name": "Channel", "description": "Groups related cards and allows a single channel to be cleared independently."},
+        "priority": {"name": "Priority", "description": "Higher-priority cards move ahead of ordinary queued messages."},
         "notification_id": {"name": "Message ID", "description": "Identifier used to update or remove this card later."},
         "icon": {"name": "Icon", "description": "MDI icon displayed next to the title."},
         "image": {"name": "Image", "description": "PNG, JPEG, GIF or WebP image supplied as a data URI (up to 512 KiB)."},
@@ -73,6 +90,8 @@
         "pinned": {"name": "Keep visible"},
         "show_close_button": {"name": "Close button"},
         "close_on_click": {"name": "Close on card click"},
+        "pause_on_hover": {"name": "Pause while hovered", "description": "Pauses automatic closing while the pointer is over the card."},
+        "show_lifetime": {"name": "Lifetime bar", "description": "Shows the remaining display time at the bottom of the card."},
         "corner": {"name": "Screen position"},
         "edge_offset": {"name": "Edge offset", "description": "Moves the visible card inward from the selected screen edges."},
         "monitor": {"name": "Monitor", "description": "Optional monitor number. When omitted, uses the setting from the Windows app."},
@@ -101,6 +120,9 @@
         "message": {"name": "Message"},
         "media": {"name": "Current Windows media"},
         "media_player_entity": {"name": "Home Assistant media player"},
+        "layout": {"name": "Content layout"},
+        "channel": {"name": "Channel"},
+        "priority": {"name": "Priority"},
         "preset": {"name": "Accent color"},
         "icon": {"name": "Icon"},
         "opacity": {"name": "Background opacity"},
@@ -116,7 +138,9 @@
         "progress_max": {"name": "Source maximum"},
         "pinned": {"name": "Keep visible"},
         "show_close_button": {"name": "Close button"},
-        "close_on_click": {"name": "Close on card click"}
+        "close_on_click": {"name": "Close on card click"},
+        "pause_on_hover": {"name": "Pause while hovered"},
+        "show_lifetime": {"name": "Lifetime bar"}
       }
     },
     "remove_overlay": {
@@ -126,7 +150,8 @@
     },
     "clear_overlay": {
       "name": "Clear Windows overlays",
-      "description": "Closes the current card and removes all queued cards."
+      "description": "Closes current and queued cards globally or only in the selected channel.",
+      "fields": {"channel": {"name": "Channel"}}
     }
   }
 }

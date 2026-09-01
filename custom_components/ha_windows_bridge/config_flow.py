@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from typing import Any
 
+import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.service_info.mqtt import MqttServiceInfo
 
 from .announcement import parse_discovery_announcement
-from .const import CONF_DEVICE, CONF_DEVICE_ID, CONF_ENTITIES, CONF_MEDIA_PLAYER, DOMAIN
+from .const import (
+    CONF_DEVICE,
+    CONF_DEVICE_ID,
+    CONF_ENTITIES,
+    CONF_MEDIA_PLAYER,
+    CONF_TRANSPORT,
+    DOMAIN,
+    TRANSPORT_DIRECT,
+)
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -58,5 +67,42 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """The integration is configured automatically through MQTT."""
-        return self.async_abort(reason="discovery_only")
+        """Create a local direct-overlay endpoint without requiring MQTT."""
+        if user_input is None:
+            return self.async_show_form(
+                step_id="user",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required("name", default="Windows PC"): str,
+                        vol.Required(CONF_DEVICE_ID): vol.All(
+                            str, vol.Match(r"^[a-z0-9_]{1,128}$")
+                        ),
+                    }
+                ),
+            )
+        device_id = str(user_input[CONF_DEVICE_ID]).strip()
+        name = str(user_input["name"]).strip() or "Windows PC"
+        await self.async_set_unique_id(f"{device_id}_direct")
+        self._abort_if_unique_id_configured()
+        return self.async_create_entry(
+            title=name,
+            data={
+                CONF_DEVICE_ID: device_id,
+                CONF_TRANSPORT: TRANSPORT_DIRECT,
+                CONF_DEVICE: {
+                    "name": name,
+                    "manufacturer": "HA Windows Bridge",
+                    "model": "Direct overlay bridge",
+                    "sw_version": "",
+                },
+                CONF_ENTITIES: [
+                    {
+                        "platform": "notify",
+                        "unique_id": f"{device_id}_overlay",
+                        "name": "Overlay",
+                        "command_topic": f"direct://{device_id}/overlay",
+                    }
+                ],
+                CONF_MEDIA_PLAYER: {"enabled": False},
+            },
+        )
