@@ -54,10 +54,10 @@ Przy instalacji ręcznej skopiuj `custom_components/ha_windows_bridge` do
 `HA-Windows-Bridge-0.9.0-win64.zip` to wersja przenośna. Po rozpakowaniu zachowaj cały
 katalog wraz z folderem `_internal`.
 
-### Wersja testowa 0.10.0-beta.2
+### Wersja testowa 0.10.0-beta.3
 
 W HACS włącz dla tego repozytorium obsługę wersji **pre-release/beta**, a następnie
-wybierz **Redownload → Need a different version? → v0.10.0-beta.2**. Aplikację Windows
+wybierz **Redownload → Need a different version? → v0.10.0-beta.3**. Aplikację Windows
 pobierz z wydania oznaczonego **Pre-release** na GitHubie. Stabilne `v0.9.0` pozostaje
 wydaniem domyślnym.
 
@@ -98,7 +98,9 @@ Najwygodniejszy sposób konfiguracji:
 3. Ustaw układ, efekt tła, pozycję, rozmiar, czas, zachowanie oraz treść i wybierz
    **Zapisz popup**.
 4. Po połączeniu z HA pojawi się encja `select` z listą wzorów zapisanych na tym
-   komputerze. W automatyzacji użyj akcji `ha_windows_bridge.show_saved_overlay`.
+   komputerze. Akcja **Wybierz opcję** tylko zmienia aktywny wzór. Do wyświetlenia
+   karty dodaj osobną akcję **HA Windows Bridge: Wyświetl zapisany popup**
+   (`ha_windows_bridge.show_saved_overlay`).
 
 Przykład, w którym zapisany wygląd pozostaje bez zmian, a tekst i postęp pochodzą z
 encji Home Assistant:
@@ -111,6 +113,11 @@ data:
   message_entity: sensor.laptop_battery
   progress_entity: sensor.laptop_battery
 ```
+
+W edytorze wizualnym tej akcji można bez YAML wybrać encje tytułu i
+wartości/wiadomości, encję postępu, czas, odtwarzacz `media_player`, aktualny obraz z
+encji `camera` lub `image`, a także adres obrazu. Wygląd nadal pochodzi z projektu
+zapisanego w aplikacji Windows.
 
 Pole `template_id` jest opcjonalne. Bez niego używany jest wzór aktualnie wybrany w
 encji `select`. Możesz też wskazać encję lub jej atrybut jako źródło tytułu, wiadomości,

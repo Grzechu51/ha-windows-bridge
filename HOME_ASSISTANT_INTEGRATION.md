@@ -33,6 +33,11 @@ Wygląd popupów konfiguruje się teraz w aplikacji Windows, w sekcji
 wiele nazwanych wzorów osobno dla każdego komputera. Po synchronizacji integracja tworzy
 encję `select` **Zapisany popup** z listą tych wzorów.
 
+Akcja **Wybierz opcję** dostępna dla tej encji jedynie zmienia aktywny projekt. Następnie
+w automatyzacji dodaj akcję **HA Windows Bridge: Wyświetl zapisany popup**. Jej formularz
+pozwala wskazać encje tytułu, wartości/wiadomości, postępu i czasu, odtwarzacz
+`media_player`, encję `camera` albo `image` oraz opcjonalny adres obrazu.
+
 Rekomendowana akcja automatyzacji to:
 
 ```yaml

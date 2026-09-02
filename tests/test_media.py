@@ -345,6 +345,11 @@ def test_overlay_service_form_uses_single_booleans_and_native_icon_selector() ->
     assert services.count("translation_key: overlay_size_mode") == 2
     assert services.count("display_mode:") == 2
     assert services.count("translation_key: overlay_display_mode") == 2
+    assert "channel:" not in services
+    assert "translation_key: overlay_channel" not in services
+    assert services.count("image_entity:") == 1
+    assert "- camera\n                - image" in services
+    assert services.count("image_url:") == 1
     assert (
         strings["services"]["show_overlay"]["fields"]["background_effect"]["name"]
         == "Background effect"
@@ -361,6 +366,13 @@ def test_overlay_service_form_uses_single_booleans_and_native_icon_selector() ->
         strings["services"]["show_overlay"]["fields"]["media_player_entity"]["name"]
         == "Home Assistant media player"
     )
+    saved_fields = strings["services"]["show_saved_overlay"]["fields"]
+    assert saved_fields["image_entity"]["name"] == "Camera or image entity"
+    assert saved_fields["image_url"]["name"] == "Image URL"
+    assert "channel" not in strings["services"]["show_overlay"]["fields"]
+    assert "channel" not in strings["services"]["update_overlay"]["fields"]
+    assert "fields" not in strings["services"]["clear_overlay"]
+    assert "overlay_channel" not in strings["selector"]
     assert set(strings["selector"]["overlay_style"]["options"]) == {
         "success",
         "warning",

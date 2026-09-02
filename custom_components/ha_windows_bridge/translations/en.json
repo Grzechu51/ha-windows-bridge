@@ -55,9 +55,6 @@
     "overlay_display_mode": {
       "options": {"queue": "Queue", "parallel": "Side by side"}
     },
-    "overlay_channel": {
-      "options": {"general": "General", "security": "Security", "system": "System", "media": "Media", "work": "Work"}
-    },
     "overlay_priority": {
       "options": {"low": "Low", "normal": "Normal", "high": "High", "critical": "Critical"}
     },
@@ -74,7 +71,7 @@
   "services": {
     "show_saved_overlay": {
       "name": "Display saved popup",
-      "description": "Displays the popup selected in the computer's Saved popup entity. Its design stays in the Windows application.",
+      "description": "Displays the design selected in the computer's Saved popup entity and fills it with the entities chosen below. Select option only changes the active design.",
       "fields": {
         "template_entity": {"name": "Computer popup list", "description": "Select the Saved popup entity belonging to the target computer."},
         "template_id": {"name": "Template ID", "description": "Optional advanced override of the currently selected popup."},
@@ -82,8 +79,10 @@
         "title_entity": {"name": "Title source entity"},
         "title_attribute": {"name": "Title source attribute"},
         "message": {"name": "Message override"},
-        "message_entity": {"name": "Message source entity"},
+        "message_entity": {"name": "Value or message entity", "description": "Uses the entity state or selected attribute as the main popup value or message."},
         "message_attribute": {"name": "Message source attribute"},
+        "image_entity": {"name": "Camera or image entity", "description": "Fetches the current still image from a camera or image entity."},
+        "image_url": {"name": "Image URL", "description": "Optional HTTP(S) URL or image data URI."},
         "notification_id": {"name": "Message ID"},
         "progress_entity": {"name": "Progress source entity"},
         "progress_attribute": {"name": "Progress source attribute"},
@@ -95,7 +94,8 @@
       },
       "sections": {
         "content": {"name": "Dynamic content"},
-        "values": {"name": "Entity values and media"}
+        "media_sources": {"name": "Camera, image and media"},
+        "values": {"name": "Values from entities"}
       }
     },
     "show_overlay": {
@@ -108,7 +108,6 @@
         "media_player_entity": {"name": "Home Assistant media player", "description": "Uses the selected player's title, artist, artwork and playback progress."},
         "layout": {"name": "Content layout", "description": "Automatic mode selects a layout from the supplied content. Status emphasizes a short value; Indicator creates a small icon, image or value capsule."},
         "display_mode": {"name": "Display mode", "description": "Queue shows one card at a time. Side by side keeps up to four cards visible together and wraps them when space is limited."},
-        "channel": {"name": "Channel", "description": "Groups related cards and allows a single channel to be cleared independently."},
         "priority": {"name": "Priority", "description": "Higher-priority cards move ahead of ordinary queued messages."},
         "notification_id": {"name": "Message ID", "description": "Identifier used to update or remove this card later."},
         "icon": {"name": "Icon", "description": "MDI icon displayed next to the title."},
@@ -157,7 +156,6 @@
         "media_player_entity": {"name": "Home Assistant media player"},
         "layout": {"name": "Content layout"},
         "display_mode": {"name": "Display mode"},
-        "channel": {"name": "Channel"},
         "priority": {"name": "Priority"},
         "preset": {"name": "Accent color"},
         "icon": {"name": "Icon"},
@@ -186,8 +184,7 @@
     },
     "clear_overlay": {
       "name": "Clear Windows overlays",
-      "description": "Closes current and queued cards globally or only in the selected channel.",
-      "fields": {"channel": {"name": "Channel"}}
+      "description": "Closes all current and queued Windows overlay cards."
     }
   }
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0-beta.3 - 2026-09-02
+
+- usunięte pole kanału z formularzy akcji Home Assistant oraz uproszczone globalne
+  czyszczenie nakładek;
+- akcja zapisanego popupu otrzymała czytelne selektory encji treści, wartości, postępu,
+  czasu, odtwarzacza, kamery i obrazu oraz możliwość pobrania grafiki z adresu URL;
+
 ## 0.10.0-beta.2 - 2026-09-02
 
 - konfigurowalna nakładka Windows z automatycznym lub ręcznym rozmiarem, kolejką,

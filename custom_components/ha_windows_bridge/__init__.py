@@ -9,6 +9,8 @@ from urllib.parse import urljoin
 
 import voluptuous as vol
 from homeassistant.auth.permissions.const import POLICY_CONTROL, POLICY_READ
+from homeassistant.components import camera as camera_component
+from homeassistant.components import image as image_component
 from homeassistant.components import mqtt
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -155,6 +157,8 @@ _SHOW_SAVED_OVERLAY_SCHEMA = vol.Schema(
         vol.Optional("title_attribute"): vol.All(cv.string, vol.Length(max=128)),
         vol.Optional("message_entity"): cv.entity_id,
         vol.Optional("message_attribute"): vol.All(cv.string, vol.Length(max=128)),
+        vol.Optional("image_entity"): cv.entity_id,
+        vol.Optional("image_url"): vol.All(cv.string, vol.Length(max=700 * 1024)),
         vol.Optional("progress_entity"): cv.entity_id,
         vol.Optional("progress_attribute"): vol.All(cv.string, vol.Length(max=128)),
         vol.Optional("progress_min", default=0): vol.Coerce(float),
@@ -166,6 +170,21 @@ _SHOW_SAVED_OVERLAY_SCHEMA = vol.Schema(
 )
 _MAX_MEDIA_IMAGE_BYTES = 512 * 1024
 _MEDIA_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+
+
+def _image_data_uri(content_type: str, content: bytes) -> str:
+    """Encode a supported, bounded image for the Windows overlay payload."""
+    normalized_type = content_type.split(";", 1)[0].strip().lower()
+    if (
+        normalized_type not in _MEDIA_IMAGE_TYPES
+        or not content
+        or len(content) > _MAX_MEDIA_IMAGE_BYTES
+    ):
+        return ""
+    encoded = base64.b64encode(content).decode("ascii")
+    return f"data:{normalized_type};base64,{encoded}"
+
+
 def _normalize_template_catalog(raw: Any, device_id: str) -> tuple[list[dict[str, str]], str]:
     if isinstance(raw, bytes):
         try:
@@ -262,9 +281,23 @@ async def _async_media_image(hass: HomeAssistant, picture: str) -> str:
                 image = await response.content.read(_MAX_MEDIA_IMAGE_BYTES + 1)
     except Exception:  # Network and proxy errors should not block the notification.
         return ""
-    if not image or len(image) > _MAX_MEDIA_IMAGE_BYTES:
+    return _image_data_uri(content_type, image)
+
+
+async def _async_entity_image(hass: HomeAssistant, entity_id: str) -> str:
+    """Read the current frame from a camera or Home Assistant image entity."""
+    try:
+        if entity_id.startswith("camera."):
+            source = await camera_component.async_get_image(
+                hass, entity_id, width=1280, height=720
+            )
+        elif entity_id.startswith("image."):
+            source = await image_component.async_get_image(hass, entity_id)
+        else:
+            return ""
+    except (HomeAssistantError, TimeoutError, ValueError):
         return ""
-    return f"data:{content_type};base64,{base64.b64encode(image).decode('ascii')}"
+    return _image_data_uri(source.content_type, source.content)
 
 
 async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
@@ -402,6 +435,32 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
 
         entity_title = await text_from_entity("title_entity", "title_attribute")
         entity_message = await text_from_entity("message_entity", "message_attribute")
+        image_entity = str(options.pop("image_entity", "")).strip()
+        image_url = str(options.pop("image_url", "")).strip()
+        if image_entity:
+            if not image_entity.startswith(("camera.", "image.")):
+                raise HomeAssistantError("Select a camera or image entity")
+            if call.context.user_id:
+                user = await hass.auth.async_get_user(call.context.user_id)
+                if user is None or not user.permissions.check_entity(
+                    image_entity, POLICY_READ
+                ):
+                    raise HomeAssistantError(
+                        "Not authorized to read the selected image entity"
+                    )
+            entity_image = await _async_entity_image(hass, image_entity)
+            if not entity_image:
+                raise HomeAssistantError(
+                    "The selected camera or image entity did not return a supported image"
+                )
+            options["image"] = entity_image
+        elif image_url:
+            url_image = await _async_media_image(hass, image_url)
+            if not url_image:
+                raise HomeAssistantError(
+                    "The image URL did not return a supported image"
+                )
+            options["image"] = url_image
         media_player_entity = str(options.pop("media_player_entity", "")).strip()
         media_title = ""
         media_message = ""

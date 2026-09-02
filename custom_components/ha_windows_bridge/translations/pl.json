@@ -55,9 +55,6 @@
     "overlay_display_mode": {
       "options": {"queue": "Kolejka", "parallel": "Obok siebie"}
     },
-    "overlay_channel": {
-      "options": {"general": "Ogólny", "security": "Bezpieczeństwo", "system": "System", "media": "Multimedia", "work": "Praca"}
-    },
     "overlay_priority": {
       "options": {"low": "Niski", "normal": "Normalny", "high": "Wysoki", "critical": "Krytyczny"}
     },
@@ -74,7 +71,7 @@
   "services": {
     "show_saved_overlay": {
       "name": "Wyświetl zapisany popup",
-      "description": "Wyświetla popup wybrany w encji Zapisany popup danego komputera. Cały wygląd pozostaje w aplikacji Windows.",
+      "description": "Wyświetla projekt wybrany w encji Zapisany popup i wypełnia go wskazanymi niżej encjami. Akcja Wybierz opcję tylko zmienia aktywny projekt.",
       "fields": {
         "template_entity": {"name": "Lista popupów komputera", "description": "Wybierz encję Zapisany popup należącą do docelowego komputera."},
         "template_id": {"name": "ID szablonu", "description": "Opcjonalne zaawansowane zastąpienie aktualnie wybranego popupu."},
@@ -82,8 +79,10 @@
         "title_entity": {"name": "Encja źródłowa tytułu"},
         "title_attribute": {"name": "Atrybut źródłowy tytułu"},
         "message": {"name": "Własna wiadomość"},
-        "message_entity": {"name": "Encja źródłowa wiadomości"},
+        "message_entity": {"name": "Encja wartości lub wiadomości", "description": "Używa stanu encji albo wskazanego atrybutu jako głównej wartości lub wiadomości popupu."},
         "message_attribute": {"name": "Atrybut źródłowy wiadomości"},
+        "image_entity": {"name": "Kamera lub encja obrazu", "description": "Pobiera bieżącą klatkę z encji camera albo image."},
+        "image_url": {"name": "Adres obrazu", "description": "Opcjonalny adres HTTP(S) albo data URI obrazu."},
         "notification_id": {"name": "ID wiadomości"},
         "progress_entity": {"name": "Encja źródłowa postępu"},
         "progress_attribute": {"name": "Atrybut źródłowy postępu"},
@@ -95,7 +94,8 @@
       },
       "sections": {
         "content": {"name": "Treść dynamiczna"},
-        "values": {"name": "Wartości encji i multimedia"}
+        "media_sources": {"name": "Kamera, obraz i multimedia"},
+        "values": {"name": "Wartości z encji"}
       }
     },
     "show_overlay": {
@@ -108,7 +108,6 @@
         "media_player_entity": {"name": "Odtwarzacz Home Assistant", "description": "Pobiera tytuł, wykonawcę, okładkę i postęp z wybranego odtwarzacza."},
         "layout": {"name": "Układ treści", "description": "Tryb automatyczny dobiera układ do treści. Status wyróżnia krótką wartość, a Znacznik tworzy małą kapsułkę z ikoną, obrazem lub wartością."},
         "display_mode": {"name": "Sposób wyświetlania", "description": "Kolejka pokazuje jedną kartę naraz. Tryb Obok siebie utrzymuje do czterech kart równocześnie i zawija je, gdy brakuje miejsca."},
-        "channel": {"name": "Kanał", "description": "Grupuje powiązane karty i pozwala niezależnie wyczyścić jeden kanał."},
         "priority": {"name": "Priorytet", "description": "Karty o wyższym priorytecie są wyświetlane przed zwykłymi wiadomościami w kolejce."},
         "notification_id": {"name": "ID wiadomości", "description": "Identyfikator używany do późniejszej aktualizacji lub usunięcia karty."},
         "icon": {"name": "Ikona", "description": "Ikona MDI wyświetlana obok tytułu."},
@@ -157,7 +156,6 @@
         "media_player_entity": {"name": "Odtwarzacz Home Assistant"},
         "layout": {"name": "Układ treści"},
         "display_mode": {"name": "Sposób wyświetlania"},
-        "channel": {"name": "Kanał"},
         "priority": {"name": "Priorytet"},
         "preset": {"name": "Kolor akcentu"},
         "icon": {"name": "Ikona"},
@@ -186,8 +184,7 @@
     },
     "clear_overlay": {
       "name": "Wyczyść nakładki Windows",
-      "description": "Zamyka bieżące i oczekujące karty globalnie albo tylko w wybranym kanale.",
-      "fields": {"channel": {"name": "Kanał"}}
+      "description": "Zamyka wszystkie bieżące i oczekujące karty nakładki Windows."
     }
   }
 }

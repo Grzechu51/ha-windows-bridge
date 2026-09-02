@@ -35,8 +35,24 @@ show_saved_overlay:
         notification_id:
           selector:
             text:
+    media_sources:
+      collapsed: false
+      fields:
+        image_entity:
+          selector:
+            entity:
+              domain:
+                - camera
+                - image
+        image_url:
+          selector:
+            text:
+        media_player_entity:
+          selector:
+            entity:
+              domain: media_player
     values:
-      collapsed: true
+      collapsed: false
       fields:
         progress_entity:
           selector:
@@ -60,10 +76,6 @@ show_saved_overlay:
         duration_attribute:
           selector:
             text:
-        media_player_entity:
-          selector:
-            entity:
-              domain: media_player
 
 show_overlay:
   target:
@@ -115,18 +127,6 @@ show_overlay:
               options:
                 - queue
                 - parallel
-        channel:
-          required: true
-          default: general
-          selector:
-            select:
-              translation_key: overlay_channel
-              options:
-                - general
-                - security
-                - system
-                - media
-                - work
         priority:
           required: true
           default: normal
@@ -354,16 +354,6 @@ update_overlay:
           options:
             - queue
             - parallel
-    channel:
-      selector:
-        select:
-          translation_key: overlay_channel
-          options:
-            - general
-            - security
-            - system
-            - media
-            - work
     priority:
       selector:
         select:
@@ -485,14 +475,3 @@ clear_overlay:
     entity:
       domain: notify
       integration: ha_windows_bridge
-  fields:
-    channel:
-      selector:
-        select:
-          translation_key: overlay_channel
-          options:
-            - general
-            - security
-            - system
-            - media
-            - work
