@@ -8,6 +8,7 @@ import re
 import sys
 import time
 from collections import deque
+from collections.abc import Callable
 from typing import Any
 
 import qtawesome as qta
@@ -38,7 +39,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QFrame,
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QProgressBar,
@@ -54,6 +54,10 @@ _ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 _CORNERS = {"top_left", "top_right", "bottom_left", "bottom_right", "top_center"}
 _CHANNELS = {"general", "security", "system", "media", "work"}
 _PRIORITIES = {"low": 0, "normal": 1, "high": 2, "critical": 3}
+_MAX_PARALLEL_CARDS = 4
+_PARALLEL_GAP = 10
+_WINDOW_EXTRA_WIDTH = 0
+_WINDOW_EXTRA_HEIGHT = 0
 _PRESET_COLORS = {
     "default": "#91a1a8",
     "success": "#43ce89",
@@ -72,7 +76,10 @@ class OverlayCard(QFrame):
         self._media_background: QPixmap | None = None
         self._media_surface = QColor(18, 22, 24)
         self._media_opacity = 1.0
+        self._media_scaled: QPixmap | None = None
+        self._media_scaled_key: tuple[int, int, int] | None = None
         self._text_scrim = QColor(0, 0, 0, 0)
+        self._glass_accent = QColor("#91a1a8")
 
     def set_glass_background(
         self,
@@ -92,9 +99,15 @@ class OverlayCard(QFrame):
         opacity: float = 1.0,
     ) -> None:
         self._media_background = pixmap
+        self._media_scaled = None
+        self._media_scaled_key = None
         if surface is not None:
             self._media_surface = QColor(surface)
         self._media_opacity = max(0.0, min(1.0, float(opacity)))
+        self.update()
+
+    def set_glass_accent(self, color: QColor) -> None:
+        self._glass_accent = QColor(color)
         self.update()
 
     def set_text_scrim(self, color: QColor | None = None) -> None:
@@ -130,11 +143,19 @@ class OverlayCard(QFrame):
             painter.setOpacity(self._media_opacity)
             painter.fillPath(path, self._media_surface)
             artwork_rect = self._right_artwork_rect(self.size(), background.size())
-            scaled = background.scaled(
-                artwork_rect.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
+            cache_key = (
+                int(background.cacheKey()),
+                artwork_rect.width(),
+                artwork_rect.height(),
             )
+            if self._media_scaled is None or self._media_scaled_key != cache_key:
+                self._media_scaled = background.scaled(
+                    artwork_rect.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self._media_scaled_key = cache_key
+            scaled = self._media_scaled
             painter.drawPixmap(artwork_rect.topLeft(), scaled)
             transition_width = max(
                 72,
@@ -194,21 +215,29 @@ class OverlayCard(QFrame):
                     0,
                     max(self.width(), self.height()) * 0.78,
                 )
-                gloss.setColorAt(0.0, QColor(255, 255, 255, 86))
-                gloss.setColorAt(0.34, QColor(255, 255, 255, 30))
+                accent_gloss = QColor(self._glass_accent)
+                accent_gloss.setAlpha(76)
+                gloss.setColorAt(0.0, accent_gloss)
+                accent_soft = QColor(self._glass_accent)
+                accent_soft.setAlpha(28)
+                gloss.setColorAt(0.34, accent_soft)
                 gloss.setColorAt(0.72, QColor(188, 224, 238, 10))
                 gloss.setColorAt(1.0, QColor(255, 255, 255, 0))
                 painter.fillPath(path, QBrush(gloss))
                 painter.setClipping(False)
                 edge = QLinearGradient(0, 0, 0, self.height())
-                edge.setColorAt(0.0, QColor(255, 255, 255, 168))
-                edge.setColorAt(0.48, QColor(255, 255, 255, 58))
-                edge.setColorAt(1.0, QColor(225, 242, 248, 104))
+                edge_top = QColor(self._glass_accent)
+                edge_top.setAlpha(168)
+                edge_middle = QColor(self._glass_accent)
+                edge_middle.setAlpha(58)
+                edge_bottom = QColor(self._glass_accent)
+                edge_bottom.setAlpha(104)
+                edge.setColorAt(0.0, edge_top)
+                edge.setColorAt(0.48, edge_middle)
+                edge.setColorAt(1.0, edge_bottom)
                 painter.setPen(QPen(QBrush(edge), 1.2))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRoundedRect(card_rect.adjusted(1, 1, -1, -1), 15, 15)
-                painter.setPen(QPen(QColor(255, 255, 255, 30), 2.2))
-                painter.drawRoundedRect(card_rect.adjusted(3, 3, -3, -3), 13, 13)
         if self._text_scrim.alpha() > 0 and self._media_background is None:
             painter.setClipPath(path)
             scrim = QLinearGradient(0, 0, max(1, self.width() * 0.82), 0)
@@ -234,12 +263,27 @@ class OverlayManager(QObject):
         *,
         default_monitor: int = 0,
         close_tooltip: str = "Close overlay",
+        preview_mode: bool = False,
+        desktop_capture: DesktopDuplicationCapture | None = None,
+        _parallel_child: bool = False,
+        _on_hidden: Callable[[OverlayManager], None] | None = None,
+        _on_geometry_changed: Callable[[], None] | None = None,
     ):
         super().__init__()
         self.duration_seconds = max(2, min(60, int(duration_seconds)))
         self.allow_fullscreen = bool(allow_fullscreen)
         self.default_monitor = max(0, min(15, int(default_monitor)))
         self.close_tooltip = close_tooltip
+        self._preview_mode = bool(preview_mode)
+        self._parallel_child = bool(_parallel_child)
+        self._on_hidden = _on_hidden
+        self._on_geometry_changed = _on_geometry_changed
+        self._parallel_cards: dict[str, OverlayManager] = {}
+        self._parallel_offset_x = 0
+        self._parallel_group_width = 0
+        self._parallel_y_offset = 0
+        self._animation_offset_x = 0
+        self._animation_offset_y = 0
         self._monitor = WindowsSystemMonitor()
         self._queue: deque[dict[str, Any]] = deque(maxlen=20)
         self._current: dict[str, Any] | None = None
@@ -255,6 +299,10 @@ class OverlayManager(QObject):
         self._lifetime_progress: QProgressBar | None = None
         self._progress_time: QLabel | None = None
         self._close_button: QToolButton | None = None
+        self._content_layout: QVBoxLayout | None = None
+        self._body_layout: QHBoxLayout | None = None
+        self._text_layout: QVBoxLayout | None = None
+        self._top_layout: QHBoxLayout | None = None
         self._timer: QTimer | None = None
         self._progress_timer: QTimer | None = None
         self._glass_timer: QTimer | None = None
@@ -267,11 +315,12 @@ class OverlayManager(QObject):
         self._glass_slow_frames = 0
         self._glass_text_mode = ""
         self._native_backdrop = NativeBackdrop()
-        self._desktop_capture = DesktopDuplicationCapture()
+        self._desktop_capture = desktop_capture or DesktopDuplicationCapture()
+        self._owns_desktop_capture = desktop_capture is None
         self._capture_backend = "imagegrab"
         self._last_capture_signature = b""
         self._glass_idle_frames = 0
-        self._glass_interval_ms = 220
+        self._glass_interval_ms = 500 if self._preview_mode else 240
         self._last_capture_changed = True
         self._gpu_capture_failures = 0
         self._dismiss_deadline = 0.0
@@ -285,6 +334,16 @@ class OverlayManager(QObject):
     ) -> bool:
         raw_options = options or {}
         action = str(raw_options.get("action", "show")).strip().lower()
+        raw_message_id = str(raw_options.get("id", "")).strip()
+        parallel = self._parallel_cards.get(raw_message_id)
+        if not self._parallel_child and parallel is not None:
+            if action == "update":
+                updated = parallel.handle_message(title, message, raw_options)
+                QTimer.singleShot(0, self._reflow_parallel_cards)
+                return updated
+            if action == "remove":
+                parallel.hide(show_next=True)
+                return True
         if action == "update":
             message_id = str(raw_options.get("id", "")).strip()
             existing = None
@@ -304,6 +363,8 @@ class OverlayManager(QObject):
         message_id = clean["id"]
         if action == "clear":
             channel = clean.get("channel", "")
+            if not self._parallel_child:
+                self._clear_parallel_cards(channel)
             if channel:
                 self._queue = deque(
                     (item for item in self._queue if item.get("channel") != channel),
@@ -335,6 +396,8 @@ class OverlayManager(QObject):
                     self._sort_queue()
                     return True
             return False
+        if clean["display_mode"] == "parallel" and not self._parallel_child:
+            return self._show_parallel_card(clean)
         if self._current is not None:
             if (
                 clean["priority"] > self._current.get("priority", 1)
@@ -353,10 +416,144 @@ class OverlayManager(QObject):
     def show_message(self, title: str, message: str) -> bool:
         return self.handle_message(title, message)
 
+    def _show_parallel_card(self, request: dict[str, Any]) -> bool:
+        message_id = request["id"]
+        existing = self._parallel_cards.get(message_id)
+        if existing is not None:
+            updated = existing.handle_message(
+                request["title"],
+                request["message"],
+                {**request, "action": "update"},
+            )
+            QTimer.singleShot(0, self._reflow_parallel_cards)
+            return updated
+
+        while len(self._parallel_cards) >= _MAX_PARALLEL_CARDS:
+            oldest_id = next(iter(self._parallel_cards))
+            oldest = self._parallel_cards.pop(oldest_id)
+            oldest._on_hidden = None
+            oldest.close()
+
+        child = OverlayManager(
+            duration_seconds=self.duration_seconds,
+            allow_fullscreen=self.allow_fullscreen,
+            default_monitor=self.default_monitor,
+            close_tooltip=self.close_tooltip,
+            preview_mode=self._preview_mode,
+            desktop_capture=self._desktop_capture,
+            _parallel_child=True,
+            _on_hidden=self._parallel_card_hidden,
+            _on_geometry_changed=self._reflow_parallel_cards,
+        )
+        child._animations_allowed = self._animations_allowed
+        child._liquid_compatible = self._liquid_compatible
+        child._current = request
+        self._parallel_cards[message_id] = child
+        if not child._display(request):
+            child._on_hidden = None
+            child.close()
+            self._parallel_cards.pop(message_id, None)
+            return False
+        QTimer.singleShot(0, self._reflow_parallel_cards)
+        return True
+
+    def _parallel_card_hidden(self, child: OverlayManager) -> None:
+        message_id = next(
+            (
+                item_id
+                for item_id, candidate in self._parallel_cards.items()
+                if candidate is child
+            ),
+            "",
+        )
+        if message_id:
+            self._parallel_cards.pop(message_id, None)
+        child._on_hidden = None
+        child.close()
+        QTimer.singleShot(0, self._reflow_parallel_cards)
+
+    def _clear_parallel_cards(self, channel: str = "") -> None:
+        for message_id, child in tuple(self._parallel_cards.items()):
+            request = child._current or {}
+            if channel and request.get("channel") != channel:
+                continue
+            self._parallel_cards.pop(message_id, None)
+            child._on_hidden = None
+            child.close()
+        QTimer.singleShot(0, self._reflow_parallel_cards)
+
+    def _reflow_parallel_cards(self) -> None:
+        groups: dict[tuple[int, str, int], list[OverlayManager]] = {}
+        for child in self._parallel_cards.values():
+            if child._current is None or child._window is None:
+                continue
+            request = child._current
+            key = (request["monitor"], request["corner"], request["edge_offset"])
+            groups.setdefault(key, []).append(child)
+
+        group_heights: dict[tuple[int, str, int], int] = {}
+        screens = QGuiApplication.screens()
+        for key, children in groups.items():
+            monitor, _corner, edge_offset = key
+            available_width = 1920
+            if screens:
+                screen = screens[max(0, min(len(screens) - 1, monitor))]
+                available_width = max(280, screen.availableGeometry().width() - edge_offset * 2)
+
+            rows: list[list[OverlayManager]] = []
+            row: list[OverlayManager] = []
+            row_width = 0
+            for child in children:
+                visible_width = child._card.width() if child._card is not None else 280
+                candidate_width = visible_width if not row else row_width + _PARALLEL_GAP + visible_width
+                if row and candidate_width > available_width:
+                    rows.append(row)
+                    row = []
+                    row_width = 0
+                row.append(child)
+                row_width = visible_width if len(row) == 1 else row_width + _PARALLEL_GAP + visible_width
+            if row:
+                rows.append(row)
+
+            vertical_offset = 0
+            for current_row in rows:
+                group_width = sum(
+                    child._card.width() if child._card is not None else 280
+                    for child in current_row
+                ) + max(0, len(current_row) - 1) * _PARALLEL_GAP
+                horizontal_offset = 0
+                row_height = 0
+                for child in current_row:
+                    visible_width = child._card.width() if child._card is not None else 280
+                    visible_height = child._card.height() if child._card is not None else 78
+                    child._parallel_offset_x = horizontal_offset
+                    child._parallel_group_width = group_width
+                    child._parallel_y_offset = vertical_offset
+                    request = child._current
+                    child._position(
+                        request["monitor"], request["corner"], request["edge_offset"]
+                    )
+                    horizontal_offset += visible_width + _PARALLEL_GAP
+                    row_height = max(row_height, visible_height)
+                vertical_offset += row_height + _PARALLEL_GAP
+            group_heights[key] = max(0, vertical_offset - _PARALLEL_GAP)
+
+        self._parallel_y_offset = 0
+        if self._current is not None and self._window is not None:
+            request = self._current
+            key = (request["monitor"], request["corner"], request["edge_offset"])
+            if key in groups:
+                self._parallel_y_offset = group_heights[key] + _PARALLEL_GAP
+            self._position(
+                request["monitor"], request["corner"], request["edge_offset"]
+            )
+
     @staticmethod
     def test_pattern_names() -> tuple[tuple[str, str], ...]:
         return (
             ("compact", "Krótka wiadomość"),
+            ("parallel", "Panel statusu"),
+            ("badges", "Pasek wskaźników"),
             ("long", "Długa treść"),
             ("liquid", "Liquid Glass"),
             ("camera", "Kamera priorytetowa"),
@@ -380,6 +577,54 @@ class OverlayManager(QObject):
         return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
 
     def show_test_pattern(self, name: str) -> bool:
+        if name == "badges":
+            badges = (
+                ("clock", time.strftime("%H:%M"), "", "", "default", None),
+                ("person", "", "", "mdi:account", "info", None),
+                ("light", "", "", "mdi:lightbulb-on", "warning", None),
+                ("battery", "", "88%", "mdi:battery-80", "success", 88),
+            )
+            shown = True
+            for item_id, title, value, icon, preset, progress in badges:
+                shown = self.handle_message(
+                    title,
+                    value,
+                    {
+                        "id": f"local-test-badge-{item_id}",
+                        "duration": 8,
+                        "display_mode": "parallel",
+                        "layout": "badge",
+                        "icon": icon,
+                        "preset": preset,
+                        "progress": progress,
+                        "opacity": 0.82,
+                        "pause_on_hover": True,
+                    },
+                ) and shown
+            return shown
+        if name == "parallel":
+            cards = (
+                ("battery", "Bateria", "78%", "mdi:battery-80", "success", 78),
+                ("cpu", "Procesor", "24%", "mdi:cpu-64-bit", "info", 24),
+                ("memory", "Pamięć RAM", "61%", "mdi:memory", "warning", 61),
+            )
+            shown = True
+            for item_id, title, value, icon, preset, progress in cards:
+                shown = self.handle_message(
+                    title,
+                    value,
+                    {
+                        "id": f"local-test-status-{item_id}",
+                        "duration": 8,
+                        "display_mode": "parallel",
+                        "layout": "status",
+                        "icon": icon,
+                        "preset": preset,
+                        "progress": progress,
+                        "pause_on_hover": True,
+                    },
+                ) and shown
+            return shown
         patterns: dict[str, tuple[str, str, dict[str, Any]]] = {
             "compact": (
                 "Home Assistant",
@@ -452,35 +697,57 @@ class OverlayManager(QObject):
             start_size = QSize(self._card.size())
             request = self._current
             animation = QVariantAnimation(self._window)
-            animation.setDuration(360)
+            animation.setDuration(620)
             animation.setStartValue(0.0)
             animation.setEndValue(1.0)
-            animation.setEasingCurve(QEasingCurve.Type.InCubic)
+            animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+            corner = request["corner"] if request is not None else "top_right"
+            horizontal_direction, vertical_direction = self._animation_directions(corner)
+            target_size = QSize(
+                max(1, round(start_size.width() * 0.62)),
+                max(1, round(start_size.height() * 0.78)),
+            )
 
             def apply_frame(value: object) -> None:
                 if self._window is None or self._card is None:
                     return
                 progress = max(0.0, min(1.0, float(value)))
-                scale = 1.0 - progress * 0.035
-                width = max(1, round(start_size.width() * scale))
-                height = max(1, round(start_size.height() * scale))
+                width = round(
+                    start_size.width()
+                    + (target_size.width() - start_size.width()) * progress
+                )
+                height = round(
+                    start_size.height()
+                    + (target_size.height() - start_size.height()) * progress
+                )
                 self._card.setFixedSize(width, height)
-                self._window.setFixedSize(width + 20, height + 12)
+                self._window.setFixedSize(
+                    width + _WINDOW_EXTRA_WIDTH,
+                    height + _WINDOW_EXTRA_HEIGHT,
+                )
+                self._animation_offset_x = round(horizontal_direction * 14 * progress)
+                self._animation_offset_y = round(
+                    vertical_direction * (start_size.height() - height) / 2
+                )
                 if request is not None:
                     self._position(
                         request["monitor"],
                         request["corner"],
                         request["edge_offset"],
                     )
+                if self._on_geometry_changed is not None:
+                    self._on_geometry_changed()
                 self._window.setWindowOpacity(1.0 - progress)
 
             def finish() -> None:
                 if self._window is not None and self._card is not None:
                     self._card.setFixedSize(start_size)
                     self._window.setFixedSize(
-                        start_size.width() + 20,
-                        start_size.height() + 12,
+                        start_size.width() + _WINDOW_EXTRA_WIDTH,
+                        start_size.height() + _WINDOW_EXTRA_HEIGHT,
                     )
+                    self._animation_offset_x = 0
+                    self._animation_offset_y = 0
                     if request is not None:
                         self._position(
                             request["monitor"],
@@ -500,11 +767,22 @@ class OverlayManager(QObject):
         if self._window is not None:
             self._window.hide()
             self._window.setWindowOpacity(1.0)
+        self._animation_offset_x = 0
+        self._animation_offset_y = 0
         self._native_backdrop.disable()
         self._animation = None
         if show_next:
             self._current = None
             self._show_next()
+        if (
+            self._parallel_child
+            and self._current is None
+            and not self._queue
+            and self._on_hidden is not None
+        ):
+            callback = self._on_hidden
+            self._on_hidden = None
+            callback(self)
 
     def _stop_animation(self) -> None:
         if self._animation is not None:
@@ -522,25 +800,32 @@ class OverlayManager(QObject):
             return
         final_size = QSize(self._card.size())
         self._stop_animation()
+        if self._glass_timer is not None:
+            self._glass_timer.stop()
         if not self._animations_allowed:
+            self._animation_offset_x = 0
+            self._animation_offset_y = 0
             self._window.setWindowOpacity(1.0)
             self._window.show()
             self._window.raise_()
             self._configure_dynamic_glass(request)
+            if self._on_geometry_changed is not None:
+                self._on_geometry_changed()
             return
         if was_visible and previous_size.isValid():
             start_size = previous_size
         else:
             start_size = QSize(
-                max(1, round(final_size.width() * 0.94)),
-                max(1, round(final_size.height() * 0.94)),
+                max(1, round(final_size.width() * 0.62)),
+                max(1, round(final_size.height() * 0.78)),
             )
         animation = QVariantAnimation(self._window)
-        animation.setDuration(380 if was_visible else 520)
+        animation.setDuration(500 if was_visible else 760)
         animation.setStartValue(0.0)
         animation.setEndValue(1.0)
-        animation.setEasingCurve(
-            QEasingCurve.Type.OutCubic if was_visible else QEasingCurve.Type.OutBack
+        animation.setEasingCurve(QEasingCurve.Type.OutQuint)
+        horizontal_direction, vertical_direction = self._animation_directions(
+            request["corner"]
         )
 
         def apply_frame(value: object) -> None:
@@ -556,26 +841,46 @@ class OverlayManager(QObject):
                 + (final_size.height() - start_size.height()) * progress
             )
             self._card.setFixedSize(max(1, width), max(1, height))
-            self._window.setFixedSize(max(1, width) + 20, max(1, height) + 12)
+            self._window.setFixedSize(
+                max(1, width) + _WINDOW_EXTRA_WIDTH,
+                max(1, height) + _WINDOW_EXTRA_HEIGHT,
+            )
+            if was_visible:
+                self._animation_offset_x = 0
+                self._animation_offset_y = 0
+            else:
+                self._animation_offset_x = round(
+                    horizontal_direction * 14 * (1.0 - progress)
+                )
+                self._animation_offset_y = round(
+                    vertical_direction * (final_size.height() - height) / 2
+                )
             self._position(
                 request["monitor"], request["corner"], request["edge_offset"]
             )
-            opacity = (
-                min(1.0, max(0.0, progress))
-                if not was_visible
-                else min(1.0, 0.9 + max(0.0, progress) * 0.1)
-            )
-            self._window.setWindowOpacity(opacity)
+            if self._on_geometry_changed is not None:
+                self._on_geometry_changed()
+            # Keep the surface at its configured opacity throughout the reveal.
+            # Fading the entire layered window made Acrylic/Liquid Glass appear
+            # to build up in several visible steps behind the growing card.
+            self._window.setWindowOpacity(1.0)
 
         def finish() -> None:
             if self._window is None or self._card is None:
                 return
             self._card.setFixedSize(final_size)
-            self._window.setFixedSize(final_size.width() + 20, final_size.height() + 12)
+            self._window.setFixedSize(
+                final_size.width() + _WINDOW_EXTRA_WIDTH,
+                final_size.height() + _WINDOW_EXTRA_HEIGHT,
+            )
             self._window.setWindowOpacity(1.0)
+            self._animation_offset_x = 0
+            self._animation_offset_y = 0
             self._position(
                 request["monitor"], request["corner"], request["edge_offset"]
             )
+            if self._on_geometry_changed is not None:
+                self._on_geometry_changed()
             self._animation = None
             self._configure_dynamic_glass(request)
 
@@ -585,9 +890,30 @@ class OverlayManager(QObject):
         apply_frame(0.0)
         self._window.show()
         self._window.raise_()
+        # The initial background was captured before showing the window. Resume
+        # dynamic refresh only after the geometry animation has settled, avoiding
+        # repeated captures of intermediate sizes and visible trails.
         animation.start()
 
+    @staticmethod
+    def _animation_directions(corner: str) -> tuple[int, int]:
+        """Return the outside-screen and vertical-centering animation directions."""
+        horizontal = (
+            1
+            if corner in {"top_right", "bottom_right"}
+            else -1
+            if corner in {"top_left", "bottom_left"}
+            else 0
+        )
+        vertical = 1 if corner.startswith("top") else -1
+        return horizontal, vertical
+
     def close(self) -> None:
+        for child in tuple(self._parallel_cards.values()):
+            child._on_hidden = None
+            child.close()
+        self._parallel_cards.clear()
+        self._on_geometry_changed = None
         self._queue.clear()
         self._current = None
         if self._animation is not None:
@@ -598,7 +924,8 @@ class OverlayManager(QObject):
         if self._lifetime_timer is not None:
             self._lifetime_timer.stop()
         self._native_backdrop.disable()
-        self._desktop_capture.release()
+        if self._owns_desktop_capture:
+            self._desktop_capture.release()
         if self._window is not None:
             self._window.close()
             self._window.deleteLater()
@@ -614,16 +941,23 @@ class OverlayManager(QObject):
         self._lifetime_progress = None
         self._progress_time = None
         self._close_button = None
+        self._content_layout = None
+        self._body_layout = None
+        self._text_layout = None
+        self._top_layout = None
         self._timer = None
         self._progress_timer = None
         self._glass_timer = None
         self._lifetime_timer = None
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        card_content = self._card is not None and (
-            watched is self._card
-            or (isinstance(watched, QWidget) and self._card.isAncestorOf(watched))
-        )
+        try:
+            card_content = self._card is not None and (
+                watched is self._card
+                or (isinstance(watched, QWidget) and self._card.isAncestorOf(watched))
+            )
+        except RuntimeError:
+            card_content = False
         if (
             card_content
             and event.type() == QEvent.Type.MouseButtonRelease
@@ -689,15 +1023,89 @@ class OverlayManager(QObject):
         media_layout = resolved_layout == "media"
         camera_layout = resolved_layout == "camera"
         compact_layout = resolved_layout == "compact"
+        status_layout = resolved_layout == "status"
+        badge_layout = resolved_layout == "badge"
+        if badge_layout:
+            content_margins = (8, 5, 8, 5)
+            content_spacing = 0
+            body_spacing = 5
+            text_spacing = 0
+            top_spacing = 5
+        elif status_layout:
+            content_margins = (10, 7, 10, 7)
+            content_spacing = 3
+            body_spacing = 7
+            text_spacing = 1
+            top_spacing = 6
+        elif compact_layout:
+            content_margins = (14, 10, 14, 9)
+            content_spacing = 5
+            body_spacing = 10
+            text_spacing = 3
+            top_spacing = 8
+        else:
+            content_margins = (15, 14, 16, 14)
+            content_spacing = 10
+            body_spacing = 14
+            text_spacing = 8
+            top_spacing = 10
+        if self._content_layout is not None:
+            self._content_layout.setContentsMargins(*content_margins)
+            self._content_layout.setSpacing(content_spacing)
+        if self._body_layout is not None:
+            self._body_layout.setSpacing(body_spacing)
+        if self._text_layout is not None:
+            self._text_layout.setSpacing(text_spacing)
+        if self._top_layout is not None:
+            self._top_layout.setSpacing(top_spacing)
+        badge_alignment = (
+            Qt.AlignmentFlag.AlignCenter if badge_layout else Qt.AlignmentFlag(0)
+        )
+        if self._content_layout is not None:
+            self._content_layout.setAlignment(badge_alignment)
+        if self._body_layout is not None:
+            self._body_layout.setAlignment(badge_alignment)
+            self._body_layout.setStretch(1, 0 if badge_layout else 1)
+        if self._text_layout is not None:
+            self._text_layout.setAlignment(badge_alignment)
+        if self._top_layout is not None:
+            self._top_layout.setAlignment(badge_alignment)
+            self._top_layout.setStretch(1, 0 if badge_layout else 1)
+        self._title.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+            if badge_layout
+            else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        badge_value = (
+            request["message"]
+            or (
+                f"{request['progress']}%"
+                if badge_layout and request["progress"] is not None
+                else ""
+            )
+            or request["title"]
+        )
         self._title.setText(
             request["media_source"] or "Media Player"
             if media_layout
+            else badge_value
+            if badge_layout
             else request["title"]
         )
+        self._title.setVisible(not badge_layout or bool(badge_value))
         self._media_title.setText(request["title"])
         self._media_title.setVisible(media_layout)
         self._label.setText(request["message"])
-        self._label.setVisible(bool(request["message"]))
+        self._label.setVisible(bool(request["message"]) and not badge_layout)
+        message_indent = (
+            32
+            if status_layout and request["icon"]
+            else 44
+            if compact_layout and request["icon"]
+            else 0
+        )
+        self._label.setContentsMargins(message_indent, 0, 0, 0)
+        request["_badge_pixmap"] = pixmap if badge_layout else None
         card_width = (
             request["width"]
             if request["size_mode"] == "manual"
@@ -733,8 +1141,8 @@ class OverlayManager(QObject):
             self._image.setVisible(False)
         self._progress_started_at = 0.0
         progress = self._current_progress(request)
-        self._progress.setVisible(progress is not None)
-        if progress is not None:
+        self._progress.setVisible(progress is not None and not badge_layout)
+        if progress is not None and not badge_layout:
             self._progress.setValue(progress)
         self._update_progress_time(request)
         media_surface, media_primary, media_secondary = self._media_palette(
@@ -745,6 +1153,8 @@ class OverlayManager(QObject):
             if media_layout
             else QColor(_PRESET_COLORS[request["preset"]])
         )
+        if isinstance(self._card, OverlayCard):
+            self._card.set_glass_accent(accent_color)
         accent = accent_color.name()
         tint_strength = 0.0 if request["preset"] == "default" else 0.08
         background = tuple(
@@ -779,6 +1189,8 @@ class OverlayManager(QObject):
             if native_blur
             else {"none": 255, "blur": 150, "liquid": 92}[background_effect]
         )
+        if badge_layout and background_effect == "none":
+            surface_alpha = 210
         background_alpha = round(surface_alpha * request["opacity"])
         border_alpha = (
             132
@@ -818,19 +1230,39 @@ class OverlayManager(QObject):
             title_color = "#f5f8f7"
             media_title_color = "#f5f8f7"
             message_color = "#b9c3c7"
+        if badge_layout:
+            message_color = "#f5f8f7"
+            if not badge_value:
+                card_surface = "background: transparent; "
+        elif status_layout:
+            message_color = "#f5f8f7"
+            border_alpha = min(border_alpha, 100)
         if isinstance(self._card, OverlayCard):
             self._card.set_media_background(
                 pixmap if media_artwork else None,
                 media_surface,
                 request["opacity"],
             )
-        self._icon.setFixedSize(25, 25) if media_layout else self._icon.setFixedSize(36, 36)
-        self._set_icon(request["icon"], accent)
-        title_size = 12 if media_layout else 15
-        title_weight = 600 if media_layout else 700
+        self._icon.setFixedSize(25, 25) if media_layout else self._icon.setFixedSize(
+            26 if badge_layout or status_layout else 34 if compact_layout else 36,
+            26 if badge_layout or status_layout else 34 if compact_layout else 36,
+        )
+        if badge_layout and pixmap is not None:
+            self._set_badge_image(pixmap)
+        else:
+            self._set_icon(request["icon"], accent)
+        title_size = 14 if badge_layout else 10 if status_layout else 12 if media_layout else 15
+        title_weight = 600 if media_layout or status_layout or badge_layout else 700
         icon_surface = "transparent" if media_layout else icon_background
-        icon_border = "transparent" if media_layout else accent
-        icon_radius = 0 if media_layout else 18
+        icon_border = (
+            "transparent"
+            if media_layout or badge_layout
+            else f"rgba({accent_color.red()}, {accent_color.green()}, "
+            f"{accent_color.blue()}, 145)"
+            if status_layout
+            else accent
+        )
+        icon_radius = 0 if media_layout else 13 if badge_layout or status_layout else 18
         track_color = (
             "rgba(0, 0, 0, 58)"
             if media_layout and media_surface.lightness() >= 145
@@ -838,18 +1270,35 @@ class OverlayManager(QObject):
             if media_layout
             else "#273034"
         )
+        card_border_alpha = (
+            0
+            if badge_layout or (background_effect == "liquid" and not media_layout)
+            else border_alpha
+        )
+        card_radius = (
+            8
+            if native_blur
+            else 20
+            if badge_layout and not badge_value
+            else 11
+            if badge_layout
+            else 14
+            if status_layout
+            else 17
+        )
         self._window.setStyleSheet(
             "QFrame#windowsOverlay { background: transparent; border: none; } "
             f"QFrame#overlayCard {{ {card_surface}"
             f"border: 1px solid rgba({border_color.red()}, {border_color.green()}, "
-            f"{border_color.blue()}, {border_alpha}); border-radius: 17px; }} "
+            f"{border_color.blue()}, {card_border_alpha}); border-radius: {card_radius}px; }} "
             "QLabel { background: transparent; } "
             f"QLabel#overlayTitle {{ color: {title_color}; font-size: {title_size}px; "
             f"font-weight: {title_weight}; }} "
             f"QLabel#overlayMediaTitle {{ color: {media_title_color}; font-size: 15px; "
             "font-weight: 700; } "
             f"QLabel#overlayMessage {{ color: {message_color}; font-size: "
-            f"{12 if media_layout else 13}px; }} "
+            f"{17 if status_layout else 12 if media_layout else 13}px; "
+            f"font-weight: {700 if status_layout else 400}; }} "
             "QLabel#overlayCover { background-color: #171d20; border: 1px solid #334044; "
             "border-radius: 12px; padding: 3px; } "
             f"QLabel#overlayIcon {{ color: {accent}; background-color: {icon_surface}; "
@@ -865,12 +1314,13 @@ class OverlayManager(QObject):
             f"QProgressBar#overlayProgress::chunk {{ background: {accent}; "
             "border-radius: 3px; } "
             "QProgressBar#overlayLifetime { background: rgba(255,255,255,24); "
-            "border: none; border-radius: 1px; } "
+            "border: none; border-radius: 2px; } "
             f"QProgressBar#overlayLifetime::chunk {{ background: {accent}; "
-            "border-radius: 1px; } "
+            "border-radius: 2px; } "
             f"QLabel#overlayProgressTime {{ color: {message_color}; font-size: 11px; }}"
         )
         self._window.setWindowOpacity(1.0)
+        self._progress.setFixedHeight(3 if status_layout or badge_layout else 6)
         self._close_button.setVisible(request["show_close_button"])
         interactive = (
             request["show_close_button"]
@@ -887,11 +1337,11 @@ class OverlayManager(QObject):
             else Qt.CursorShape.ArrowCursor
         )
         self._card.setFixedWidth(card_width)
-        self._window.setFixedWidth(card_width + 20)
+        self._window.setFixedWidth(card_width + _WINDOW_EXTRA_WIDTH)
         self._window.ensurePolished()
         if request["size_mode"] == "manual":
             self._card.setFixedHeight(request["height"])
-            self._window.setFixedHeight(request["height"] + 12)
+            self._window.setFixedHeight(request["height"] + _WINDOW_EXTRA_HEIGHT)
         else:
             self._fit_automatic_height(
                 card_width,
@@ -900,6 +1350,10 @@ class OverlayManager(QObject):
                     if media_layout
                     else 280
                     if camera_layout
+                    else 40
+                    if badge_layout
+                    else 60
+                    if status_layout
                     else 72
                     if compact_layout
                     else 72
@@ -918,6 +1372,11 @@ class OverlayManager(QObject):
                 )
                 if not captured and background_effect == "liquid":
                     self._fallback_liquid_to_blur()
+            elif badge_layout:
+                self._image.clear()
+                self._image.setVisible(False)
+                self._cover.clear()
+                self._cover.setVisible(False)
             else:
                 self._card.set_glass_background(None)
                 self._clear_adaptive_legibility()
@@ -928,12 +1387,14 @@ class OverlayManager(QObject):
         else:
             self._progress_timer.stop()
         self._start_dismiss_timer(request)
+        if not self._parallel_child and self._parallel_cards:
+            QTimer.singleShot(0, self._reflow_parallel_cards)
         return True
 
     @staticmethod
     def _resolve_layout(request: dict[str, Any], has_image: bool) -> str:
         layout = str(request.get("layout", "default"))
-        if layout in {"compact", "standard", "media", "camera"}:
+        if layout in {"compact", "status", "badge", "standard", "media", "camera"}:
             return layout
         if request.get("camera"):
             return "camera"
@@ -964,6 +1425,29 @@ class OverlayManager(QObject):
             chrome += 30
         width = text_width + chrome
         layout = request.get("_resolved_layout", request.get("layout"))
+        if layout == "badge":
+            value = (
+                request.get("message", "")
+                or (f"{request['progress']}%" if request.get("progress") is not None else "")
+                or request.get("title", "")
+            )
+            width = len(value) * 9 + 16
+            if request.get("icon") or request.get("_badge_pixmap") is not None:
+                width += 32
+            if request.get("show_close_button"):
+                width += 26
+            has_visual = bool(request.get("icon") or request.get("_badge_pixmap") is not None)
+            minimum = 42 if not value else 86 if has_visual else 64
+            return max(minimum, min(180, width))
+        if layout == "status":
+            title_width = len(request.get("title", "")) * 6
+            value_width = len(request.get("message", "")) * 9
+            width = max(54, title_width, value_width) + 24
+            if request.get("icon"):
+                width += 32
+            if request.get("show_close_button"):
+                width += 26
+            return max(150, min(220, width))
         if layout == "media":
             width = max(width, 480)
         elif layout == "camera":
@@ -972,6 +1456,8 @@ class OverlayManager(QObject):
             width = min(width, 430)
         elif has_image:
             width = max(width, 440)
+        if request.get("display_mode") == "parallel" and request.get("size_mode") == "auto":
+            width = min(width, 300)
         return max(280, min(600, width))
 
     def _fit_automatic_height(self, card_width: int, minimum_height: int = 72) -> None:
@@ -989,7 +1475,7 @@ class OverlayManager(QObject):
             card_height = self._card.sizeHint().height()
         card_height = max(minimum_height, min(900, card_height))
         self._card.setFixedHeight(card_height)
-        self._window.setFixedHeight(card_height + 12)
+        self._window.setFixedHeight(card_height + _WINDOW_EXTRA_HEIGHT)
 
     @staticmethod
     def _average_artwork_color(
@@ -1291,6 +1777,16 @@ class OverlayManager(QObject):
         if source.isNull() or radius <= 0:
             return QPixmap(source)
         image = source.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+        original_size = image.size()
+        longest_edge = max(image.width(), image.height())
+        scale = min(1.0, 320 / max(1, longest_edge))
+        if scale < 1.0:
+            image = image.scaled(
+                max(1, round(image.width() * scale)),
+                max(1, round(image.height() * scale)),
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
         width = image.width()
         height = image.height()
         raw = bytes(image.constBits())
@@ -1303,8 +1799,17 @@ class OverlayManager(QObject):
             image.bytesPerLine(),
             1,
         )
-        blurred = pil_image.filter(ImageFilter.GaussianBlur(float(radius)))
-        return OverlayManager._pixmap_from_pil(blurred)
+        blurred = pil_image.filter(
+            ImageFilter.GaussianBlur(max(1.0, float(radius) * scale))
+        )
+        result = OverlayManager._pixmap_from_pil(blurred)
+        if result.size() != original_size:
+            result = result.scaled(
+                original_size,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        return result
 
     @classmethod
     def _backdrop_luminance(cls, pixmap: QPixmap) -> float:
@@ -1370,7 +1875,11 @@ class OverlayManager(QObject):
         if self._close_button is not None:
             self._close_button.setStyleSheet(f"color: {message_color};")
         if self._current is not None:
-            self._set_icon(self._current.get("icon", ""), title_color)
+            badge_pixmap = self._current.get("_badge_pixmap")
+            if isinstance(badge_pixmap, QPixmap) and not badge_pixmap.isNull():
+                self._set_badge_image(badge_pixmap)
+            else:
+                self._set_icon(self._current.get("icon", ""), title_color)
         if isinstance(self._card, OverlayCard):
             self._card.set_text_scrim(scrim)
 
@@ -1447,12 +1956,20 @@ class OverlayManager(QObject):
                 self._glass_idle_frames = 0
             else:
                 self._glass_idle_frames = min(8, self._glass_idle_frames + 1)
-            base = 100 if self._capture_backend == "dxgi" else 220
+            base = (
+                500
+                if self._preview_mode
+                else 180
+                if self._capture_backend == "dxgi"
+                else 300
+            )
             if on_battery_power():
-                base = max(base, 250)
-            idle_delay = min(900, self._glass_idle_frames * 110)
+                base = max(base, 400)
+            idle_delay = min(1_500, self._glass_idle_frames * 180)
             work_delay = max(0, round(elapsed * 1000) - 35)
-            self._glass_interval_ms = max(80, min(1000, base + idle_delay + work_delay))
+            self._glass_interval_ms = max(
+                160, min(2_000, base + idle_delay + work_delay)
+            )
             self._glass_timer.setInterval(self._glass_interval_ms)
 
     def _configure_dynamic_glass(self, request: dict[str, Any]) -> None:
@@ -1473,11 +1990,41 @@ class OverlayManager(QObject):
             self._glass_slow_frames = 0
             self._glass_idle_frames = 0
             self._last_capture_signature = b""
-            interval = 100 if effect == "liquid" and self._desktop_capture.available else 300
+            interval = (
+                500
+                if self._preview_mode
+                else 180
+                if effect == "liquid" and self._desktop_capture.available
+                else 300
+            )
             if on_battery_power():
-                interval = max(interval, 250)
+                interval = max(interval, 400)
             self._glass_interval_ms = interval
             self._glass_timer.start(interval)
+
+    def _set_badge_image(self, source: QPixmap) -> None:
+        if self._icon is None or source.isNull():
+            return
+        side = min(source.width(), source.height())
+        source_rect = QRectF(
+            (source.width() - side) / 2,
+            (source.height() - side) / 2,
+            side,
+            side,
+        )
+        thumbnail = QPixmap(22, 22)
+        thumbnail.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(thumbnail)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(0, 0, 22, 22), 6, 6)
+        painter.setClipPath(clip)
+        painter.drawPixmap(QRectF(0, 0, 22, 22), source, source_rect)
+        painter.end()
+        self._icon.clear()
+        self._icon.setPixmap(thumbnail)
+        self._icon.setVisible(True)
 
     def _set_icon(self, value: str, color: str) -> None:
         if self._icon is None:
@@ -1533,6 +2080,23 @@ class OverlayManager(QObject):
                 y = area.bottom() - offset - card_geometry.bottom()
             else:
                 y = area.top() + offset - card_geometry.top()
+        if corner in {"top_right", "bottom_right"}:
+            x -= self._parallel_offset_x
+        elif corner in {"top_left", "bottom_left"}:
+            x += self._parallel_offset_x
+        elif corner == "top_center" and self._parallel_group_width > 0:
+            x = (
+                area.left()
+                + (area.width() - self._parallel_group_width) // 2
+                + self._parallel_offset_x
+                - (card_geometry.left() if self._card is not None else 0)
+            )
+        if corner in {"bottom_left", "bottom_right"}:
+            y -= self._parallel_y_offset
+        else:
+            y += self._parallel_y_offset
+        x += self._animation_offset_x
+        y += self._animation_offset_y
         self._window.move(x, y)
 
     @staticmethod
@@ -1543,7 +2107,7 @@ class OverlayManager(QObject):
         corner: str,
         margin: int = 0,
     ) -> tuple[int, int]:
-        """Position the transparent shadow window; the visible card adds 8 px."""
+        """Position the frameless window against the selected screen edge."""
         x = area.left() + margin
         y = area.top() + margin
         if corner in {"top_right", "bottom_right"}:
@@ -1568,17 +2132,13 @@ class OverlayManager(QObject):
         window.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         window.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._native_backdrop.prepare_window(int(window.winId()))
         outer = QHBoxLayout(window)
-        outer.setContentsMargins(4, 4, 4, 8)
+        outer.setContentsMargins(0, 0, 0, 0)
 
         card = OverlayCard()
         card.setObjectName("overlayCard")
         card.installEventFilter(self)
-        shadow = QGraphicsDropShadowEffect(card)
-        shadow.setBlurRadius(24)
-        shadow.setOffset(0, 4)
-        shadow.setColor(QColor(0, 0, 0, 175))
-        card.setGraphicsEffect(shadow)
         card_layout = QHBoxLayout(card)
         card_layout.setContentsMargins(0, 0, 0, 0)
         card_layout.setSpacing(0)
@@ -1637,7 +2197,7 @@ class OverlayManager(QObject):
         lifetime_progress.setRange(0, 1000)
         lifetime_progress.setValue(1000)
         lifetime_progress.setTextVisible(False)
-        lifetime_progress.setFixedHeight(3)
+        lifetime_progress.setFixedHeight(4)
         lifetime_progress.setVisible(False)
         text.addLayout(top)
         text.addWidget(media_title)
@@ -1679,7 +2239,7 @@ class OverlayManager(QObject):
         glass_timer = QTimer(window)
         glass_timer.timeout.connect(self._refresh_glass_background)
         lifetime_timer = QTimer(window)
-        lifetime_timer.setInterval(50)
+        lifetime_timer.setInterval(100)
         lifetime_timer.timeout.connect(self._refresh_lifetime_progress)
         self._window = window
         self._card = card
@@ -1693,6 +2253,10 @@ class OverlayManager(QObject):
         self._lifetime_progress = lifetime_progress
         self._progress_time = progress_time
         self._close_button = close_button
+        self._content_layout = content
+        self._body_layout = body
+        self._text_layout = text
+        self._top_layout = top
         self._timer = timer
         self._progress_timer = progress_timer
         self._glass_timer = glass_timer
@@ -1724,7 +2288,11 @@ class OverlayManager(QObject):
         self._hover_paused = False
         self._dismiss_remaining_ms = request["duration"] * 1000
         self._dismiss_deadline = time.monotonic() + self._dismiss_remaining_ms / 1000
-        show_lifetime = bool(request.get("show_lifetime", False)) and not request["pinned"]
+        show_lifetime = (
+            bool(request.get("show_lifetime", False))
+            and not request["pinned"]
+            and request.get("_resolved_layout", request.get("layout")) != "badge"
+        )
         self._lifetime_progress.setVisible(show_lifetime)
         self._lifetime_progress.setValue(1000)
         if request["pinned"]:
@@ -1772,6 +2340,8 @@ class OverlayManager(QObject):
 
     def _screen_configuration_changed(self, *_args: object) -> None:
         self._connect_screen_signals()
+        if not self._parallel_child:
+            self._reflow_parallel_cards()
         if self._current is None or self._window is None or not self._window.isVisible():
             return
         self._position(
@@ -1839,8 +2409,19 @@ class OverlayManager(QObject):
         layout = str(options.get("layout", "default")).strip().lower()
         if layout == "auto":
             layout = "default"
-        if layout not in {"default", "compact", "standard", "media", "camera"}:
+        if layout not in {
+            "default",
+            "compact",
+            "status",
+            "badge",
+            "standard",
+            "media",
+            "camera",
+        }:
             layout = "default"
+        display_mode = str(options.get("display_mode", "queue")).strip().lower()
+        if display_mode not in {"queue", "parallel"}:
+            display_mode = "queue"
         progress = options.get("progress")
         try:
             progress = max(0, min(100, round(float(progress)))) if progress is not None else None
@@ -1883,7 +2464,7 @@ class OverlayManager(QObject):
         return {
             "action": action,
             "id": message_id,
-            "title": str(title).strip()[:128] or "Home Assistant",
+            "title": str(title).strip()[:128] or ("" if layout == "badge" else "Home Assistant"),
             "message": str(message).strip()[:2048],
             "icon": str(options.get("icon", "")).strip()[:128],
             "image": str(options.get("image", "")).strip(),
@@ -1900,6 +2481,7 @@ class OverlayManager(QObject):
             "width": width,
             "height": height,
             "layout": layout,
+            "display_mode": display_mode,
             "camera": bool(options.get("camera", False)) or layout == "camera",
             "media_source": str(options.get("media_source", "")).strip()[:128],
             "opacity": opacity,

@@ -23,6 +23,9 @@ QScrollArea#pageScroll > QWidget > QWidget {
 QTabWidget#featureTabs::pane, QTabBar::tab, QListWidget#devicesList {
     background: #08090a;
 }
+QDialog#overlayTemplateDialog, QDialog#mdiIconDialog {
+    background: #0d0f11;
+}
 QListWidget#devicesList:disabled {
     background: #040506;
     color: #515b57;
@@ -33,6 +36,7 @@ QListWidget#devicesList::item:disabled {
     border-bottom-color: #161a1c;
 }
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
+QPlainTextEdit#templateMessage,
 QFrame#passwordBox, QPushButton#outlineButton, QPushButton#secondaryButton {
     background: #0c0e10;
 }
@@ -66,6 +70,9 @@ QFrame#settingRow[featureEnabled="false"] {
 
 
 LIGHT_OVERRIDES = """
+QDialog#overlayTemplateDialog, QDialog#mdiIconDialog {
+    background: #f7f9fa;
+}
 QWidget {
     color: #17211d;
 }
@@ -141,6 +148,15 @@ QListWidget#devicesList::item:selected {
     background: #d8eee3;
     color: #102019;
 }
+QListView#mdiIconList {
+    background: #ffffff;
+    border-color: #b9c3c8;
+    color: #17211d;
+}
+QListView#mdiIconList::item:selected {
+    background: #d8eee3;
+    color: #102019;
+}
 QListWidget#devicesList:disabled {
     background: #e2e6e8;
     color: #929d98;
@@ -151,6 +167,7 @@ QListWidget#devicesList::item:disabled {
     border-bottom-color: #d5dade;
 }
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
+QPlainTextEdit#templateMessage,
 QFrame#passwordBox {
     background: #ffffff;
     border-color: #b7c1c6;

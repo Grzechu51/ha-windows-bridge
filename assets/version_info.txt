@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'HA Windows Bridge'),
           StringStruct(u'FileDescription', u'HA Windows Bridge'),
-          StringStruct(u'FileVersion', u'0.10.0-beta.1'),
+          StringStruct(u'FileVersion', u'0.10.0-beta.2'),
           StringStruct(u'InternalName', u'HA Windows Bridge'),
           StringStruct(u'LegalCopyright', u'Copyright (c) 2026 Grzechu51'),
           StringStruct(u'OriginalFilename', u'HA Windows Bridge.exe'),
           StringStruct(u'ProductName', u'HA Windows Bridge'),
-          StringStruct(u'ProductVersion', u'0.10.0-beta.1')
+          StringStruct(u'ProductVersion', u'0.10.0-beta.2')
         ]
       )
     ]),

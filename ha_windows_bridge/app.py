@@ -160,6 +160,22 @@ QListWidget#devicesList::item {
 QListWidget#devicesList::item:selected {
     background: #183629;
 }
+QListView#mdiIconList {
+    background: #0c0e10;
+    border: 1px solid #40464b;
+    border-radius: 7px;
+    color: #edf4f1;
+    padding: 5px;
+    outline: none;
+}
+QListView#mdiIconList::item {
+    min-height: 34px;
+    border-radius: 5px;
+    padding: 4px 8px;
+}
+QListView#mdiIconList::item:selected {
+    background: #1c3d31;
+}
 QLabel#pageTitle {
     color: #ffffff;
     font-size: 18pt;
@@ -170,7 +186,7 @@ QLabel#sectionTitle {
     font-size: 14pt;
     font-weight: 600;
 }
-QLineEdit, QSpinBox, QDoubleSpinBox {
+QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit#templateMessage {
     background: #121417;
     border: 1px solid #40464b;
     border-radius: 6px;
@@ -179,10 +195,12 @@ QLineEdit, QSpinBox, QDoubleSpinBox {
     padding: 8px 10px;
     selection-background-color: #2f9868;
 }
-QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover {
+QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover,
+QPlainTextEdit#templateMessage:hover {
     border-color: #465a61;
 }
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
+QPlainTextEdit#templateMessage:focus {
     border-color: #46b87b;
 }
 QFrame#passwordBox {
@@ -240,6 +258,18 @@ QPushButton#primaryButton[saved="true"] {
 QPushButton#outlineButton, QPushButton#secondaryButton {
     background: #121417;
     padding: 10px 18px;
+}
+QPushButton#mdiPickerButton {
+    background: #121417;
+    border: 1px solid #40464b;
+    border-radius: 6px;
+    min-height: 22px;
+    padding: 8px 12px;
+    text-align: left;
+}
+QPushButton#mdiPickerButton:hover {
+    border-color: #46b87b;
+    background: #171b1e;
 }
 QPushButton#outlineButton:hover, QPushButton#secondaryButton:hover {
     background: #202428;
@@ -401,6 +431,15 @@ QLabel#statusBadge {
     border: 1px solid #3ba772;
     border-radius: 31px;
     color: #4bd18d;
+}
+QLabel#statusBadge[connectionState="off"] {
+    border-color: #4b5358;
+    color: #9ca6a2;
+}
+QLabel#statusBadge[connectionState="ready"],
+QLabel#statusBadge[connectionState="warning"] {
+    border-color: #b88736;
+    color: #e8b65e;
 }
 QLabel#metricValue {
     color: #4bd18d;

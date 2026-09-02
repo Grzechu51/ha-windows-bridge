@@ -1,3 +1,3 @@
 """HA Windows Bridge package."""
 
-__version__ = "0.10.0-beta.1"
+__version__ = "0.10.0-beta.2"

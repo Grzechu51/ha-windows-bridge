@@ -7,18 +7,34 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
 
 import psutil
-from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
+import qtawesome as qta
+from PySide6.QtCore import (
+    QAbstractListModel,
+    QEvent,
+    QModelIndex,
+    QObject,
+    QSize,
+    QSortFilterProxyModel,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QAbstractScrollArea,
     QAbstractSpinBox,
     QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -26,6 +42,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -36,6 +53,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizeGrip,
+    QSlider,
     QSpinBox,
     QStackedWidget,
     QSystemTrayIcon,
@@ -51,6 +69,7 @@ from .config import (
     AudioAppConfig,
     HomeAssistantConfig,
     MqttConfig,
+    OverlayTemplateConfig,
     SettingsStore,
     TrackedDeviceConfig,
     slugify,
@@ -58,7 +77,9 @@ from .config import (
 from .data_exchange import (
     build_diagnostic_report,
     export_configuration,
+    export_overlay_templates,
     import_configuration,
+    import_overlay_templates,
     save_diagnostic_report,
 )
 from .direct_bridge import DirectHaBridge
@@ -73,6 +94,7 @@ from .ui_components import (
     AppCard,
     AudioOutputCard,
     HelpButton,
+    LabeledToggle,
     MasterVolumeCard,
     MicrophoneCard,
     NavButton,
@@ -81,6 +103,7 @@ from .ui_components import (
     TitleBar,
 )
 from .updater import GitHubUpdateChecker, UpdateInfo
+from .windows_effects import DesktopDuplicationCapture
 
 
 class UiSignals(QObject):
@@ -96,6 +119,7 @@ class UiSignals(QObject):
     update_checked = Signal(object)
     devices_scanned = Signal(object)
     overlay_requested = Signal(str, str, object)
+    template_requested = Signal(str, str)
 
 
 class QtLogHandler(logging.Handler):
@@ -105,6 +129,234 @@ class QtLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         self.signals.log_line.emit(self.format(record))
+
+
+class WheelSafeComboBox(QComboBox):
+    """Let a surrounding settings page consume the mouse wheel."""
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        event.ignore()
+
+
+class WheelSafeSpinBox(QSpinBox):
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        event.ignore()
+
+
+class WheelSafeSlider(QSlider):
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        event.ignore()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.orientation() == Qt.Orientation.Horizontal:
+                length = max(1, self.width())
+                ratio = event.position().x() / length
+            else:
+                length = max(1, self.height())
+                ratio = 1.0 - event.position().y() / length
+            ratio = max(0.0, min(1.0, ratio))
+            if self.invertedAppearance():
+                ratio = 1.0 - ratio
+            span = self.maximum() - self.minimum()
+            self.setValue(self.minimum() + round(span * ratio))
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
+_MDI_ICON_NAMES: tuple[str, ...] = ()
+
+
+def _mdi_icon_names() -> tuple[str, ...]:
+    global _MDI_ICON_NAMES
+    if not _MDI_ICON_NAMES:
+        qta.icon("mdi6.home")
+        names = qta._instance().charmap.get("mdi6", {})  # noqa: SLF001
+        _MDI_ICON_NAMES = tuple(sorted(str(name) for name in names))
+    return _MDI_ICON_NAMES
+
+
+class MdiIconListModel(QAbstractListModel):
+    """Full MDI catalog; Qt requests icons only for currently visible rows."""
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.names = _mdi_icon_names()
+
+    def rowCount(self, _parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802, B008
+        return len(self.names)
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or not 0 <= index.row() < len(self.names):
+            return None
+        name = self.names[index.row()]
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.UserRole):
+            return f"mdi:{name}"
+        if role == Qt.ItemDataRole.DecorationRole:
+            return qta.icon(f"mdi6.{name}")
+        return None
+
+
+class MdiIconDialog(QDialog):
+    def __init__(
+        self,
+        current: str,
+        parent: QWidget | None = None,
+        language: str = "pl",
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("mdiIconDialog")
+        self.setWindowTitle(translate("Wybierz ikonę MDI", language))
+        self.setMinimumSize(520, 600)
+        layout = QVBoxLayout(self)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText(translate("Szukaj ikony…", language))
+        layout.addWidget(self.search)
+        self.model = MdiIconListModel(self)
+        self.proxy = QSortFilterProxyModel(self)
+        self.proxy.setSourceModel(self.model)
+        self.proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.proxy.setFilterRole(Qt.ItemDataRole.DisplayRole)
+        self.list = QListView()
+        self.list.setObjectName("mdiIconList")
+        self.list.setModel(self.proxy)
+        self.list.setUniformItemSizes(True)
+        self.list.setIconSize(QSize(22, 22))
+        self.list.doubleClicked.connect(lambda _index: self.accept())
+        layout.addWidget(self.list, 1)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        select = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        cancel = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if select is not None:
+            select.setText(translate("Wybierz", language))
+        if cancel is not None:
+            cancel.setText("Cancel" if language == "en" else "Anuluj")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.search.textChanged.connect(self.proxy.setFilterFixedString)
+        current_name = current.strip().casefold().removeprefix("mdi:")
+        if current_name in self.model.names:
+            source = self.model.index(self.model.names.index(current_name), 0)
+            selected = self.proxy.mapFromSource(source)
+            self.list.setCurrentIndex(selected)
+            self.list.scrollTo(selected, QListView.ScrollHint.PositionAtCenter)
+
+    def selected_icon(self) -> str:
+        index = self.list.currentIndex()
+        return str(index.data(Qt.ItemDataRole.UserRole) or "")
+
+
+class MdiIconPicker(QWidget):
+    currentTextChanged = Signal(str)
+
+    def __init__(self) -> None:
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.button = QPushButton()
+        self.button.setObjectName("mdiPickerButton")
+        self.button.clicked.connect(self._show_picker)
+        layout.addWidget(self.button)
+        self._value = ""
+        self.set_mdi("mdi:home-assistant")
+
+    @staticmethod
+    def _normalized(value: str) -> str:
+        return value.strip().casefold().removeprefix("mdi:").replace(" ", "-")
+
+    def currentText(self) -> str:  # noqa: N802
+        return self._value
+
+    def set_mdi(self, value: str) -> None:
+        normalized = self._normalized(value)
+        if normalized not in _mdi_icon_names():
+            normalized = "home-assistant"
+        updated = f"mdi:{normalized}"
+        changed = updated != self._value
+        self._value = updated
+        self.button.setText(updated)
+        self.button.setIcon(qta.icon(f"mdi6.{normalized}"))
+        if changed:
+            self.currentTextChanged.emit(updated)
+
+    def _show_picker(self) -> None:
+        owner = self.window()
+        language = str(getattr(owner, "_language", "pl"))
+        dialog = MdiIconDialog(self._value, self, language)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_icon():
+            self.set_mdi(dialog.selected_icon())
+
+
+class SettingsWheelGuard(QObject):
+    """Prevent wheel changes in settings fields while preserving page scrolling."""
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() != QEvent.Type.Wheel or not isinstance(
+            watched, (QAbstractSpinBox, QComboBox)
+        ):
+            return False
+        parent = watched.parentWidget()
+        while parent is not None and not isinstance(parent, QAbstractScrollArea):
+            parent = parent.parentWidget()
+        if isinstance(parent, QAbstractScrollArea):
+            delta = event.angleDelta().y()
+            bar = parent.verticalScrollBar()
+            if delta:
+                steps = max(1, abs(delta) // 120)
+                direction = -1 if delta > 0 else 1
+                bar.setValue(bar.value() + direction * steps * max(24, bar.singleStep()))
+        event.accept()
+        return True
+
+
+class OverlayTemplateSelectionDialog(QDialog):
+    def __init__(
+        self,
+        title: str,
+        templates: list[OverlayTemplateConfig],
+        parent: QWidget | None = None,
+        language: str = "pl",
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("overlayTemplateDialog")
+        self.setWindowTitle(translate(title, language))
+        self.setMinimumSize(440, 360)
+        layout = QVBoxLayout(self)
+        description = QLabel(
+            translate("Zaznacz popupy, które mają zostać użyte.", language)
+        )
+        description.setObjectName("settingDescription")
+        layout.addWidget(description)
+        self.list = QListWidget()
+        self.list.setObjectName("devicesList")
+        for template in templates:
+            item = QListWidgetItem(template.name)
+            item.setData(Qt.ItemDataRole.UserRole, template.template_id)
+            item.setToolTip(template.template_id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            self.list.addItem(item)
+        layout.addWidget(self.list, 1)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        cancel = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel is not None:
+            cancel.setText("Cancel" if language == "en" else "Anuluj")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selected_ids(self) -> set[str]:
+        return {
+            str(item.data(Qt.ItemDataRole.UserRole))
+            for index in range(self.list.count())
+            if (item := self.list.item(index)).checkState() == Qt.CheckState.Checked
+        }
 
 
 class MainWindow(QMainWindow):
@@ -148,7 +400,13 @@ class MainWindow(QMainWindow):
         self._remember_mqtt_topics(original_config, loaded_config)
         self.audio = WindowsAudioService()
         self.system_monitor = WindowsSystemMonitor()
+        self._overlay_desktop_capture = DesktopDuplicationCapture()
         self.overlay_manager: OverlayManager | None = None
+        self.overlay_preview_manager: OverlayManager | None = None
+        self._overlay_templates: list[OverlayTemplateConfig] = []
+        self._overlay_template_loading = False
+        self._overlay_template_editing_id = ""
+        self._selected_overlay_template_id = ""
         self.bridge: MqttBridge | None = None
         self.direct_bridge: DirectHaBridge | None = None
         self.signals = UiSignals()
@@ -174,9 +432,19 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(self._create_icon())
 
         self._build_ui()
+        self._settings_wheel_guard = SettingsWheelGuard(self)
+        for editor in self.findChildren(QAbstractSpinBox):
+            editor.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        application = QApplication.instance()
+        if application is not None:
+            application.installEventFilter(self._settings_wheel_guard)
         self.save_feedback_timer = QTimer(self)
         self.save_feedback_timer.setSingleShot(True)
         self.save_feedback_timer.timeout.connect(self._reset_save_button)
+        self.overlay_preview_timer = QTimer(self)
+        self.overlay_preview_timer.setSingleShot(True)
+        self.overlay_preview_timer.setInterval(300)
+        self.overlay_preview_timer.timeout.connect(self._show_overlay_template_preview)
         self._build_tray()
         self._connect_signals()
         self._load_config(self.current_config)
@@ -238,6 +506,11 @@ class MainWindow(QMainWindow):
         frame_layout.addLayout(body, 1)
 
         frame_layout.addWidget(self._build_footer())
+
+    def _remove_settings_wheel_guard(self) -> None:
+        application = QApplication.instance()
+        if application is not None:
+            application.removeEventFilter(self._settings_wheel_guard)
 
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame()
@@ -442,48 +715,70 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.keepalive, keepalive_row, 1)
         grid.addWidget(self.keepalive_help, keepalive_row, 2, Qt.AlignmentFlag.AlignLeft)
 
-        form.setMaximumWidth(850)
-        layout.addWidget(form, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(form)
 
         direct_form = QFrame()
-        direct_form.setObjectName("connectionForm")
+        direct_form.setObjectName("settingRow")
         direct_grid = QGridLayout(direct_form)
-        direct_grid.setContentsMargins(0, 12, 0, 0)
-        direct_grid.setHorizontalSpacing(24)
-        direct_grid.setVerticalSpacing(13)
-        direct_grid.setColumnMinimumWidth(0, 165)
+        direct_grid.setContentsMargins(18, 17, 18, 18)
+        direct_grid.setHorizontalSpacing(18)
+        direct_grid.setVerticalSpacing(11)
+        direct_grid.setColumnMinimumWidth(0, 145)
         direct_grid.setColumnStretch(1, 1)
         direct_title = QLabel("Bezpośrednio z Home Assistant")
         direct_title.setObjectName("sectionTitle")
-        direct_grid.addWidget(direct_title, 0, 0, 1, 3)
+        direct_grid.addWidget(direct_title, 0, 0, 1, 2)
+        self.direct_connection_badge = QLabel("Wyłączone")
+        self.direct_connection_badge.setObjectName("statusBadge")
+        self.direct_connection_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.direct_connection_badge.setMinimumWidth(96)
+        direct_grid.addWidget(
+            self.direct_connection_badge,
+            0,
+            2,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
         direct_description = QLabel(
-            "Lokalny kanał WebSocket dla nakładek. Token jest szyfrowany przez Windows DPAPI."
+            "Lokalny kanał WebSocket do popupów. Działa bez MQTT, a token jest "
+            "chroniony przez Windows DPAPI."
         )
         direct_description.setObjectName("settingDescription")
         direct_description.setWordWrap(True)
         direct_grid.addWidget(direct_description, 1, 0, 1, 3)
         self.direct_enabled = QCheckBox("Włącz połączenie bezpośrednie")
-        direct_grid.addWidget(self.direct_enabled, 2, 1, 1, 2)
+        direct_grid.addWidget(self.direct_enabled, 2, 0, 1, 3)
         self.ha_url = QLineEdit()
         self.ha_url.setPlaceholderText("https://homeassistant.local:8123")
-        direct_grid.addWidget(QLabel("Adres Home Assistant"), 3, 0)
+        url_label = QLabel("Adres Home Assistant")
+        url_label.setObjectName("formLabel")
+        direct_grid.addWidget(url_label, 3, 0)
         direct_grid.addWidget(self.ha_url, 3, 1, 1, 2)
         self.ha_token = QLineEdit()
         self.ha_token.setEchoMode(QLineEdit.EchoMode.Password)
         self.ha_token.setPlaceholderText("Długoterminowy token dostępu")
         self.show_ha_token = QCheckBox("Pokaż")
-        direct_grid.addWidget(QLabel("Token dostępu"), 4, 0)
+        token_label = QLabel("Token dostępu")
+        token_label.setObjectName("formLabel")
+        direct_grid.addWidget(token_label, 4, 0)
         direct_grid.addWidget(self.ha_token, 4, 1)
         direct_grid.addWidget(self.show_ha_token, 4, 2)
         self.ha_verify_tls = QCheckBox("Weryfikuj certyfikat TLS")
         self.ha_verify_tls.setChecked(True)
         direct_grid.addWidget(self.ha_verify_tls, 5, 1, 1, 2)
-        device_hint = QLabel(f"ID urządzenia do integracji: {self.current_config.device_id}")
-        device_hint.setObjectName("settingDescription")
-        device_hint.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        direct_grid.addWidget(device_hint, 6, 1, 1, 2)
-        direct_form.setMaximumWidth(850)
-        layout.addWidget(direct_form, 0, Qt.AlignmentFlag.AlignLeft)
+        device_label = QLabel("ID urządzenia")
+        device_label.setObjectName("formLabel")
+        direct_grid.addWidget(device_label, 6, 0)
+        self.ha_device_id = QLineEdit(self.current_config.device_id)
+        self.ha_device_id.setReadOnly(True)
+        self.ha_device_id.setToolTip(
+            "Tego identyfikatora użyj podczas dodawania integracji bezpośredniej w Home Assistant."
+        )
+        direct_grid.addWidget(self.ha_device_id, 6, 1)
+        self.copy_ha_device_id = QPushButton("Kopiuj")
+        self.copy_ha_device_id.setObjectName("secondaryButton")
+        self.copy_ha_device_id.setToolTip("Skopiuj ID urządzenia do schowka")
+        direct_grid.addWidget(self.copy_ha_device_id, 6, 2)
+        layout.addWidget(direct_form)
 
         test_row = QHBoxLayout()
         test_row.setSpacing(18)
@@ -746,7 +1041,8 @@ class MainWindow(QMainWindow):
 
         overlay = add_tab("Nakładka")
         overlay_info = QLabel(
-            "Treść, wygląd, rozmiar, położenie, czas i zamykanie ustawiasz w akcji Home Assistant."
+            "Projektuj popupy tutaj, sprawdzaj zmiany na żywo i zapisuj je jako szablony. "
+            "Home Assistant wybiera gotowy szablon i przekazuje tylko dane z encji."
         )
         overlay_info.setObjectName("settingDescription")
         overlay_info.setWordWrap(True)
@@ -759,7 +1055,7 @@ class MainWindow(QMainWindow):
             "Zezwalaj w pełnym ekranie",
             "Pozwala wyświetlać nakładkę nad aplikacją pełnoekranową.",
         )
-        self.overlay_monitor_combo = QComboBox()
+        self.overlay_monitor_combo = WheelSafeComboBox()
         for index, screen in enumerate(QApplication.screens()):
             self.overlay_monitor_combo.addItem(
                 f"{index + 1}: {screen.name()} ({screen.size().width()}×{screen.size().height()})",
@@ -787,41 +1083,261 @@ class MainWindow(QMainWindow):
         monitor_row.addLayout(monitor_text, 1)
         monitor_row.addWidget(self.overlay_monitor_combo)
         overlay.addWidget(monitor_card)
-        test_card = QFrame()
-        test_card.setObjectName("settingRow")
-        test_row = QHBoxLayout(test_card)
-        test_row.setContentsMargins(16, 14, 16, 14)
-        test_text = QVBoxLayout()
-        test_title = QLabel("Wzorce testowe")
-        test_title.setObjectName("settingTitle")
-        test_description = QLabel(
-            "Sprawdź lokalnie układy, priorytety i efekty bez wysyłania danych z Home Assistant."
-        )
-        test_description.setObjectName("settingDescription")
-        test_description.setWordWrap(True)
-        test_text.addWidget(test_title)
-        test_text.addWidget(test_description)
-        test_row.addLayout(test_text, 1)
-        self.overlay_test_combo = QComboBox()
-        for key, label in OverlayManager.test_pattern_names():
-            self.overlay_test_combo.addItem(label, key)
-        self.overlay_test_combo.setMinimumWidth(190)
-        self.overlay_test_button = QPushButton("Pokaż test")
-        self.overlay_test_button.setObjectName("secondaryButton")
-        test_row.addWidget(self.overlay_test_combo)
-        test_row.addWidget(self.overlay_test_button)
-        overlay.addWidget(test_card)
-        self.overlay_test_result = QLabel("")
-        self.overlay_test_result.setObjectName("settingDescription")
-        overlay.addWidget(self.overlay_test_result)
-        warning = QLabel(
-            "Obraz jest pojedynczą grafiką, nie transmisją wideo. Nakładka nie ingeruje w proces gry."
-        )
-        warning.setObjectName("settingDescription")
-        warning.setWordWrap(True)
-        overlay.addWidget(warning)
+        overlay.addWidget(self._build_overlay_template_designer())
         overlay.addStretch()
         return content
+
+    def _build_overlay_template_designer(self) -> QFrame:
+        designer = QFrame()
+        designer.setObjectName("settingRow")
+        main = QVBoxLayout(designer)
+        main.setContentsMargins(18, 17, 18, 18)
+        main.setSpacing(14)
+
+        header = QHBoxLayout()
+        header_text = QVBoxLayout()
+        title = QLabel("Projektant zapisanych popupów")
+        title.setObjectName("sectionTitle")
+        description = QLabel(
+            "Zmiany są pokazywane na ekranie na żywo. Po zapisaniu szablon pojawi się "
+            "na liście wyboru tego komputera w Home Assistant."
+        )
+        description.setObjectName("settingDescription")
+        description.setWordWrap(True)
+        header_text.addWidget(title)
+        header_text.addWidget(description)
+        header.addLayout(header_text, 1)
+        main.addLayout(header)
+
+        body = QVBoxLayout()
+        body.setSpacing(16)
+        library = QVBoxLayout()
+        library_title = QLabel("Zapisane popupy")
+        library_title.setObjectName("settingTitle")
+        library.addWidget(library_title)
+        self.overlay_template_list = QListWidget()
+        self.overlay_template_list.setObjectName("devicesList")
+        self.overlay_template_list.setMinimumHeight(90)
+        self.overlay_template_list.setMaximumHeight(120)
+        library.addWidget(self.overlay_template_list)
+        library_actions = QHBoxLayout()
+        library_actions.setSpacing(7)
+        self.overlay_template_new = QPushButton("Nowy")
+        self.overlay_template_new.setObjectName("secondaryButton")
+        self.overlay_template_duplicate = QPushButton("Duplikuj")
+        self.overlay_template_duplicate.setObjectName("secondaryButton")
+        self.overlay_template_delete = QPushButton("Usuń")
+        self.overlay_template_delete.setObjectName("dangerButton")
+        self.overlay_template_import = QPushButton("Importuj…")
+        self.overlay_template_import.setObjectName("secondaryButton")
+        self.overlay_template_export = QPushButton("Eksportuj…")
+        self.overlay_template_export.setObjectName("secondaryButton")
+        library_actions.addWidget(self.overlay_template_new)
+        library_actions.addWidget(self.overlay_template_duplicate)
+        library_actions.addWidget(self.overlay_template_delete)
+        library_actions.addStretch()
+        library_actions.addWidget(self.overlay_template_import)
+        library_actions.addWidget(self.overlay_template_export)
+        library.addLayout(library_actions)
+        body.addLayout(library)
+
+        editor = QWidget()
+        form = QGridLayout(editor)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
+        form.setColumnMinimumWidth(0, 105)
+        form.setColumnStretch(1, 1)
+        form.setColumnStretch(3, 1)
+
+        def form_label(text: str) -> QLabel:
+            label = QLabel(text)
+            label.setObjectName("formLabel")
+            return label
+
+        def add_combo(items: tuple[tuple[str, str], ...]) -> WheelSafeComboBox:
+            combo = WheelSafeComboBox()
+            combo.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+            )
+            combo.setMinimumContentsLength(8)
+            for label, value in items:
+                combo.addItem(label, value)
+            return combo
+
+        self.overlay_template_name = QLineEdit()
+        self.overlay_template_name.setPlaceholderText("np. Alarm drzwi")
+        form.addWidget(form_label("Nazwa"), 0, 0)
+        form.addWidget(self.overlay_template_name, 0, 1, 1, 3)
+
+        self.overlay_template_title = QLineEdit()
+        self.overlay_template_title.setPlaceholderText("Tytuł testowy lub domyślny")
+        form.addWidget(form_label("Tytuł"), 1, 0)
+        form.addWidget(self.overlay_template_title, 1, 1, 1, 3)
+
+        self.overlay_template_message = QPlainTextEdit()
+        self.overlay_template_message.setObjectName("templateMessage")
+        self.overlay_template_message.setPlaceholderText("Treść testowa lub domyślna")
+        self.overlay_template_message.setFixedHeight(66)
+        form.addWidget(form_label("Wiadomość"), 2, 0, Qt.AlignmentFlag.AlignTop)
+        form.addWidget(self.overlay_template_message, 2, 1, 1, 3)
+
+        self.overlay_template_icon = MdiIconPicker()
+        form.addWidget(form_label("Ikona"), 3, 0)
+        form.addWidget(self.overlay_template_icon, 3, 1, 1, 3)
+
+        self.overlay_template_layout = add_combo(
+            (
+                ("Automatyczny", "auto"),
+                ("Kompaktowy", "compact"),
+                ("Status", "status"),
+                ("Znacznik", "badge"),
+                ("Standardowy", "standard"),
+                ("Media", "media"),
+                ("Kamera", "camera"),
+            )
+        )
+        self.overlay_template_effect = add_combo(
+            (("Jednolite", "none"), ("Acrylic", "blur"), ("Liquid Glass", "liquid"))
+        )
+        form.addWidget(form_label("Układ"), 4, 0)
+        form.addWidget(self.overlay_template_layout, 4, 1)
+        form.addWidget(form_label("Tło"), 4, 2)
+        form.addWidget(self.overlay_template_effect, 4, 3)
+
+        self.overlay_template_preset = add_combo(
+            (
+                ("Domyślny", "default"),
+                ("Sukces", "success"),
+                ("Ostrzeżenie", "warning"),
+                ("Błąd", "error"),
+                ("Informacja", "info"),
+            )
+        )
+        self.overlay_template_corner = add_combo(
+            (
+                ("Prawy górny", "top_right"),
+                ("Lewy górny", "top_left"),
+                ("Środek u góry", "top_center"),
+                ("Prawy dolny", "bottom_right"),
+                ("Lewy dolny", "bottom_left"),
+            )
+        )
+        form.addWidget(form_label("Akcent"), 5, 0)
+        form.addWidget(self.overlay_template_preset, 5, 1)
+        form.addWidget(form_label("Położenie"), 5, 2)
+        form.addWidget(self.overlay_template_corner, 5, 3)
+
+        self.overlay_template_display_mode = add_combo(
+            (("Kolejka", "queue"), ("Obok siebie", "parallel"))
+        )
+        self.overlay_template_monitor = WheelSafeComboBox()
+        for index, screen in enumerate(QApplication.screens()):
+            self.overlay_template_monitor.addItem(f"{index + 1}: {screen.name()}", index)
+        if not self.overlay_template_monitor.count():
+            self.overlay_template_monitor.addItem("1: Monitor", 0)
+        form.addWidget(form_label("Wyświetlanie"), 6, 0)
+        form.addWidget(self.overlay_template_display_mode, 6, 1)
+        form.addWidget(form_label("Monitor"), 6, 2)
+        form.addWidget(self.overlay_template_monitor, 6, 3)
+
+        self.overlay_template_size_mode = add_combo(
+            (("Automatyczny", "auto"), ("Ręczny", "manual"))
+        )
+        self.overlay_template_width = WheelSafeSpinBox()
+        self.overlay_template_width.setRange(240, 1200)
+        self.overlay_template_width.setSuffix(" px")
+        self.overlay_template_height = WheelSafeSpinBox()
+        self.overlay_template_height.setRange(90, 900)
+        self.overlay_template_height.setSuffix(" px")
+        form.addWidget(form_label("Rozmiar"), 7, 0)
+        form.addWidget(self.overlay_template_size_mode, 7, 1)
+        size_row = QHBoxLayout()
+        size_row.setSpacing(7)
+        size_row.addWidget(self.overlay_template_width)
+        size_row.addWidget(self.overlay_template_height)
+        form.addLayout(size_row, 7, 2, 1, 2)
+
+        self.overlay_template_opacity_slider = WheelSafeSlider(
+            Qt.Orientation.Horizontal
+        )
+        self.overlay_template_opacity_slider.setRange(0, 100)
+        self.overlay_template_opacity_slider.setSingleStep(1)
+        self.overlay_template_opacity_slider.setPageStep(5)
+        self.overlay_template_opacity = WheelSafeSpinBox()
+        self.overlay_template_opacity.setRange(0, 100)
+        self.overlay_template_opacity.setSuffix(" %")
+        self.overlay_template_opacity.setButtonSymbols(
+            QAbstractSpinBox.ButtonSymbols.NoButtons
+        )
+        self.overlay_template_opacity.setFixedWidth(82)
+        self.overlay_template_duration = WheelSafeSpinBox()
+        self.overlay_template_duration.setRange(2, 60)
+        self.overlay_template_duration.setSuffix(" s")
+        self.overlay_template_offset = WheelSafeSpinBox()
+        self.overlay_template_offset.setRange(0, 240)
+        self.overlay_template_offset.setSuffix(" px")
+        form.addWidget(form_label("Krycie"), 8, 0)
+        opacity_row = QHBoxLayout()
+        opacity_row.setSpacing(10)
+        opacity_row.addWidget(self.overlay_template_opacity_slider, 1)
+        opacity_row.addWidget(self.overlay_template_opacity)
+        form.addLayout(opacity_row, 8, 1, 1, 3)
+
+        self.overlay_template_priority = add_combo(
+            (
+                ("Niski", "low"),
+                ("Normalny", "normal"),
+                ("Wysoki", "high"),
+                ("Krytyczny", "critical"),
+            )
+        )
+        form.addWidget(form_label("Czas"), 9, 0)
+        form.addWidget(self.overlay_template_duration, 9, 1)
+        form.addWidget(form_label("Priorytet"), 9, 2)
+        form.addWidget(self.overlay_template_priority, 9, 3)
+        form.addWidget(form_label("Odstęp od ekranu"), 10, 0)
+        form.addWidget(self.overlay_template_offset, 10, 1)
+
+        behavior = QGridLayout()
+        behavior.setHorizontalSpacing(16)
+        behavior.setVerticalSpacing(7)
+        self.overlay_template_pinned = LabeledToggle("Przypięty")
+        self.overlay_template_close_button = LabeledToggle("Przycisk zamknięcia")
+        self.overlay_template_close = LabeledToggle("Zamknij kliknięciem")
+        self.overlay_template_hover = LabeledToggle("Wstrzymaj po najechaniu")
+        self.overlay_template_lifetime = LabeledToggle("Pasek czasu")
+        behavior.addWidget(self.overlay_template_pinned, 0, 0)
+        behavior.addWidget(self.overlay_template_close_button, 0, 1)
+        behavior.addWidget(self.overlay_template_close, 1, 0)
+        behavior.addWidget(self.overlay_template_hover, 1, 1)
+        behavior.addWidget(self.overlay_template_lifetime, 2, 0)
+        behavior.setColumnStretch(2, 1)
+        form.addLayout(behavior, 11, 0, 1, 4)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        self.overlay_template_preview = QPushButton("Pokaż podgląd")
+        self.overlay_template_preview.setObjectName("secondaryButton")
+        self.overlay_template_save = QPushButton("Zapisz szablon")
+        self.overlay_template_save.setObjectName("primaryButton")
+        self.overlay_template_result = QLabel("")
+        self.overlay_template_result.setObjectName("settingDescription")
+        self.overlay_template_result.setWordWrap(True)
+        self.overlay_template_live = LabeledToggle("Podgląd na żywo")
+        self.overlay_template_live.setChecked(True)
+        actions.addWidget(self.overlay_template_preview)
+        actions.addWidget(self.overlay_template_save)
+        actions.addStretch()
+        actions.addWidget(
+            self.overlay_template_live, 0, Qt.AlignmentFlag.AlignRight
+        )
+        form.addLayout(actions, 12, 0, 1, 4)
+        form.addWidget(self.overlay_template_result, 13, 0, 1, 4)
+        body.addWidget(editor)
+        main.addLayout(body)
+        self.overlay_template_designer = designer
+        return designer
 
     def _logs_page(self) -> QWidget:
         content = QWidget()
@@ -1012,23 +1528,6 @@ class MainWindow(QMainWindow):
             data_buttons.addWidget(button)
         data_layout.addLayout(data_buttons)
 
-        license_card = QFrame()
-        license_card.setObjectName("dataCard")
-        license_layout = QHBoxLayout(license_card)
-        license_text = QVBoxLayout()
-        license_title = QLabel("Kod źródłowy i licencja")
-        license_title.setObjectName("settingTitle")
-        license_description = QLabel("GNU AGPL-3.0. Program jest dostarczany bez gwarancji.")
-        license_description.setObjectName("settingDescription")
-        license_text.addWidget(license_title)
-        license_text.addWidget(license_description)
-        license_layout.addLayout(license_text, 1)
-        open_source = QPushButton("Otwórz GitHub")
-        open_source.setObjectName("outlineButton")
-        open_source.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl("https://github.com/Grzechu51/ha-windows-bridge"))
-        )
-        license_layout.addWidget(open_source)
         self.auto_update_row = SettingRow(
             "Automatycznie sprawdzaj aktualizacje",
             "Aplikacja sprawdzi oficjalne wydania GitHub i poinformuje o dostępnej wersji.",
@@ -1058,11 +1557,29 @@ class MainWindow(QMainWindow):
         general_layout.addWidget(self.auto_update_row)
         general_layout.addWidget(update_card)
         general_layout.addWidget(data_card)
-        general_layout.addWidget(license_card)
         layout.addWidget(general_group)
         maintenance_title = QLabel("Konserwacja")
         maintenance_title.setObjectName("sectionTitle")
         layout.addWidget(maintenance_title)
+        reset_card = QFrame()
+        reset_card.setObjectName("dataCard")
+        reset_layout = QHBoxLayout(reset_card)
+        reset_layout.setContentsMargins(16, 14, 16, 14)
+        reset_text = QVBoxLayout()
+        reset_name = QLabel("Ustawienia domyślne")
+        reset_name.setObjectName("settingTitle")
+        reset_description = QLabel(
+            "Przywróć domyślne opcje programu, zachowując dane połączenia i ID urządzenia."
+        )
+        reset_description.setObjectName("settingDescription")
+        reset_description.setWordWrap(True)
+        reset_text.addWidget(reset_name)
+        reset_text.addWidget(reset_description)
+        reset_layout.addLayout(reset_text, 1)
+        self.reset_defaults_button = QPushButton("Przywróć domyślne")
+        self.reset_defaults_button.setObjectName("outlineButton")
+        reset_layout.addWidget(self.reset_defaults_button)
+        layout.addWidget(reset_card)
         mqtt_cleanup_card = QFrame()
         mqtt_cleanup_card.setObjectName("dataCard")
         mqtt_cleanup_layout = QHBoxLayout(mqtt_cleanup_card)
@@ -1145,6 +1662,7 @@ class MainWindow(QMainWindow):
         self.signals.update_checked.connect(self._update_check_finished)
         self.signals.devices_scanned.connect(self._apply_scanned_devices)
         self.signals.overlay_requested.connect(self._show_overlay_message)
+        self.signals.template_requested.connect(self._handle_overlay_template_command)
         self.title_bar.menu_clicked.connect(self._toggle_sidebar)
         self.show_password.toggled.connect(
             lambda checked: self.password.setEchoMode(
@@ -1157,8 +1675,11 @@ class MainWindow(QMainWindow):
             )
         )
         self.direct_enabled.toggled.connect(self._apply_direct_state)
+        self.copy_ha_device_id.clicked.connect(self._copy_device_id)
         for editor in (self.host, self.username, self.password, self.ha_url, self.ha_token):
             editor.textChanged.connect(self._clear_test_result)
+        self.ha_url.textChanged.connect(self._refresh_direct_connection_badge)
+        self.ha_token.textChanged.connect(self._refresh_direct_connection_badge)
         for editor in (self.port, self.keepalive):
             editor.valueChanged.connect(self._clear_test_result)
         self.tls.toggled.connect(self._clear_test_result)
@@ -1180,7 +1701,64 @@ class MainWindow(QMainWindow):
         self.publish_devices_row.switch.toggled.connect(self._apply_devices_state)
         self.device_filter_combo.currentIndexChanged.connect(self._apply_device_filter)
         self.overlay_enabled_row.switch.toggled.connect(self._apply_overlay_state)
-        self.overlay_test_button.clicked.connect(self._show_local_overlay_test)
+        self.overlay_template_list.currentItemChanged.connect(
+            self._overlay_template_selected
+        )
+        self.overlay_template_new.clicked.connect(self._new_overlay_template)
+        self.overlay_template_duplicate.clicked.connect(self._duplicate_overlay_template)
+        self.overlay_template_delete.clicked.connect(self._delete_overlay_template)
+        self.overlay_template_import.clicked.connect(self._import_overlay_templates)
+        self.overlay_template_export.clicked.connect(self._export_overlay_templates)
+        self.overlay_template_preview.clicked.connect(self._show_overlay_template_preview)
+        self.overlay_template_save.clicked.connect(self._save_overlay_template)
+        self.overlay_template_live.toggled.connect(self._toggle_overlay_template_live)
+        self.overlay_template_size_mode.currentIndexChanged.connect(
+            self._apply_overlay_template_size_mode
+        )
+        for editor in (
+            self.overlay_template_name,
+            self.overlay_template_title,
+        ):
+            editor.textChanged.connect(self._schedule_overlay_template_preview)
+        self.overlay_template_icon.currentTextChanged.connect(
+            self._schedule_overlay_template_preview
+        )
+        self.overlay_template_message.textChanged.connect(
+            self._schedule_overlay_template_preview
+        )
+        for editor in (
+            self.overlay_template_layout,
+            self.overlay_template_effect,
+            self.overlay_template_preset,
+            self.overlay_template_corner,
+            self.overlay_template_display_mode,
+            self.overlay_template_monitor,
+            self.overlay_template_size_mode,
+            self.overlay_template_priority,
+        ):
+            editor.currentIndexChanged.connect(self._schedule_overlay_template_preview)
+        self.overlay_template_opacity_slider.valueChanged.connect(
+            self.overlay_template_opacity.setValue
+        )
+        self.overlay_template_opacity.valueChanged.connect(
+            self.overlay_template_opacity_slider.setValue
+        )
+        for editor in (
+            self.overlay_template_width,
+            self.overlay_template_height,
+            self.overlay_template_opacity,
+            self.overlay_template_duration,
+            self.overlay_template_offset,
+        ):
+            editor.valueChanged.connect(self._schedule_overlay_template_preview)
+        for editor in (
+            self.overlay_template_pinned,
+            self.overlay_template_close_button,
+            self.overlay_template_close,
+            self.overlay_template_hover,
+            self.overlay_template_lifetime,
+        ):
+            editor.toggled.connect(self._schedule_overlay_template_preview)
         self.scan_devices_button.clicked.connect(self.scan_devices)
         self.test_button.clicked.connect(self.test_mqtt_connection)
         self.discovery_button.clicked.connect(self._republish_discovery)
@@ -1188,6 +1766,7 @@ class MainWindow(QMainWindow):
         self.theme_combo.currentIndexChanged.connect(self._theme_changed)
         self.save_button.clicked.connect(self.save_and_apply)
         self.start_button.clicked.connect(self._toggle_bridge)
+        self.reset_defaults_button.clicked.connect(self._reset_default_settings)
         self.uninstall_button.clicked.connect(self._uninstall_application)
         self.mqtt_cleanup_button.clicked.connect(self._cleanup_mqtt_only)
         self.import_button.clicked.connect(self._import_configuration)
@@ -1333,6 +1912,7 @@ class MainWindow(QMainWindow):
         self.overlay_monitor_combo.setCurrentIndex(
             max(0, min(self.overlay_monitor_combo.count() - 1, config.overlay_monitor))
         )
+        self._load_overlay_templates(config)
         self.media_player_row.switch.setChecked(config.media_player_enabled)
         self.power_actions_row.switch.setChecked(config.allow_power_actions)
         self.windows_notifications_row.switch.setChecked(config.enable_windows_notifications)
@@ -1421,6 +2001,8 @@ class MainWindow(QMainWindow):
             overlay_enabled=self.overlay_enabled_row.switch.isChecked(),
             overlay_allow_fullscreen=self.overlay_fullscreen_row.switch.isChecked(),
             overlay_monitor=int(self.overlay_monitor_combo.currentData() or 0),
+            overlay_templates=copy.deepcopy(self._overlay_templates),
+            selected_overlay_template_id=self._selected_overlay_template_id,
         )
 
     def save_and_apply(self) -> bool:
@@ -1488,6 +2070,9 @@ class MainWindow(QMainWindow):
                     overlay_callback=lambda title, message, data: self.signals.overlay_requested.emit(
                         title, message, data
                     ),
+                    template_callback=lambda action, template_id: self.signals.template_requested.emit(
+                        action, template_id
+                    ),
                     overlay_monitors=overlay_monitors,
                     system_monitor=self.system_monitor,
                 )
@@ -1501,6 +2086,9 @@ class MainWindow(QMainWindow):
                     ),
                     overlay_callback=lambda title, message, data: self.signals.overlay_requested.emit(
                         title, message, data
+                    ),
+                    template_callback=lambda action, template_id: self.signals.template_requested.emit(
+                        action, template_id
                     ),
                 )
                 self.direct_bridge.start()
@@ -1587,17 +2175,481 @@ class MainWindow(QMainWindow):
         for widget in (
             self.overlay_fullscreen_row,
             self.overlay_monitor_combo,
-            self.overlay_test_combo,
-            self.overlay_test_button,
+            self.overlay_template_designer,
         ):
             widget.setEnabled(enabled)
         if not enabled and self.overlay_manager is not None:
             self.overlay_manager.close()
             self.overlay_manager = None
 
+    @staticmethod
+    def _set_combo_data(combo: QComboBox, value: object) -> None:
+        index = combo.findData(value)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def _load_overlay_templates(self, config: AppConfig) -> None:
+        self._overlay_templates = copy.deepcopy(config.overlay_templates)
+        self._selected_overlay_template_id = config.selected_overlay_template_id
+        self._refresh_overlay_template_list(self._selected_overlay_template_id)
+        if not self._overlay_templates:
+            self._new_overlay_template()
+
+    def _refresh_overlay_template_list(self, selected_id: str = "") -> None:
+        self.overlay_template_list.blockSignals(True)
+        self.overlay_template_list.clear()
+        selected_row = -1
+        for row, template in enumerate(self._overlay_templates):
+            item = QListWidgetItem(template.name)
+            item.setData(Qt.ItemDataRole.UserRole, template.template_id)
+            item.setToolTip(template.template_id)
+            self.overlay_template_list.addItem(item)
+            if template.template_id == selected_id:
+                selected_row = row
+        self.overlay_template_list.blockSignals(False)
+        if selected_row < 0 and self._overlay_templates:
+            selected_row = 0
+        if selected_row >= 0:
+            self.overlay_template_list.setCurrentRow(selected_row)
+            self._overlay_template_selected(self.overlay_template_list.currentItem(), None)
+
+    def _overlay_template_selected(
+        self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
+    ) -> None:
+        if current is None:
+            return
+        template_id = str(current.data(Qt.ItemDataRole.UserRole) or "")
+        template = next(
+            (
+                candidate
+                for candidate in self._overlay_templates
+                if candidate.template_id == template_id
+            ),
+            None,
+        )
+        if template is None:
+            return
+        self._overlay_template_editing_id = template.template_id
+        self._selected_overlay_template_id = template.template_id
+        self._populate_overlay_template_form(template)
+
+    def _populate_overlay_template_form(self, template: OverlayTemplateConfig) -> None:
+        self._overlay_template_loading = True
+        try:
+            self.overlay_template_name.setText(template.name)
+            self.overlay_template_title.setText(template.title)
+            self.overlay_template_message.setPlainText(template.message)
+            self.overlay_template_icon.set_mdi(template.icon)
+            self._set_combo_data(self.overlay_template_layout, template.layout)
+            self._set_combo_data(self.overlay_template_effect, template.background_effect)
+            self._set_combo_data(self.overlay_template_preset, template.preset)
+            self._set_combo_data(self.overlay_template_corner, template.corner)
+            self._set_combo_data(
+                self.overlay_template_display_mode, template.display_mode
+            )
+            self._set_combo_data(self.overlay_template_priority, template.priority)
+            self._set_combo_data(self.overlay_template_monitor, template.monitor)
+            self._set_combo_data(self.overlay_template_size_mode, template.size_mode)
+            self.overlay_template_width.setValue(template.width)
+            self.overlay_template_height.setValue(template.height)
+            self.overlay_template_opacity.setValue(round(template.opacity * 100))
+            self.overlay_template_opacity_slider.setValue(round(template.opacity * 100))
+            self.overlay_template_duration.setValue(template.duration)
+            self.overlay_template_offset.setValue(template.edge_offset)
+            self.overlay_template_pinned.setChecked(template.pinned)
+            self.overlay_template_close_button.setChecked(template.show_close_button)
+            self.overlay_template_close.setChecked(template.close_on_click)
+            self.overlay_template_hover.setChecked(template.pause_on_hover)
+            self.overlay_template_lifetime.setChecked(template.show_lifetime)
+            self.overlay_template_result.clear()
+            self._apply_overlay_template_size_mode()
+        finally:
+            self._overlay_template_loading = False
+        self._schedule_overlay_template_preview()
+
+    def _unique_overlay_template_id(self, name: str) -> str:
+        base = slugify(name, "popup")[:56]
+        existing = {template.template_id for template in self._overlay_templates}
+        candidate = base
+        suffix = 2
+        while candidate in existing:
+            candidate = f"{base}_{suffix}"[:64]
+            suffix += 1
+        return candidate
+
+    def _new_overlay_template(self) -> None:
+        self.overlay_template_list.clearSelection()
+        self.overlay_template_list.setCurrentItem(None)
+        template_id = self._unique_overlay_template_id("Nowy popup")
+        self._overlay_template_editing_id = template_id
+        self._populate_overlay_template_form(
+            OverlayTemplateConfig(
+                template_id=template_id,
+                name="Nowy popup",
+                title="Home Assistant",
+                message="Przykładowa wiadomość",
+                background_effect="liquid",
+            )
+        )
+        self.overlay_template_result.setText("Nowy projekt — zapisz, aby dodać go do listy.")
+
+    def _overlay_template_from_form(self) -> OverlayTemplateConfig:
+        return OverlayTemplateConfig(
+            template_id=self._overlay_template_editing_id
+            or self._unique_overlay_template_id(self.overlay_template_name.text()),
+            name=self.overlay_template_name.text(),
+            title=self.overlay_template_title.text(),
+            message=self.overlay_template_message.toPlainText(),
+            icon=self.overlay_template_icon.currentText(),
+            layout=str(self.overlay_template_layout.currentData() or "auto"),
+            preset=str(self.overlay_template_preset.currentData() or "default"),
+            background_effect=str(
+                self.overlay_template_effect.currentData() or "none"
+            ),
+            display_mode=str(
+                self.overlay_template_display_mode.currentData() or "queue"
+            ),
+            channel="general",
+            priority=str(self.overlay_template_priority.currentData() or "normal"),
+            corner=str(self.overlay_template_corner.currentData() or "top_right"),
+            size_mode=str(self.overlay_template_size_mode.currentData() or "auto"),
+            width=self.overlay_template_width.value(),
+            height=self.overlay_template_height.value(),
+            opacity=self.overlay_template_opacity.value() / 100,
+            duration=self.overlay_template_duration.value(),
+            monitor=int(self.overlay_template_monitor.currentData() or 0),
+            edge_offset=self.overlay_template_offset.value(),
+            pinned=self.overlay_template_pinned.isChecked(),
+            show_close_button=self.overlay_template_close_button.isChecked(),
+            close_on_click=self.overlay_template_close.isChecked(),
+            pause_on_hover=self.overlay_template_hover.isChecked(),
+            show_lifetime=self.overlay_template_lifetime.isChecked(),
+        )
+
+    def _duplicate_overlay_template(self) -> None:
+        source = self._overlay_template_from_form()
+        copy_name = f"{source.name} — kopia"[:64]
+        duplicate = OverlayTemplateConfig.from_dict(
+            {
+                **asdict(source),
+                "template_id": self._unique_overlay_template_id(copy_name),
+                "name": copy_name,
+            }
+        )
+        self.overlay_template_list.clearSelection()
+        self.overlay_template_list.setCurrentItem(None)
+        self._overlay_template_editing_id = duplicate.template_id
+        self._populate_overlay_template_form(duplicate)
+        self.overlay_template_result.setText("Kopia jest gotowa — zapisz ją, aby dodać do listy.")
+
+    def _delete_overlay_template(self) -> None:
+        template_id = self._overlay_template_editing_id
+        original_count = len(self._overlay_templates)
+        self._overlay_templates = [
+            template
+            for template in self._overlay_templates
+            if template.template_id != template_id
+        ]
+        if len(self._overlay_templates) == original_count:
+            self._new_overlay_template()
+            return
+        self._selected_overlay_template_id = (
+            self._overlay_templates[0].template_id if self._overlay_templates else ""
+        )
+        self._refresh_overlay_template_list(self._selected_overlay_template_id)
+        if not self._overlay_templates:
+            self._new_overlay_template()
+        self.save_and_apply()
+
+    def _save_overlay_template(self) -> None:
+        if not self.overlay_template_name.text().strip():
+            self.overlay_template_result.setText("Podaj nazwę szablonu.")
+            return
+        template = self._overlay_template_from_form()
+        duplicate_name = next(
+            (
+                item
+                for item in self._overlay_templates
+                if item.template_id != template.template_id
+                and item.name.casefold() == template.name.casefold()
+            ),
+            None,
+        )
+        if duplicate_name is not None:
+            self.overlay_template_result.setText("Taka nazwa jest już używana.")
+            return
+        for index, current in enumerate(self._overlay_templates):
+            if current.template_id == template.template_id:
+                self._overlay_templates[index] = template
+                break
+        else:
+            self._overlay_templates.append(template)
+        self._selected_overlay_template_id = template.template_id
+        self._refresh_overlay_template_list(template.template_id)
+        if self.save_and_apply():
+            self.overlay_template_result.setText("✓ Zapisano i zsynchronizowano z HA")
+
+    def _export_overlay_templates(self) -> None:
+        if not self._overlay_templates:
+            self.overlay_template_result.setText(self._t("Brak popupów do eksportu."))
+            return
+        dialog = OverlayTemplateSelectionDialog(
+            "Eksport popupów", self._overlay_templates, self, self._language
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected_ids = dialog.selected_ids()
+        selected = [
+            template
+            for template in self._overlay_templates
+            if template.template_id in selected_ids
+        ]
+        if not selected:
+            self.overlay_template_result.setText(
+                self._t("Nie zaznaczono żadnego popupu.")
+            )
+            return
+        file_name, _ = QFileDialog.getSaveFileName(
+            self,
+            self._t("Eksport popupów"),
+            str(self.store.data_dir / "ha-windows-bridge-popupy.json"),
+            "JSON (*.json)",
+        )
+        if not file_name:
+            return
+        try:
+            export_overlay_templates(
+                Path(file_name), selected, self._selected_overlay_template_id
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, self._t("Eksport popupów"), str(exc))
+            return
+        self.overlay_template_result.setText(
+            self._t("✓ Wyeksportowano popupy: {count}").format(count=len(selected))
+        )
+
+    def _import_overlay_templates(self) -> None:
+        file_name, _ = QFileDialog.getOpenFileName(
+            self,
+            self._t("Import popupów"),
+            str(self.store.data_dir),
+            "JSON (*.json)",
+        )
+        if not file_name:
+            return
+        try:
+            imported, imported_selected = import_overlay_templates(Path(file_name))
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, self._t("Import popupów"), str(exc))
+            return
+        dialog = OverlayTemplateSelectionDialog(
+            "Import popupów", imported, self, self._language
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected_ids = dialog.selected_ids()
+        selected = [item for item in imported if item.template_id in selected_ids]
+        if not selected:
+            self.overlay_template_result.setText(
+                self._t("Nie zaznaczono żadnego popupu.")
+            )
+            return
+        id_mapping: dict[str, str] = {}
+        replaced = 0
+        added = 0
+        for imported_template in selected:
+            original_id = imported_template.template_id
+            current_index = next(
+                (
+                    index
+                    for index, current in enumerate(self._overlay_templates)
+                    if current.template_id == imported_template.template_id
+                ),
+                -1,
+            )
+            if current_index < 0:
+                current_index = next(
+                    (
+                        index
+                        for index, current in enumerate(self._overlay_templates)
+                        if current.name.casefold() == imported_template.name.casefold()
+                    ),
+                    -1,
+                )
+                if current_index >= 0:
+                    imported_template = OverlayTemplateConfig.from_dict(
+                        {
+                            **asdict(imported_template),
+                            "template_id": self._overlay_templates[
+                                current_index
+                            ].template_id,
+                        }
+                    )
+            if current_index >= 0:
+                self._overlay_templates[current_index] = imported_template
+                id_mapping[original_id] = imported_template.template_id
+                replaced += 1
+            elif len(self._overlay_templates) < 64:
+                self._overlay_templates.append(imported_template)
+                id_mapping[original_id] = imported_template.template_id
+                added += 1
+        selected_id = id_mapping.get(imported_selected) or next(
+            iter(id_mapping.values()), self._selected_overlay_template_id
+        )
+        self._selected_overlay_template_id = selected_id
+        self._refresh_overlay_template_list(selected_id)
+        self.save_and_apply()
+        self.overlay_template_result.setText(
+            self._t("✓ Zaimportowano: {added}, zaktualizowano: {updated}").format(
+                added=added, updated=replaced
+            )
+        )
+
+    def _apply_overlay_template_size_mode(self, *_args: object) -> None:
+        manual = self.overlay_template_size_mode.currentData() == "manual"
+        self.overlay_template_width.setEnabled(manual)
+        self.overlay_template_height.setEnabled(manual)
+
+    def _schedule_overlay_template_preview(self, *_args: object) -> None:
+        if self._overlay_template_loading or not self.overlay_template_live.isChecked():
+            return
+        self.overlay_preview_timer.start()
+
+    def _toggle_overlay_template_live(self, enabled: bool) -> None:
+        if enabled:
+            self._schedule_overlay_template_preview()
+            return
+        self.overlay_preview_timer.stop()
+        if self.overlay_preview_manager is not None:
+            self.overlay_preview_manager.close()
+            self.overlay_preview_manager = None
+        self.overlay_template_result.clear()
+
+    def _show_overlay_template_preview(self, *_args: object) -> None:
+        template = self._overlay_template_from_form()
+        if self.overlay_preview_manager is None:
+            self.overlay_preview_manager = OverlayManager(
+                allow_fullscreen=True,
+                default_monitor=template.monitor,
+                close_tooltip=self._t("Zamknij nakładkę"),
+                preview_mode=True,
+                desktop_capture=self._overlay_desktop_capture,
+            )
+        manager = self.overlay_preview_manager
+        preview_id = "designer-preview"
+        exists = bool(
+            manager._current and manager._current.get("id") == preview_id
+        ) or preview_id in manager._parallel_cards
+        data = template.to_overlay_data()
+        data.update(
+            {
+                "id": preview_id,
+                "action": "update" if exists else "show",
+            }
+        )
+        shown = manager.handle_message(template.title, template.message, data)
+        if shown:
+            self.overlay_template_result.clear()
+        else:
+            self.overlay_template_result.setText(
+                self._t("Podgląd został pominięty przez tryb pełnoekranowy.")
+            )
+
+    def _resolve_overlay_template(
+        self, title: str, message: str, data: dict
+    ) -> tuple[str, str, dict]:
+        template_id = str(data.get("template_id", "")).strip()
+        if not template_id:
+            return title, message, data
+        template = next(
+            (
+                item
+                for item in self.current_config.overlay_templates
+                if item.template_id == template_id
+            ),
+            None,
+        )
+        if template is None:
+            self.logger.warning("Nieznany zapisany popup: %s", template_id)
+            return title, message, data
+        merged = template.to_overlay_data()
+        merged.update({key: value for key, value in data.items() if key != "template_id"})
+        merged.setdefault("id", f"template-{template.template_id}")
+        return title or template.title, message or template.message, merged
+
+    def _handle_overlay_template_command(self, action: str, template_id: str) -> None:
+        if action == "catalog":
+            self._publish_overlay_template_catalog()
+            return
+        template = next(
+            (
+                item
+                for item in self.current_config.overlay_templates
+                if item.template_id == template_id
+            ),
+            None,
+        )
+        if template is None:
+            self.logger.warning("Nieznany zapisany popup: %s", template_id)
+            return
+        self.current_config.selected_overlay_template_id = template_id
+        self._selected_overlay_template_id = template_id
+        for row in range(self.overlay_template_list.count()):
+            item = self.overlay_template_list.item(row)
+            if str(item.data(Qt.ItemDataRole.UserRole) or "") == template_id:
+                self.overlay_template_list.setCurrentRow(row)
+                break
+        try:
+            self.store.save(self.current_config)
+        except Exception:
+            self.logger.warning("Nie udało się zapisać wyboru popupu", exc_info=True)
+        self._publish_overlay_template_catalog()
+        if action == "show":
+            self._show_overlay_message("", "", {"template_id": template_id})
+
+    def _publish_overlay_template_catalog(self) -> None:
+        if self.bridge is not None:
+            self.bridge.config.overlay_templates = copy.deepcopy(
+                self.current_config.overlay_templates
+            )
+            self.bridge.config.selected_overlay_template_id = (
+                self.current_config.selected_overlay_template_id
+            )
+            self.bridge.publish_overlay_templates()
+        if self.direct_bridge is not None:
+            self.direct_bridge.config.overlay_templates = copy.deepcopy(
+                self.current_config.overlay_templates
+            )
+            self.direct_bridge.config.selected_overlay_template_id = (
+                self.current_config.selected_overlay_template_id
+            )
+            self.direct_bridge.publish_overlay_templates()
+
     def _apply_direct_state(self, enabled: bool) -> None:
         for widget in (self.ha_url, self.ha_token, self.show_ha_token, self.ha_verify_tls):
             widget.setEnabled(enabled)
+        self._refresh_direct_connection_badge()
+
+    def _copy_device_id(self) -> None:
+        QApplication.clipboard().setText(self.ha_device_id.text())
+        self.copy_ha_device_id.setText(self._t("Skopiowano"))
+        QTimer.singleShot(
+            1_500,
+            lambda: self.copy_ha_device_id.setText(self._t("Kopiuj")),
+        )
+
+    def _refresh_direct_connection_badge(self) -> None:
+        if not self.direct_enabled.isChecked():
+            text, state = "Wyłączone", "off"
+        elif self.direct_bridge is not None and self.direct_bridge.connected:
+            text, state = "Połączono", "connected"
+        elif self.ha_url.text().strip() and self.ha_token.text():
+            text, state = "Gotowe", "ready"
+        else:
+            text, state = "Uzupełnij dane", "warning"
+        self.direct_connection_badge.setText(self._t(text))
+        self.direct_connection_badge.setProperty("connectionState", state)
+        self.direct_connection_badge.style().unpolish(self.direct_connection_badge)
+        self.direct_connection_badge.style().polish(self.direct_connection_badge)
 
     def _configure_overlay(self, config: AppConfig) -> None:
         if self.overlay_manager is not None:
@@ -1608,28 +2660,13 @@ class MainWindow(QMainWindow):
                 allow_fullscreen=config.overlay_allow_fullscreen,
                 default_monitor=config.overlay_monitor,
                 close_tooltip=self._t("Zamknij nakładkę"),
+                desktop_capture=self._overlay_desktop_capture,
             )
-
-    def _show_local_overlay_test(self) -> None:
-        if self.overlay_manager is None:
-            config = self._config_from_form()
-            if not config.overlay_enabled:
-                self.overlay_test_result.setText(
-                    self._t("Najpierw włącz wiadomości na ekranie.")
-                )
-                return
-            self._configure_overlay(config)
-        pattern = str(self.overlay_test_combo.currentData() or "compact")
-        shown = self.overlay_manager is not None and self.overlay_manager.show_test_pattern(pattern)
-        self.overlay_test_result.setText(
-            self._t("Wyświetlono lokalny wzorzec testowy.")
-            if shown
-            else self._t("Nakładka jest wyłączona w trybie pełnoekranowym.")
-        )
 
     def _show_overlay_message(self, title: str, message: str, data: dict) -> None:
         if self.overlay_manager is None:
             return
+        title, message, data = self._resolve_overlay_template(title, message, dict(data))
         if not self.overlay_manager.handle_message(title, message, data):
             self.logger.info("Pominięto nakładkę podczas działania aplikacji pełnoekranowej")
 
@@ -2026,6 +3063,7 @@ class MainWindow(QMainWindow):
             else self._last_status_text
         )
         self.status_card.update_status(connected, detail, uptime, messages)
+        self._refresh_direct_connection_badge()
 
     def _refresh_resource_usage(self) -> None:
         """Refresh a cheap, process-local CPU/RAM indicator in the footer."""
@@ -2159,6 +3197,34 @@ class MainWindow(QMainWindow):
             return
         self._load_config(imported)
         self.save_and_apply()
+
+    def _reset_default_settings(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            self._t("Przywrócić ustawienia domyślne?"),
+            self._t(
+                "Domyślne opcje programu zastąpią bieżące ustawienia. Dane MQTT, bezpośrednie połączenie Home Assistant i ID urządzenia zostaną zachowane."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        current = self._config_from_form()
+        defaults = AppConfig(
+            device_name=current.device_name,
+            device_id=current.device_id,
+            mqtt=copy.deepcopy(current.mqtt),
+            home_assistant=copy.deepcopy(current.home_assistant),
+            language=current.language,
+        )
+        self._load_config(defaults)
+        if self.save_and_apply():
+            QMessageBox.information(
+                self,
+                self._t("Ustawienia domyślne"),
+                self._t("Przywrócono domyślne ustawienia programu."),
+            )
 
     def _save_diagnostics(self) -> None:
         file_name, _ = QFileDialog.getSaveFileName(
@@ -2331,6 +3397,8 @@ class MainWindow(QMainWindow):
             self.logger.warning("Nie można wyłączyć autostartu przed odinstalowaniem")
         self.pending_uninstaller = self._uninstaller_path
         self._force_close = True
+        self._overlay_desktop_capture.release()
+        self._remove_settings_wheel_guard()
         self.tray.hide()
         QApplication.quit()
 
@@ -2373,6 +3441,11 @@ class MainWindow(QMainWindow):
         if self.overlay_manager is not None:
             self.overlay_manager.close()
             self.overlay_manager = None
+        if self.overlay_preview_manager is not None:
+            self.overlay_preview_manager.close()
+            self.overlay_preview_manager = None
+        self._overlay_desktop_capture.release()
+        self._remove_settings_wheel_guard()
         event.accept()
 
     def quit_application(self) -> None:
@@ -2381,6 +3454,11 @@ class MainWindow(QMainWindow):
         if self.overlay_manager is not None:
             self.overlay_manager.close()
             self.overlay_manager = None
+        if self.overlay_preview_manager is not None:
+            self.overlay_preview_manager.close()
+            self.overlay_preview_manager = None
+        self._overlay_desktop_capture.release()
+        self._remove_settings_wheel_guard()
         self.tray.hide()
         QApplication.quit()
 

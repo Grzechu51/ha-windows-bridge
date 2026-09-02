@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 APP_NAME = "HA Windows Bridge"
-CONFIG_SCHEMA_VERSION = 13
+CONFIG_SCHEMA_VERSION = 14
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_SECRET_BYTES = 64 * 1024
@@ -132,6 +132,159 @@ class HomeAssistantConfig:
         )
 
 
+@dataclass(slots=True)
+class OverlayTemplateConfig:
+    """A reusable overlay design owned and rendered by this Windows PC."""
+
+    template_id: str
+    name: str
+    title: str = "Home Assistant"
+    message: str = "Przykładowa wiadomość"
+    icon: str = "mdi:home-assistant"
+    layout: str = "compact"
+    preset: str = "default"
+    background_effect: str = "blur"
+    display_mode: str = "queue"
+    channel: str = "general"
+    priority: str = "normal"
+    corner: str = "top_right"
+    size_mode: str = "auto"
+    width: int = 400
+    height: int = 160
+    opacity: float = 0.94
+    duration: int = 8
+    monitor: int = 0
+    edge_offset: int = 0
+    pinned: bool = False
+    show_close_button: bool = False
+    close_on_click: bool = False
+    pause_on_hover: bool = True
+    show_lifetime: bool = True
+
+    def __post_init__(self) -> None:
+        self.template_id = slugify(self.template_id, "popup")[:64]
+        self.name = self.name.strip()[:64] or "Popup"
+        self.title = self.title.strip()[:128]
+        self.message = self.message.strip()[:2048]
+        self.icon = self.icon.strip()[:128]
+        self.layout = (
+            self.layout.strip().lower()
+            if self.layout.strip().lower()
+            in {"auto", "compact", "status", "badge", "standard", "media", "camera"}
+            else "compact"
+        )
+        self.preset = (
+            self.preset.strip().lower()
+            if self.preset.strip().lower()
+            in {"default", "success", "warning", "error", "info"}
+            else "default"
+        )
+        self.background_effect = (
+            self.background_effect.strip().lower()
+            if self.background_effect.strip().lower() in {"none", "blur", "liquid"}
+            else "blur"
+        )
+        self.display_mode = (
+            self.display_mode.strip().lower()
+            if self.display_mode.strip().lower() in {"queue", "parallel"}
+            else "queue"
+        )
+        self.channel = (
+            self.channel.strip().lower()
+            if self.channel.strip().lower()
+            in {"general", "security", "system", "media", "work"}
+            else "general"
+        )
+        self.priority = (
+            self.priority.strip().lower()
+            if self.priority.strip().lower() in {"low", "normal", "high", "critical"}
+            else "normal"
+        )
+        self.corner = (
+            self.corner.strip().lower()
+            if self.corner.strip().lower()
+            in {"top_left", "top_right", "bottom_left", "bottom_right", "top_center"}
+            else "top_right"
+        )
+        self.size_mode = (
+            self.size_mode.strip().lower()
+            if self.size_mode.strip().lower() in {"auto", "manual"}
+            else "auto"
+        )
+        self.width = max(240, min(1200, int(self.width)))
+        self.height = max(90, min(900, int(self.height)))
+        self.opacity = max(0.0, min(1.0, float(self.opacity)))
+        self.duration = max(2, min(60, int(self.duration)))
+        self.monitor = max(0, min(15, int(self.monitor)))
+        self.edge_offset = max(0, min(240, int(self.edge_offset)))
+
+    @classmethod
+    def from_dict(cls, data: dict) -> OverlayTemplateConfig:
+        return cls(
+            template_id=str(data.get("template_id", data.get("id", "popup"))),
+            name=str(data.get("name", "Popup")),
+            title=str(data.get("title", "Home Assistant")),
+            message=str(data.get("message", "Przykładowa wiadomość")),
+            icon=str(data.get("icon", "mdi:home-assistant")),
+            layout=str(data.get("layout", "compact")),
+            preset=str(data.get("preset", "default")),
+            background_effect=str(data.get("background_effect", "blur")),
+            display_mode=str(data.get("display_mode", "queue")),
+            channel=str(data.get("channel", "general")),
+            priority=str(data.get("priority", "normal")),
+            corner=str(data.get("corner", "top_right")),
+            size_mode=str(data.get("size_mode", "auto")),
+            width=int(data.get("width", 400)),
+            height=int(data.get("height", 160)),
+            opacity=float(data.get("opacity", 0.94)),
+            duration=int(data.get("duration", 8)),
+            monitor=int(data.get("monitor", 0)),
+            edge_offset=int(data.get("edge_offset", 0)),
+            pinned=bool(data.get("pinned", False)),
+            show_close_button=bool(data.get("show_close_button", False)),
+            close_on_click=bool(data.get("close_on_click", False)),
+            pause_on_hover=bool(data.get("pause_on_hover", True)),
+            show_lifetime=bool(data.get("show_lifetime", True)),
+        )
+
+    def to_overlay_data(self) -> dict:
+        return {
+            "layout": self.layout,
+            "preset": self.preset,
+            "background_effect": self.background_effect,
+            "display_mode": self.display_mode,
+            "channel": self.channel,
+            "priority": self.priority,
+            "corner": self.corner,
+            "size_mode": self.size_mode,
+            "width": self.width,
+            "height": self.height,
+            "opacity": self.opacity,
+            "duration": self.duration,
+            "monitor": self.monitor,
+            "edge_offset": self.edge_offset,
+            "icon": self.icon,
+            "pinned": self.pinned,
+            "show_close_button": self.show_close_button,
+            "close_on_click": self.close_on_click,
+            "pause_on_hover": self.pause_on_hover,
+            "show_lifetime": self.show_lifetime,
+        }
+
+
+def default_overlay_templates() -> list[OverlayTemplateConfig]:
+    return [
+        OverlayTemplateConfig(
+            template_id="powiadomienie",
+            name="Powiadomienie",
+            title="Home Assistant",
+            message="Przykładowa wiadomość",
+            icon="mdi:home-assistant",
+            background_effect="liquid",
+        )
+    ]
+
+
 def default_apps() -> list[AudioAppConfig]:
     return [
         AudioAppConfig("chrome.exe", "Chrome", "chrome", False),
@@ -197,6 +350,10 @@ class AppConfig:
     overlay_enabled: bool = False
     overlay_allow_fullscreen: bool = False
     overlay_monitor: int = 0
+    overlay_templates: list[OverlayTemplateConfig] = field(
+        default_factory=default_overlay_templates
+    )
+    selected_overlay_template_id: str = ""
 
     def __post_init__(self) -> None:
         self.language = self.language.strip().lower()
@@ -222,6 +379,20 @@ class AppConfig:
             )
         )
         self.overlay_monitor = max(0, min(15, int(self.overlay_monitor)))
+        unique_templates: dict[str, OverlayTemplateConfig] = {}
+        for template in self.overlay_templates[:64]:
+            if template.template_id not in unique_templates:
+                unique_templates[template.template_id] = template
+        self.overlay_templates = list(unique_templates.values())
+        template_ids = {template.template_id for template in self.overlay_templates}
+        selected = slugify(self.selected_overlay_template_id, "")
+        self.selected_overlay_template_id = (
+            selected
+            if selected in template_ids
+            else self.overlay_templates[0].template_id
+            if self.overlay_templates
+            else ""
+        )
 
     @classmethod
     def from_dict(cls, data: dict) -> AppConfig:
@@ -320,6 +491,16 @@ class AppConfig:
             overlay_enabled=bool(data.get("overlay_enabled", False)),
             overlay_allow_fullscreen=bool(data.get("overlay_allow_fullscreen", False)),
             overlay_monitor=int(data.get("overlay_monitor", 0)),
+            overlay_templates=[
+                OverlayTemplateConfig.from_dict(item)
+                for item in data.get("overlay_templates", [])
+                if isinstance(item, dict)
+            ]
+            if "overlay_templates" in data
+            else default_overlay_templates(),
+            selected_overlay_template_id=str(
+                data.get("selected_overlay_template_id", "")
+            ),
         )
 
     def to_dict(self) -> dict:
@@ -327,6 +508,17 @@ class AppConfig:
         data["mqtt"].pop("password", None)
         data["home_assistant"].pop("token", None)
         return data
+
+    def overlay_template_catalog(self) -> dict:
+        return {
+            "schema": 1,
+            "device_id": self.device_id,
+            "selected": self.selected_overlay_template_id,
+            "templates": [
+                {"id": template.template_id, "name": template.name}
+                for template in self.overlay_templates
+            ],
+        }
 
     def validation_errors(self) -> list[str]:
         errors: list[str] = []
@@ -376,6 +568,9 @@ class AppConfig:
         for device in devices:
             if not device.instance_id:
                 errors.append(f"Urządzenie „{device.display_name}” nie ma identyfikatora Windows.")
+        template_names = [template.name.casefold() for template in self.overlay_templates]
+        if len(template_names) != len(set(template_names)):
+            errors.append("Nazwy zapisanych popupów muszą być unikalne.")
         return errors
 
 

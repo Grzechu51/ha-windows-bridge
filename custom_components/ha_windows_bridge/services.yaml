@@ -1,3 +1,70 @@
+show_saved_overlay:
+  fields:
+    template_entity:
+      required: true
+      selector:
+        entity:
+          filter:
+            - domain: select
+              integration: ha_windows_bridge
+    template_id:
+      selector:
+        text:
+    content:
+      collapsed: false
+      fields:
+        title:
+          selector:
+            text:
+        title_entity:
+          selector:
+            entity:
+        title_attribute:
+          selector:
+            text:
+        message:
+          selector:
+            text:
+              multiline: true
+        message_entity:
+          selector:
+            entity:
+        message_attribute:
+          selector:
+            text:
+        notification_id:
+          selector:
+            text:
+    values:
+      collapsed: true
+      fields:
+        progress_entity:
+          selector:
+            entity:
+        progress_attribute:
+          selector:
+            text:
+        progress_min:
+          default: 0
+          selector:
+            number:
+              mode: box
+        progress_max:
+          default: 100
+          selector:
+            number:
+              mode: box
+        duration_entity:
+          selector:
+            entity:
+        duration_attribute:
+          selector:
+            text:
+        media_player_entity:
+          selector:
+            entity:
+              domain: media_player
+
 show_overlay:
   target:
     entity:
@@ -34,9 +101,20 @@ show_overlay:
               options:
                 - auto
                 - compact
+                - status
+                - badge
                 - standard
                 - media
                 - camera
+        display_mode:
+          required: true
+          default: queue
+          selector:
+            select:
+              translation_key: overlay_display_mode
+              options:
+                - queue
+                - parallel
         channel:
           required: true
           default: general
@@ -264,9 +342,18 @@ update_overlay:
           options:
             - auto
             - compact
+            - status
+            - badge
             - standard
             - media
             - camera
+    display_mode:
+      selector:
+        select:
+          translation_key: overlay_display_mode
+          options:
+            - queue
+            - parallel
     channel:
       selector:
         select:

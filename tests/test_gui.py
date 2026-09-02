@@ -8,17 +8,24 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPoint, QRect, QSize, Qt
+from PySide6.QtCore import QBuffer, QByteArray, QEvent, QIODevice, QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QFileDialog, QLabel, QToolTip
+from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
+    QFileDialog,
+    QLabel,
+    QMessageBox,
+    QToolTip,
+)
 
 from ha_windows_bridge.audio import AudioApplication
 from ha_windows_bridge.config import AppConfig, AudioAppConfig, MqttConfig
-from ha_windows_bridge.gui import MainWindow
+from ha_windows_bridge.gui import MainWindow, MdiIconDialog
 from ha_windows_bridge.overlay import OverlayCard, OverlayManager
 from ha_windows_bridge.system_monitor import PnpDevice
-from ha_windows_bridge.ui_components import AppCard, HelpButton
+from ha_windows_bridge.ui_components import AppCard, HelpButton, LabeledToggle
 
 
 def wait_for_qt_condition(
@@ -107,6 +114,8 @@ def test_gui_defaults_and_minimum_size() -> None:
         assert not window.windowIcon().isNull()
         assert not window.uninstall_button.isEnabled()
         labels = [label.text() for label in window.findChildren(QLabel)]
+        assert "Kod źródłowy i licencja" not in labels
+        assert "Podgląd aktualizowany na żywo." not in labels
         assert "Zaznacz opcje do zintegrowania z Home Assistant." not in labels
         assert "Dodatkowe dane z Windows." in labels
         assert "Wybierz programy, którymi chcesz sterować z Home Assistant." in labels
@@ -406,7 +415,332 @@ def test_overlay_automatic_size_shrinks_after_manual_height() -> None:
         )
         QApplication.processEvents()
         assert 72 <= manager._card.height() < 120
-        assert manager._window.height() == manager._card.height() + 12
+        assert manager._window.height() == manager._card.height()
+    finally:
+        close_window(window)
+
+
+def test_compact_overlay_aligns_short_message_with_title() -> None:
+    window = make_window(AppConfig(overlay_enabled=True))
+    try:
+        manager = window.overlay_manager
+        assert manager is not None
+        manager.allow_fullscreen = True
+        manager._animations_allowed = False
+        assert manager.handle_message(
+            "Home Assistant",
+            "Drzwi wejściowe zostały zamknięte.",
+            {
+                "id": "short-message",
+                "icon": "mdi:door-closed",
+                "layout": "compact",
+                "pinned": True,
+            },
+        )
+        QApplication.processEvents()
+
+        assert manager._current["_resolved_layout"] == "compact"
+        assert manager._label.contentsMargins().left() == 44
+        assert manager._card.height() < 120
+    finally:
+        close_window(window)
+
+
+def test_parallel_status_overlays_are_visible_updated_and_removed_side_by_side() -> None:
+    window = make_window(AppConfig(overlay_enabled=True))
+    try:
+        manager = window.overlay_manager
+        assert manager is not None
+        manager.allow_fullscreen = True
+        manager._animations_allowed = False
+        for message_id, title, value, progress in (
+            ("battery", "Bateria", "78%", 78),
+            ("cpu", "Procesor", "24%", 24),
+            ("memory", "Pamięć RAM", "61%", 61),
+        ):
+            assert manager.handle_message(
+                title,
+                value,
+                {
+                    "id": message_id,
+                    "display_mode": "parallel",
+                    "layout": "status",
+                    "channel": "system",
+                    "progress": progress,
+                    "pinned": True,
+                },
+            )
+        QApplication.processEvents()
+
+        children = list(manager._parallel_cards.values())
+        assert len(children) == 3
+        assert all(child._current["_resolved_layout"] == "status" for child in children)
+        assert all(child._window.isVisible() for child in children)
+        assert all(child._card.width() <= 220 for child in children)
+        assert all(child._card.height() <= 72 for child in children)
+        assert [child._window.x() for child in children] == sorted(
+            (child._window.x() for child in children), reverse=True
+        )
+        assert len({child._window.y() for child in children}) == 1
+
+        assert manager.handle_message(
+            "Aktualizacja",
+            "System działa prawidłowo.",
+            {"id": "regular", "channel": "general", "pinned": True},
+        )
+        QApplication.processEvents()
+        parallel_bottom = max(
+            child._card.mapToGlobal(QPoint(0, 0)).y() + child._card.height()
+            for child in children
+        )
+        regular_top = manager._card.mapToGlobal(QPoint(0, 0)).y()
+        assert regular_top >= parallel_bottom + 10
+
+        cpu = manager._parallel_cards["cpu"]
+        assert manager.handle_message(
+            "", "42%", {"action": "update", "id": "cpu", "progress": 42}
+        )
+        QApplication.processEvents()
+        assert cpu._label.text() == "42%"
+        assert cpu._progress.value() == 42
+
+        assert manager.handle_message("", "", {"action": "remove", "id": "cpu"})
+        QApplication.processEvents()
+        assert "cpu" not in manager._parallel_cards
+        assert manager.handle_message("", "", {"action": "clear", "channel": "system"})
+        QApplication.processEvents()
+        assert not manager._parallel_cards
+    finally:
+        close_window(window)
+
+
+def test_parallel_status_animation_preserves_the_visual_gap_on_first_show() -> None:
+    window = make_window(AppConfig(overlay_enabled=True))
+    try:
+        manager = window.overlay_manager
+        assert manager is not None
+        manager.allow_fullscreen = True
+        manager._animations_allowed = True
+        assert manager.show_test_pattern("parallel")
+
+        def visible_gaps() -> list[int]:
+            cards = sorted(
+                (
+                    QRect(child._card.mapToGlobal(QPoint(0, 0)), child._card.size())
+                    for child in manager._parallel_cards.values()
+                ),
+                key=QRect.left,
+            )
+            return [cards[index + 1].left() - cards[index].right() - 1 for index in range(2)]
+
+        QTest.qWait(120)
+        assert all(gap >= 10 for gap in visible_gaps())
+        QTest.qWait(520)
+        assert all(gap >= 10 for gap in visible_gaps())
+        assert all(child._lifetime_progress.isHidden() for child in manager._parallel_cards.values())
+    finally:
+        close_window(window)
+
+
+def test_indicator_strip_renders_small_icon_value_and_image_badges() -> None:
+    window = make_window(AppConfig(overlay_enabled=True))
+    try:
+        manager = window.overlay_manager
+        assert manager is not None
+        manager.allow_fullscreen = True
+        manager._animations_allowed = False
+        assert manager.show_test_pattern("badges")
+        QApplication.processEvents()
+
+        badges = list(manager._parallel_cards.values())
+        assert len(badges) == 4
+        assert all(child._current["_resolved_layout"] == "badge" for child in badges)
+        assert all(child._card.width() <= 180 for child in badges)
+        assert all(child._card.height() <= 44 for child in badges)
+        assert all(child._progress.isHidden() for child in badges)
+        assert all(child._lifetime_progress.isHidden() for child in badges)
+        assert manager._parallel_cards["local-test-badge-battery"]._title.text() == "88%"
+        battery = manager._parallel_cards["local-test-badge-battery"]
+        battery_center = battery._card.rect().center().y()
+        icon_center = (
+            battery._icon.mapTo(battery._card, QPoint(0, 0)).y()
+            + battery._icon.height() // 2
+        )
+        title_center = (
+            battery._title.mapTo(battery._card, QPoint(0, 0)).y()
+            + battery._title.height() // 2
+        )
+        assert abs(icon_center - battery_center) <= 1
+        assert abs(title_center - battery_center) <= 1
+        light = manager._parallel_cards["local-test-badge-light"]
+        assert light._title.isHidden()
+        assert not light._icon.isHidden()
+        assert "border: 1px solid transparent" in light._window.styleSheet()
+        assert "background: transparent; border: 1px solid rgba" in light._window.styleSheet()
+        assert ", 0); border-radius" in light._window.styleSheet()
+
+        artwork = QPixmap(32, 32)
+        artwork.fill(QColor("#7a4ea3"))
+        encoded = QByteArray()
+        buffer = QBuffer(encoded)
+        assert buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        assert artwork.save(buffer, "PNG")
+        buffer.close()
+        image = "data:image/png;base64," + bytes(encoded.toBase64()).decode("ascii")
+        assert manager.handle_message(
+            "",
+            "",
+            {
+                "action": "update",
+                "id": "local-test-badge-person",
+                "image": image,
+            },
+        )
+        QApplication.processEvents()
+        person = manager._parallel_cards["local-test-badge-person"]
+        assert person._image.isHidden()
+        assert person._icon.pixmap() is not None
+        assert not person._icon.pixmap().isNull()
+    finally:
+        close_window(window)
+
+
+def test_overlay_designer_previews_and_persists_a_local_template() -> None:
+    window = make_window(
+        AppConfig(
+            mqtt=MqttConfig(host="broker"),
+            overlay_enabled=True,
+            auto_connect=False,
+        )
+    )
+    try:
+        window.overlay_template_title.setText("Live title")
+        window.overlay_template_message.setPlainText("Live message")
+        window.overlay_template_effect.setCurrentIndex(
+            window.overlay_template_effect.findData("liquid")
+        )
+        window.overlay_template_opacity.setValue(35)
+        QTest.qWait(380)
+
+        assert window.overlay_preview_manager is not None
+        assert window.overlay_preview_manager._current["title"] == "Live title"
+        assert window.overlay_preview_manager._current["message"] == "Live message"
+        assert window.overlay_preview_manager._current["opacity"] == 0.35
+        assert window.overlay_template_opacity_slider.value() == 35
+        assert window.overlay_preview_manager._lifetime_progress.isVisible()
+        assert window.overlay_template_icon.currentText().startswith("mdi:")
+        assert isinstance(window.overlay_template_pinned, LabeledToggle)
+        assert isinstance(window.overlay_template_live, LabeledToggle)
+        assert window.overlay_template_live.isChecked()
+        initial_pinned = window.overlay_template_pinned.isChecked()
+        QTest.mouseClick(
+            window.overlay_template_pinned,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(
+                window.overlay_template_pinned.width() - 4,
+                window.overlay_template_pinned.height() // 2,
+            ),
+        )
+        assert window.overlay_template_pinned.isChecked() is not initial_pinned
+        slider = window.overlay_template_opacity_slider
+        QTest.mouseClick(
+            slider,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(round(slider.width() * 0.75), slider.height() // 2),
+        )
+        assert 73 <= window.overlay_template_opacity.value() <= 77
+        ignored_wheels: list[bool] = []
+        wheel = SimpleNamespace(ignore=lambda: ignored_wheels.append(True))
+        window.overlay_template_opacity.wheelEvent(wheel)
+        window.overlay_template_effect.wheelEvent(wheel)
+        assert ignored_wheels == [True, True]
+        assert 73 <= window.overlay_template_opacity.value() <= 77
+        assert window.overlay_template_duration.buttonSymbols() == (
+            QAbstractSpinBox.ButtonSymbols.NoButtons
+        )
+        duration = window.overlay_template_duration.value()
+        accepted_wheels: list[bool] = []
+        guarded_wheel = SimpleNamespace(
+            type=lambda: QEvent.Type.Wheel,
+            angleDelta=lambda: QPoint(0, -120),
+            accept=lambda: accepted_wheels.append(True),
+        )
+        assert window._settings_wheel_guard.eventFilter(
+            window.overlay_template_duration, guarded_wheel
+        )
+        assert window.overlay_template_duration.value() == duration
+        assert accepted_wheels == [True]
+
+        window.overlay_template_live.setChecked(False)
+        assert window.overlay_preview_manager is None
+
+        window.overlay_template_name.setText("Widok testowy")
+        window._save_overlay_template()
+
+        assert window.current_config.overlay_templates[0].name == "Widok testowy"
+        assert window.current_config.overlay_templates[0].title == "Live title"
+        assert 0.73 <= window.current_config.overlay_templates[0].opacity <= 0.77
+        assert window.current_config.selected_overlay_template_id == "powiadomienie"
+    finally:
+        close_window(window)
+
+
+def test_mdi_picker_exposes_and_filters_the_complete_catalog() -> None:
+    QApplication.instance() or QApplication([])
+    dialog = MdiIconDialog("mdi:home-assistant")
+    try:
+        assert dialog.model.rowCount() > 7_000
+        dialog.search.setText("battery")
+        QApplication.processEvents()
+        assert dialog.proxy.rowCount() > 10
+        assert all(
+            "battery" in str(dialog.proxy.index(row, 0).data()).casefold()
+            for row in range(min(10, dialog.proxy.rowCount()))
+        )
+    finally:
+        dialog.close()
+
+
+def test_reset_defaults_preserves_connection_credentials(monkeypatch) -> None:
+    config = AppConfig(
+        device_name="Komputer testowy",
+        device_id="desktop-test",
+        mqtt=MqttConfig(host="broker.local", port=2883, username="ha", password="secret"),
+        overlay_enabled=True,
+        auto_connect=False,
+        language="pl",
+    )
+    window = make_window(config)
+    try:
+        window.publish_cpu_stats_row.switch.setChecked(True)
+        monkeypatch.setattr(
+            QMessageBox,
+            "question",
+            lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
+        )
+        monkeypatch.setattr(QMessageBox, "information", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(window, "start_bridge", lambda: None)
+
+        window._reset_default_settings()
+
+        assert window.current_config.device_name == "Komputer testowy"
+        assert window.current_config.device_id == "desktop_test"
+        assert window.current_config.mqtt.host == "broker.local"
+        assert window.current_config.mqtt.port == 2883
+        assert window.current_config.mqtt.username == "ha"
+        assert window.current_config.mqtt.password == "secret"
+        assert window.current_config.overlay_enabled is False
+        assert window.current_config.publish_cpu_stats is False
+    finally:
+        close_window(window)
+
+
+def test_direct_connection_device_id_can_be_copied() -> None:
+    window = make_window()
+    try:
+        window._copy_device_id()
+        assert QApplication.clipboard().text() == window.current_config.device_id
+        assert window.copy_ha_device_id.text() == "Skopiowano"
     finally:
         close_window(window)
 
@@ -639,8 +973,10 @@ def test_glass_backgrounds_refresh_and_liquid_falls_back(monkeypatch) -> None:
             },
         )
         initial_captures = captures
-        QTest.qWait(540)
-        assert captures >= initial_captures + 2
+        assert wait_for_qt_condition(
+            lambda: captures >= initial_captures + 2,
+            timeout_ms=1_200,
+        )
         assert manager._glass_timer.isActive()
 
         monkeypatch.setattr(manager, "_capture_glass_background", lambda *_args: False)
@@ -681,7 +1017,10 @@ def test_standard_blur_refreshes_for_timed_messages(monkeypatch) -> None:
             {"id": "blur-live", "duration": 2, "background_effect": "blur"},
         )
         initial_captures = captures
-        QTest.qWait(650)
+        # Qt's offscreen event dispatcher can coalesce timer wakes under load.  A full
+        # second still verifies repeated refreshes without making the test scheduler-
+        # dependent.
+        QTest.qWait(1_050)
         assert captures >= initial_captures + 2
         assert manager._glass_timer.isActive()
     finally:
@@ -729,6 +1068,11 @@ def test_overlay_animates_show_resize_and_hide_when_system_allows_it() -> None:
             },
         )
         assert manager._animation is not None
+        assert manager._animation.duration() == 760
+        assert manager._animation_offset_x == 14
+        assert manager._animation_offset_y > 0
+        assert manager._card.width() < round(420 * 0.7)
+        assert manager._window.windowOpacity() == 1.0
         assert wait_for_qt_condition(lambda: manager._animation is None)
         assert manager._card.size() == QSize(420, 180)
         assert manager._window.windowOpacity() == 1.0
@@ -739,16 +1083,20 @@ def test_overlay_animates_show_resize_and_hide_when_system_allows_it() -> None:
             {"action": "update", "id": "animation", "size_mode": "auto"},
         )
         assert manager._animation is not None
+        assert manager._animation.duration() == 500
         assert wait_for_qt_condition(lambda: manager._animation is None)
         assert manager._card.height() < 120
 
         manager.hide(show_next=False)
         assert manager._animation is not None
+        assert manager._animation.duration() == 620
         start_width = manager._card.width()
-        QTest.qWait(180)
-        assert manager._window.isVisible()
-        assert 0.0 < manager._window.windowOpacity() < 1.0
-        assert manager._card.width() < start_width
+        assert wait_for_qt_condition(
+            lambda: manager._window.isVisible()
+            and 0.0 < manager._window.windowOpacity() < 1.0
+            and manager._card.width() < start_width,
+            timeout_ms=450,
+        )
         assert wait_for_qt_condition(manager._window.isHidden)
     finally:
         manager.close()

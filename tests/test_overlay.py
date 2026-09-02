@@ -61,6 +61,19 @@ def test_overlay_request_is_bounded_and_uses_safe_defaults() -> None:
     assert default_request["background_effect"] == "none"
     assert default_request["glass"] is False
     assert default_request["edge_offset"] == 0
+    assert default_request["display_mode"] == "queue"
+
+    parallel_request = manager._validated_request(  # noqa: SLF001
+        "Battery", "78%", {"layout": "status", "display_mode": "parallel"}
+    )
+    assert parallel_request["layout"] == "status"
+    assert parallel_request["display_mode"] == "parallel"
+
+    icon_badge = manager._validated_request(  # noqa: SLF001
+        "", "", {"layout": "badge", "icon": "mdi:lightbulb-on"}
+    )
+    assert icon_badge["layout"] == "badge"
+    assert icon_badge["title"] == ""
 
     glass_request = manager._validated_request(  # noqa: SLF001
         "Title", "Message", {"glass": True}

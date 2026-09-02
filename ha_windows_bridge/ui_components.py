@@ -138,6 +138,45 @@ class ToggleSwitch(QAbstractButton):
         painter.end()
 
 
+class LabeledToggle(QWidget):
+    """Clickable text paired with the application's animated toggle switch."""
+
+    toggled = Signal(bool)
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(9)
+        self.switch = ToggleSwitch()
+        self.label = QLabel(text)
+        self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self.switch)
+        layout.addWidget(self.label)
+        layout.addStretch()
+        self.setFocusProxy(self.switch)
+        self.setAccessibleName(text)
+        self.switch.toggled.connect(self.toggled.emit)
+
+    def isChecked(self) -> bool:  # noqa: N802
+        return self.switch.isChecked()
+
+    def setChecked(self, checked: bool) -> None:  # noqa: N802
+        self.switch.setChecked(checked)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if (
+            self.isEnabled()
+            and event.button() == Qt.MouseButton.LeftButton
+            and self.rect().contains(event.position().toPoint())
+        ):
+            self.switch.toggle()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
 class TitleBar(QFrame):
     menu_clicked = Signal()
 

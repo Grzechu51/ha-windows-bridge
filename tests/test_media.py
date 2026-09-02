@@ -339,10 +339,12 @@ def test_overlay_service_form_uses_single_booleans_and_native_icon_selector() ->
     assert services.count("background_effect:") == 2
     assert services.count("translation_key: overlay_background_effect") == 2
     assert services.count("edge_offset:") == 2
-    assert services.count("media_player_entity:") == 2
-    assert services.count("domain: media_player") == 2
+    assert services.count("media_player_entity:") == 3
+    assert services.count("domain: media_player") == 3
     assert "visible:" not in services
     assert services.count("translation_key: overlay_size_mode") == 2
+    assert services.count("display_mode:") == 2
+    assert services.count("translation_key: overlay_display_mode") == 2
     assert (
         strings["services"]["show_overlay"]["fields"]["background_effect"]["name"]
         == "Background effect"
@@ -373,4 +375,17 @@ def test_overlay_service_form_uses_single_booleans_and_native_icon_selector() ->
         "none",
         "blur",
         "liquid",
+    }
+    assert set(strings["selector"]["overlay_layout"]["options"]) == {
+        "auto",
+        "compact",
+        "status",
+        "badge",
+        "standard",
+        "media",
+        "camera",
+    }
+    assert set(strings["selector"]["overlay_display_mode"]["options"]) == {
+        "queue",
+        "parallel",
     }

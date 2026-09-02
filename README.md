@@ -54,10 +54,10 @@ Przy instalacji ręcznej skopiuj `custom_components/ha_windows_bridge` do
 `HA-Windows-Bridge-0.9.0-win64.zip` to wersja przenośna. Po rozpakowaniu zachowaj cały
 katalog wraz z folderem `_internal`.
 
-### Wersja testowa 0.10.0-beta.1
+### Wersja testowa 0.10.0-beta.2
 
 W HACS włącz dla tego repozytorium obsługę wersji **pre-release/beta**, a następnie
-wybierz **Redownload → Need a different version? → v0.10.0-beta.1**. Aplikację Windows
+wybierz **Redownload → Need a different version? → v0.10.0-beta.2**. Aplikację Windows
 pobierz z wydania oznaczonego **Pre-release** na GitHubie. Stabilne `v0.9.0` pozostaje
 wydaniem domyślnym.
 
@@ -78,8 +78,8 @@ raportu diagnostycznego.
 - **System i dyski** — stan Windows, osobne moduły CPU, RAM i GPU oraz wybrane woluminy.
 - **Audio** — Media Player aktywnej sesji Windows, balans kanałów i liczba sesji.
 - **Urządzenia** — wybór aktywnych lub nieaktywnych urządzeń widocznych w Windows.
-- **Nakładka** — w aplikacji wybierasz tylko monitor i zgodę na pełny ekran. Treść,
-  wygląd, rozmiar, czas i sposób zamknięcia ustawiasz w akcji Home Assistant.
+- **Nakładka** — w aplikacji projektujesz i zapisujesz gotowe popupy z podglądem na
+  żywo. Home Assistant wybiera zapisany wzór i może podmienić jego treść danymi encji.
 
 Wyłączenie modułu usuwa jego encje po zapisaniu i ponownym opublikowaniu konfiguracji.
 
@@ -89,6 +89,36 @@ Włącz **Media Player** w aplikacji, aby dodać do Home Assistant aktywną sesj
 multimediów Windows. Dostępne informacje i przyciski zależą od programu odtwarzającego.
 
 ## Nakładka Windows
+
+Najwygodniejszy sposób konfiguracji:
+
+1. Otwórz w aplikacji **Funkcje → Nakładka → Projektant popupów**.
+2. Wybierz istniejący wzór albo utwórz nowy. Każda zmiana wyglądu jest pokazywana na
+   pulpicie po krótkim opóźnieniu.
+3. Ustaw układ, efekt tła, pozycję, rozmiar, czas, zachowanie oraz treść i wybierz
+   **Zapisz popup**.
+4. Po połączeniu z HA pojawi się encja `select` z listą wzorów zapisanych na tym
+   komputerze. W automatyzacji użyj akcji `ha_windows_bridge.show_saved_overlay`.
+
+Przykład, w którym zapisany wygląd pozostaje bez zmian, a tekst i postęp pochodzą z
+encji Home Assistant:
+
+```yaml
+action: ha_windows_bridge.show_saved_overlay
+data:
+  template_entity: select.pc_windows_saved_popup
+  title: Stan baterii
+  message_entity: sensor.laptop_battery
+  progress_entity: sensor.laptop_battery
+```
+
+Pole `template_id` jest opcjonalne. Bez niego używany jest wzór aktualnie wybrany w
+encji `select`. Możesz też wskazać encję lub jej atrybut jako źródło tytułu, wiadomości,
+postępu i czasu. Dzięki temu rozbudowana konfiguracja wizualna pozostaje w aplikacji,
+a automatyzacja HA zawiera tylko źródła danych.
+
+Poniższa akcja `show_overlay` pozostaje dostępna jako tryb zaawansowany i dla zgodności
+z istniejącymi automatyzacjami.
 
 Po włączeniu nakładki użyj akcji `ha_windows_bridge.show_overlay`. Najprostsza komenda
 wyświetlająca aktualne multimedia z prawdziwym czasem i postępem utworu:
@@ -127,9 +157,34 @@ jest bezpieczny tryb zgodności. Pole **Odstęp od krawędzi** odsuwa widoczną 
 ekranu. Ikonę wybiera się z biblioteki MDI Home Assistant.
 
 Tryb automatyczny dobiera układ kompaktowy, standardowy, multimedialny albo kamerę.
-Kanały (`general`, `security`, `system`, `media`, `work`) porządkują kolejkę, a priorytet
-decyduje o kolejności wyświetlania. `show_lifetime` włącza pasek pozostałego czasu,
-a `pause_on_hover` zatrzymuje automatyczne zamknięcie po najechaniu.
+Priorytet decyduje o kolejności wyświetlania. `show_lifetime` włącza pasek pozostałego
+czasu, a `pause_on_hover` zatrzymuje automatyczne zamknięcie po najechaniu.
+
+Do krótkich wskaźników, takich jak bateria, CPU i RAM, wybierz układ **Status** oraz
+sposób wyświetlania **Obok siebie**. Maksymalnie cztery karty z różnymi
+`notification_id` pozostają widoczne równocześnie; gdy brakuje miejsca, układ przechodzi
+do kolejnego rzędu. Każdą wartość można później aktualizować po jej ID:
+
+```yaml
+action: ha_windows_bridge.show_overlay
+target:
+  entity_id: notify.pc_windows_overlay
+data:
+  notification_id: laptop_battery
+  title: Bateria
+  message: "{{ states('sensor.laptop_battery') }}%"
+  icon: mdi:battery
+  progress_entity: sensor.laptop_battery
+  layout: status
+  display_mode: parallel
+  duration: 12
+```
+
+Jeszcze mniejszy układ **Znacznik** tworzy kapsułkę podobną do wskaźników telewizora:
+może zawierać ikonę MDI, miniaturę z pola `image`, krótką wartość albo samą ikonę.
+Połącz kilka znaczników przez `display_mode: parallel`, aby zbudować pasek baterii,
+świateł, obecności i czasu. Wartość może pochodzić z `message`; jeśli pozostanie pusta,
+używany jest procent `progress`, a następnie `title`.
 
 Zamiast sesji z komputera możesz wskazać dowolną encję `media_player` dostępną w Home
 Assistant. Nakładka pobierze jej tytuł, wykonawcę, postęp i okładkę:
@@ -154,8 +209,9 @@ przez `remove_overlay`, a całą kolejkę wyczyścisz przez `clear_overlay`.
 ## Testowanie lokalne przed publikacją
 
 Zmiany można sprawdzać bez commita, taga i GitHuba. W zakładce **Funkcje → Nakładka**
-włącz wiadomości ekranowe i użyj sekcji **Wzorce testowe**. Dostępne są warianty krótkiej
-i długiej treści, Liquid Glass, kamery priorytetowej oraz kanałów.
+włącz wiadomości ekranowe i użyj projektanta popupów. Podgląd aktualizuje się na żywo,
+a po jego wyłączeniu nakładka znika. Zapisane projekty można selektywnie importować i
+eksportować jako JSON, bez przenoszenia całej konfiguracji programu.
 
 Uruchomienie z kodu źródłowego:
 
@@ -170,7 +226,7 @@ Pełne testy lokalne:
 .\scripts\test_local.ps1
 ```
 
-Skrypt uruchamia lint, 141 testów, buduje lokalną paczkę Windows i sprawdza jej start.
+Skrypt uruchamia lint, pełny zestaw testów, buduje lokalną paczkę Windows i sprawdza jej start.
 Gotowy program znajduje się w `dist\HA Windows Bridge`. Żaden z tych kroków nie tworzy
 commita, taga ani wydania na GitHubie.
 
@@ -205,6 +261,8 @@ data:
 
 Zastąp `notify.windows_pc_overlay` encją utworzoną przez integrację. Token jest
 szyfrowany przez Windows DPAPI i nie trafia do pliku konfiguracji ani eksportu.
+Bezpośredni kanał synchronizuje również katalog zapisanych popupów i encję wyboru;
+nie wymaga do tego MQTT.
 
 Ten kanał obsługuje obecnie nakładki i powiadomienia. Telemetria oraz sterowanie Windows
 pozostają dostępne przez MQTT; oba połączenia mogą działać równolegle.

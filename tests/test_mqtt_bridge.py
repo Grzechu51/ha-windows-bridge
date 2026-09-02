@@ -21,6 +21,7 @@ from ha_windows_bridge.discovery import (
     master_volume_topics,
     microphone_mute_topics,
     microphone_volume_topics,
+    overlay_template_topics,
     pc_active_topic,
     session_locked_topic,
     system_metric_topic,
@@ -62,6 +63,39 @@ def test_stop_before_start_is_safe() -> None:
     bridge.stop()
 
     assert bridge.client is None
+
+
+def test_mqtt_template_command_updates_selection_and_retains_catalog() -> None:
+    received: list[tuple[str, str]] = []
+    config = AppConfig(mqtt=MqttConfig(host="broker"), overlay_enabled=True)
+    bridge = MqttBridge(
+        config,
+        audio=FakeAudio(),
+        template_callback=lambda action, template_id: received.append(
+            (action, template_id)
+        ),
+    )
+    client = FakeClient()
+    bridge.client = client
+    bridge._connected.set()  # noqa: SLF001
+    bridge._build_command_map()  # noqa: SLF001
+    command_topic, state_topic = overlay_template_topics(config)
+
+    bridge._on_message(  # noqa: SLF001
+        client,
+        None,
+        FakeMessage(
+            command_topic,
+            json.dumps(
+                {"action": "select", "template_id": "powiadomienie"}
+            ).encode(),
+            False,
+        ),
+    )
+
+    assert received == [("select", "powiadomienie")]
+    assert config.selected_overlay_template_id == "powiadomienie"
+    assert any(topic == state_topic and retain for topic, _payload, _qos, retain in client.published)
 
 
 @pytest.mark.parametrize("payload", ["nan", "inf", "-inf", "1e9999"])
@@ -630,6 +664,15 @@ def test_power_action_and_notification_commands_are_dispatched() -> None:
             False,
         ),
     )
+    bridge._on_message(
+        None,
+        None,
+        FakeMessage(
+            overlay_notification_topic(config),
+            b'{"title":"","message":"","data":{"action":"show","id":"light","layout":"badge","icon":"mdi:lightbulb-on"}}',
+            False,
+        ),
+    )
 
     assert power.actions == ["restart"]
     assert notifications == [
@@ -644,6 +687,17 @@ def test_power_action_and_notification_commands_are_dispatched() -> None:
         ),
         ("Home Assistant", "", {"action": "update", "id": "job", "preset": "warning"}),
         ("Home Assistant", "", {"action": "clear"}),
+        (
+            "",
+            "",
+            {
+                "action": "show",
+                "id": "light",
+                "layout": "badge",
+                "icon": "mdi:lightbulb-on",
+                "monitor": 0,
+            },
+        ),
     ]
 
 

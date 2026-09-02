@@ -23,6 +23,11 @@
       "media_player": {
         "name": "Media Player"
       }
+    },
+    "select": {
+      "overlay_template": {
+        "name": "Zapisany popup"
+      }
     }
   },
   "selector": {
@@ -45,7 +50,10 @@
       }
     },
     "overlay_layout": {
-      "options": {"auto": "Automatyczny", "compact": "Kompaktowy", "standard": "Standardowy", "media": "Multimedia", "camera": "Kamera priorytetowa"}
+      "options": {"auto": "Automatyczny", "compact": "Kompaktowy", "status": "Status", "badge": "Znacznik", "standard": "Standardowy", "media": "Multimedia", "camera": "Kamera priorytetowa"}
+    },
+    "overlay_display_mode": {
+      "options": {"queue": "Kolejka", "parallel": "Obok siebie"}
     },
     "overlay_channel": {
       "options": {"general": "Ogólny", "security": "Bezpieczeństwo", "system": "System", "media": "Multimedia", "work": "Praca"}
@@ -64,6 +72,32 @@
     }
   },
   "services": {
+    "show_saved_overlay": {
+      "name": "Wyświetl zapisany popup",
+      "description": "Wyświetla popup wybrany w encji Zapisany popup danego komputera. Cały wygląd pozostaje w aplikacji Windows.",
+      "fields": {
+        "template_entity": {"name": "Lista popupów komputera", "description": "Wybierz encję Zapisany popup należącą do docelowego komputera."},
+        "template_id": {"name": "ID szablonu", "description": "Opcjonalne zaawansowane zastąpienie aktualnie wybranego popupu."},
+        "title": {"name": "Własny tytuł"},
+        "title_entity": {"name": "Encja źródłowa tytułu"},
+        "title_attribute": {"name": "Atrybut źródłowy tytułu"},
+        "message": {"name": "Własna wiadomość"},
+        "message_entity": {"name": "Encja źródłowa wiadomości"},
+        "message_attribute": {"name": "Atrybut źródłowy wiadomości"},
+        "notification_id": {"name": "ID wiadomości"},
+        "progress_entity": {"name": "Encja źródłowa postępu"},
+        "progress_attribute": {"name": "Atrybut źródłowy postępu"},
+        "progress_min": {"name": "Minimum źródła"},
+        "progress_max": {"name": "Maksimum źródła"},
+        "duration_entity": {"name": "Encja czasu wyświetlania"},
+        "duration_attribute": {"name": "Atrybut czasu wyświetlania"},
+        "media_player_entity": {"name": "Odtwarzacz Home Assistant"}
+      },
+      "sections": {
+        "content": {"name": "Treść dynamiczna"},
+        "values": {"name": "Wartości encji i multimedia"}
+      }
+    },
     "show_overlay": {
       "name": "Wyświetl nakładkę Windows",
       "description": "Wyświetla konfigurowalną kartę z wiadomością lub informacjami o odtwarzanych multimediach.",
@@ -72,7 +106,8 @@
         "message": {"name": "Wiadomość", "description": "Główna treść karty. Może pozostać pusta po wybraniu źródła multimediów."},
         "media": {"name": "Bieżące multimedia Windows", "description": "Używa aktywnej sesji multimediów na docelowym komputerze."},
         "media_player_entity": {"name": "Odtwarzacz Home Assistant", "description": "Pobiera tytuł, wykonawcę, okładkę i postęp z wybranego odtwarzacza."},
-        "layout": {"name": "Układ treści", "description": "Tryb automatyczny dobiera układ kompaktowy, standardowy, multimedialny lub kamerę do przekazanej treści."},
+        "layout": {"name": "Układ treści", "description": "Tryb automatyczny dobiera układ do treści. Status wyróżnia krótką wartość, a Znacznik tworzy małą kapsułkę z ikoną, obrazem lub wartością."},
+        "display_mode": {"name": "Sposób wyświetlania", "description": "Kolejka pokazuje jedną kartę naraz. Tryb Obok siebie utrzymuje do czterech kart równocześnie i zawija je, gdy brakuje miejsca."},
         "channel": {"name": "Kanał", "description": "Grupuje powiązane karty i pozwala niezależnie wyczyścić jeden kanał."},
         "priority": {"name": "Priorytet", "description": "Karty o wyższym priorytecie są wyświetlane przed zwykłymi wiadomościami w kolejce."},
         "notification_id": {"name": "ID wiadomości", "description": "Identyfikator używany do późniejszej aktualizacji lub usunięcia karty."},
@@ -121,6 +156,7 @@
         "media": {"name": "Bieżące multimedia Windows"},
         "media_player_entity": {"name": "Odtwarzacz Home Assistant"},
         "layout": {"name": "Układ treści"},
+        "display_mode": {"name": "Sposób wyświetlania"},
         "channel": {"name": "Kanał"},
         "priority": {"name": "Priorytet"},
         "preset": {"name": "Kolor akcentu"},

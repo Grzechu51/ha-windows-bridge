@@ -11,6 +11,7 @@ from ha_windows_bridge.config import (
     DpapiSecretBackend,
     HomeAssistantConfig,
     MqttConfig,
+    OverlayTemplateConfig,
     SettingsStore,
     default_apps,
     slugify,
@@ -62,6 +63,34 @@ def test_settings_round_trip_keeps_password_out_of_json(tmp_path) -> None:
     assert store.load().apps[0].allow_remote_start is True
     assert store.load().apps[0].allow_remote_close is True
     assert store.load().theme == "light"
+
+
+def test_overlay_templates_round_trip_with_selected_design(tmp_path) -> None:
+    store = SettingsStore(tmp_path, FakeSecrets())
+    config = AppConfig(
+        mqtt=MqttConfig(host="broker"),
+        overlay_templates=[
+            OverlayTemplateConfig(
+                "door_alarm",
+                "Alarm drzwi",
+                title="Drzwi",
+                layout="status",
+                background_effect="liquid",
+                edge_offset=18,
+            )
+        ],
+        selected_overlay_template_id="door_alarm",
+    )
+
+    store.save(config)
+    loaded = store.load()
+
+    assert loaded.selected_overlay_template_id == "door_alarm"
+    assert loaded.overlay_templates[0].name == "Alarm drzwi"
+    assert loaded.overlay_templates[0].to_overlay_data()["edge_offset"] == 18
+    assert loaded.overlay_template_catalog()["templates"] == [
+        {"id": "door_alarm", "name": "Alarm drzwi"}
+    ]
 
 
 def test_direct_home_assistant_token_is_encrypted_separately(tmp_path) -> None:
@@ -199,7 +228,7 @@ def test_version_04_optional_features_are_disabled_during_migration() -> None:
         }
     )
 
-    assert legacy.schema_version == 13
+    assert legacy.schema_version == 14
     assert legacy.control_active_app is False
     assert legacy.publish_activity is False
     assert legacy.publish_idle is False
@@ -219,7 +248,7 @@ def test_version_12_hardware_telemetry_is_migrated_to_cpu_and_gpu() -> None:
         }
     )
 
-    assert migrated.schema_version == 13
+    assert migrated.schema_version == 14
     assert migrated.publish_cpu_stats is True
     assert migrated.publish_gpu_stats is True
 

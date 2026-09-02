@@ -36,6 +36,7 @@ from .discovery import (
     microphone_volume_topics,
     overlay_monitor_topics,
     overlay_notification_topic,
+    overlay_template_topics,
     pc_active_topic,
     power_action_topic,
     session_locked_topic,
@@ -61,6 +62,7 @@ from .system_monitor import PcContext, WindowsSystemMonitor
 StatusCallback = Callable[[str, bool], None]
 NotificationCallback = Callable[[str, str], None]
 OverlayCallback = Callable[[str, str, dict], None]
+TemplateCallback = Callable[[str, str], None]
 MAX_COMMAND_PAYLOAD = 8 * 1024
 MAX_OVERLAY_PAYLOAD = 768 * 1024
 
@@ -77,6 +79,7 @@ class MqttBridge:
         power_actions: WindowsPowerActions | None = None,
         notification_callback: NotificationCallback | None = None,
         overlay_callback: OverlayCallback | None = None,
+        template_callback: TemplateCallback | None = None,
         overlay_monitors: list[str] | None = None,
     ):
         self.config = config
@@ -95,6 +98,7 @@ class MqttBridge:
         self.power_actions = power_actions or WindowsPowerActions()
         self.notification_callback = notification_callback
         self.overlay_callback = overlay_callback
+        self.template_callback = template_callback
         self.overlay_monitors = (overlay_monitors or ["1: Monitor"])[:16]
         self.client: mqtt.Client | None = None
         self._stop_event = threading.Event()
@@ -135,6 +139,8 @@ class MqttBridge:
         self._overlay_command = ""
         self._overlay_monitor_command = ""
         self._overlay_monitor_state = ""
+        self._overlay_template_command = ""
+        self._overlay_template_state = ""
         self._master_balance_command = ""
         self.started_at: float | None = None
         self.messages_processed = 0
@@ -325,9 +331,14 @@ class MqttBridge:
             self._overlay_monitor_command, self._overlay_monitor_state = overlay_monitor_topics(
                 self.config
             )
+            self._overlay_template_command, self._overlay_template_state = (
+                overlay_template_topics(self.config)
+            )
         else:
             self._overlay_monitor_command = ""
             self._overlay_monitor_state = ""
+            self._overlay_template_command = ""
+            self._overlay_template_state = ""
         for app in self.config.apps:
             if not app.enabled:
                 continue
@@ -369,6 +380,8 @@ class MqttBridge:
             topics.add(self._overlay_command)
         if self._overlay_monitor_command:
             topics.add(self._overlay_monitor_command)
+        if self._overlay_template_command:
+            topics.add(self._overlay_template_command)
         return {topic for topic in topics if topic}
 
     def _on_connect(self, client, _userdata, _flags, reason_code, _properties) -> None:
@@ -387,6 +400,7 @@ class MqttBridge:
         self._last_media_artwork_hash = None
         entity_count = self.publish_discovery()
         client.publish(status_topic(self.config), "online", qos=1, retain=True)
+        self.publish_overlay_templates()
         self.log.info(
             "Połączono z MQTT; przekazano %s encji do integracji HA Windows Bridge",
             entity_count,
@@ -429,6 +443,9 @@ class MqttBridge:
             return
         if message.topic == self._overlay_monitor_command:
             self._handle_overlay_monitor(message.payload)
+            return
+        if message.topic == self._overlay_template_command:
+            self._handle_overlay_template_command(message.payload)
             return
         power_action = self._power_action_commands.get(message.topic)
         if power_action:
@@ -498,9 +515,23 @@ class MqttBridge:
             return
         action = str(data.get("action", "show")).strip().lower() if isinstance(data, dict) else ""
         media_requested = isinstance(data, dict) and bool(data.get("media", False))
+        template_requested = isinstance(data, dict) and bool(data.get("template_id"))
+        badge_has_content = isinstance(data, dict) and data.get("layout") == "badge" and bool(
+            title
+            or message
+            or data.get("icon")
+            or data.get("image")
+            or data.get("progress") is not None
+        )
         if (
             action not in {"show", "update", "remove", "clear"}
-            or (action == "show" and not message and not media_requested)
+            or (
+                action == "show"
+                and not message
+                and not media_requested
+                and not template_requested
+                and not badge_has_content
+            )
             or len(title) > 128
             or len(message) > 2048
             or not isinstance(data, dict)
@@ -533,7 +564,8 @@ class MqttBridge:
         if self.overlay_callback:
             if action == "show":
                 data.setdefault("monitor", self.config.overlay_monitor)
-            self.overlay_callback(title or "Home Assistant", message, data)
+            fallback_title = "" if data.get("layout") == "badge" else "Home Assistant"
+            self.overlay_callback(title or fallback_title, message, data)
         self.log.info("Przekazano wiadomość do nakładki Windows")
 
     def _handle_overlay_monitor(self, payload: bytes) -> None:
@@ -546,6 +578,35 @@ class MqttBridge:
             return
         self.config.overlay_monitor = self.overlay_monitors.index(selected)
         self._publish_text_state(self._overlay_monitor_state, selected)
+
+    def publish_overlay_templates(self) -> bool:
+        client = self.client
+        if client is None or not self._connected.is_set() or not self._overlay_template_state:
+            return False
+        payload = json.dumps(
+            self.config.overlay_template_catalog(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        client.publish(self._overlay_template_state, payload, qos=1, retain=True)
+        return True
+
+    def _handle_overlay_template_command(self, payload: bytes) -> None:
+        try:
+            value = json.loads(payload.decode("utf-8", errors="strict"))
+            action = str(value.get("action", "select")).strip().lower()
+            template_id = str(value.get("template_id", "")).strip()
+        except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+            self.log.warning("Nieprawidłowa komenda zapisanego popupu")
+            return
+        valid_ids = {template.template_id for template in self.config.overlay_templates}
+        if action not in {"select", "show"} or template_id not in valid_ids:
+            self.log.warning("Nieznany zapisany popup: %s", template_id)
+            return
+        self.config.selected_overlay_template_id = template_id
+        if self.template_callback is not None:
+            self.template_callback(action, template_id)
+        self.publish_overlay_templates()
 
     @staticmethod
     def _is_button_press(payload: bytes) -> bool:

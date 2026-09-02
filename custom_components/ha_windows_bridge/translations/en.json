@@ -23,6 +23,11 @@
       "media_player": {
         "name": "Media Player"
       }
+    },
+    "select": {
+      "overlay_template": {
+        "name": "Saved popup"
+      }
     }
   },
   "selector": {
@@ -45,7 +50,10 @@
       }
     },
     "overlay_layout": {
-      "options": {"auto": "Automatic", "compact": "Compact", "standard": "Standard", "media": "Media", "camera": "Priority camera"}
+      "options": {"auto": "Automatic", "compact": "Compact", "status": "Status", "badge": "Indicator", "standard": "Standard", "media": "Media", "camera": "Priority camera"}
+    },
+    "overlay_display_mode": {
+      "options": {"queue": "Queue", "parallel": "Side by side"}
     },
     "overlay_channel": {
       "options": {"general": "General", "security": "Security", "system": "System", "media": "Media", "work": "Work"}
@@ -64,6 +72,32 @@
     }
   },
   "services": {
+    "show_saved_overlay": {
+      "name": "Display saved popup",
+      "description": "Displays the popup selected in the computer's Saved popup entity. Its design stays in the Windows application.",
+      "fields": {
+        "template_entity": {"name": "Computer popup list", "description": "Select the Saved popup entity belonging to the target computer."},
+        "template_id": {"name": "Template ID", "description": "Optional advanced override of the currently selected popup."},
+        "title": {"name": "Title override"},
+        "title_entity": {"name": "Title source entity"},
+        "title_attribute": {"name": "Title source attribute"},
+        "message": {"name": "Message override"},
+        "message_entity": {"name": "Message source entity"},
+        "message_attribute": {"name": "Message source attribute"},
+        "notification_id": {"name": "Message ID"},
+        "progress_entity": {"name": "Progress source entity"},
+        "progress_attribute": {"name": "Progress source attribute"},
+        "progress_min": {"name": "Source minimum"},
+        "progress_max": {"name": "Source maximum"},
+        "duration_entity": {"name": "Duration source entity"},
+        "duration_attribute": {"name": "Duration source attribute"},
+        "media_player_entity": {"name": "Home Assistant media player"}
+      },
+      "sections": {
+        "content": {"name": "Dynamic content"},
+        "values": {"name": "Entity values and media"}
+      }
+    },
     "show_overlay": {
       "name": "Display Windows overlay",
       "description": "Displays a customizable card with a message or information about currently playing media.",
@@ -72,7 +106,8 @@
         "message": {"name": "Message", "description": "Main card content. Optional when a media source is selected."},
         "media": {"name": "Current Windows media", "description": "Uses the active media session on the target Windows computer."},
         "media_player_entity": {"name": "Home Assistant media player", "description": "Uses the selected player's title, artist, artwork and playback progress."},
-        "layout": {"name": "Content layout", "description": "Automatic mode selects a compact, standard, media or camera layout from the supplied content."},
+        "layout": {"name": "Content layout", "description": "Automatic mode selects a layout from the supplied content. Status emphasizes a short value; Indicator creates a small icon, image or value capsule."},
+        "display_mode": {"name": "Display mode", "description": "Queue shows one card at a time. Side by side keeps up to four cards visible together and wraps them when space is limited."},
         "channel": {"name": "Channel", "description": "Groups related cards and allows a single channel to be cleared independently."},
         "priority": {"name": "Priority", "description": "Higher-priority cards move ahead of ordinary queued messages."},
         "notification_id": {"name": "Message ID", "description": "Identifier used to update or remove this card later."},
@@ -121,6 +156,7 @@
         "media": {"name": "Current Windows media"},
         "media_player_entity": {"name": "Home Assistant media player"},
         "layout": {"name": "Content layout"},
+        "display_mode": {"name": "Display mode"},
         "channel": {"name": "Channel"},
         "priority": {"name": "Priority"},
         "preset": {"name": "Accent color"},

@@ -1,9 +1,9 @@
 #define MyAppName "HA Windows Bridge"
 #ifndef MyAppVersion
-#define MyAppVersion "0.10.0-beta.1"
+#define MyAppVersion "0.10.0-beta.2"
 #endif
 #ifndef MyAppNumericVersion
-#define MyAppNumericVersion "0.10.0.1"
+#define MyAppNumericVersion "0.10.0.2"
 #endif
 #define MyAppPublisher "HA Windows Bridge"
 #define MyAppExeName "HA Windows Bridge.exe"

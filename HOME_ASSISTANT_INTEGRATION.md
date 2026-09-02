@@ -28,6 +28,30 @@ Wyłączenie funkcji w aplikacji usuwa odpowiadające jej encje po zapisaniu ust
 
 ## Nakładka
 
+Wygląd popupów konfiguruje się teraz w aplikacji Windows, w sekcji
+**Funkcje → Nakładka → Projektant popupów**. Projektant pokazuje efekt na żywo i zapisuje
+wiele nazwanych wzorów osobno dla każdego komputera. Po synchronizacji integracja tworzy
+encję `select` **Zapisany popup** z listą tych wzorów.
+
+Rekomendowana akcja automatyzacji to:
+
+```yaml
+action: ha_windows_bridge.show_saved_overlay
+data:
+  template_entity: select.pc_windows_saved_popup
+  title: Pralka
+  message_entity: sensor.pralka_pozostaly_czas
+  progress_entity: sensor.pralka_postep
+```
+
+`template_entity` jednocześnie wskazuje komputer i aktualnie wybrany projekt. Opcjonalne
+`template_id` pozwala wybrać inny zapisany projekt tylko dla danego wywołania. Tytuł,
+wiadomość, postęp i czas mogą pochodzić ze stanu albo wskazanego atrybutu encji. Zmiana
+opcji encji `select` jest odsyłana do aplikacji i zapamiętywana lokalnie.
+
+Rozbudowana akcja `show_overlay` nadal działa jako interfejs zaawansowany i zachowuje
+zgodność z dotychczasowymi automatyzacjami.
+
 Aktualne multimedia wyświetlisz poleceniem:
 
 ```yaml
@@ -54,8 +78,15 @@ rozmycie i **Liquid Glass**. Standardowe rozmycie korzysta z Desktop Acrylic, a 
 Glass preferuje DXGI Desktop Duplication i adaptacyjne odświeżanie. W trybie zdalnym
 albo przy problemach z wydajnością aplikacja wybiera bezpieczny efekt zastępczy.
 `edge_offset` odsuwa kartę od wybranych krawędzi ekranu. Ikonę wybiera się z biblioteki
-MDI HA. Kanały i priorytety porządkują kolejkę, `show_lifetime` pokazuje pozostały czas,
-a `pause_on_hover` wstrzymuje zamknięcie po najechaniu.
+MDI HA. Priorytet porządkuje kolejkę, `show_lifetime` pokazuje pozostały czas, a
+`pause_on_hover` wstrzymuje zamknięcie po najechaniu.
+
+Układ `status` z opcją `display_mode: parallel` pokazuje jednocześnie do czterech
+niezależnych kart, na przykład baterię, CPU i RAM. Każda karta musi mieć własne
+`notification_id`; przy braku miejsca karty automatycznie przechodzą do kolejnego rzędu.
+Układ `badge` jest jeszcze mniejszy i tworzy kapsułkę z ikoną, miniaturą lub krótką
+wartością. Kilka znaczników z `display_mode: parallel` może utworzyć pasek wskaźników
+podobny do interfejsu telewizora.
 
 `update_overlay` aktualizuje wiadomość o tym samym ID, `remove_overlay` ją usuwa, a
 `clear_overlay` czyści kolejkę.
@@ -63,7 +94,8 @@ a `pause_on_hover` wstrzymuje zamknięcie po najechaniu.
 Nakładkę można też dodać ręcznie jako bezpośredni endpoint WebSocket. W konfiguracji
 integracji podaj ID urządzenia widoczne w aplikacji Windows, a w aplikacji skonfiguruj
 adres Home Assistant i długoterminowy token. Tryb bezpośredni obsługuje nakładki oraz
-powiadomienia; pozostałe encje nadal używają MQTT.
+powiadomienia, a także synchronizację zapisanych popupów. Pozostałe encje nadal używają
+MQTT.
 
 Po restarcie HA dodaj integrację ręcznie, wybierz jej encję `notify` jako cel akcji
 `ha_windows_bridge.show_overlay`, a następnie uruchom usługę w aplikacji Windows.

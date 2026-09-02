@@ -25,7 +25,7 @@ Wydanie podpisane z certyfikatem z magazynu Windows:
 ```powershell
 $env:HAWB_SIGNING_THUMBPRINT = "40_ZNAKOWY_ODCISK_CERTYFIKATU"
 .\build.ps1 -Installer
-Get-AuthenticodeSignature ".\dist\HA-Windows-Bridge-Setup-0.10.0-beta.1.exe"
+Get-AuthenticodeSignature ".\dist\HA-Windows-Bridge-Setup-0.10.0-beta.2.exe"
 ```
 
 Prywatnego klucza i hasła do certyfikatu nigdy nie dodawaj do Git ani do plików
@@ -37,7 +37,7 @@ wydania.
 git add -A
 git status
 git diff --cached --stat
-git commit -m "Release 0.10.0-beta.1"
+git commit -m "Release 0.10.0-beta.2"
 git push origin main
 ```
 
@@ -45,11 +45,11 @@ Poczekaj, aż workflow **Validate Home Assistant integration** dla gałęzi `mai
 zakończy się powodzeniem. Następnie utwórz tag dokładnie na opublikowanym commicie:
 
 ```powershell
-git tag -a v0.10.0-beta.1 -m "HA Windows Bridge 0.10.0-beta.1"
-git push origin v0.10.0-beta.1
+git tag -a v0.10.0-beta.2 -m "HA Windows Bridge 0.10.0-beta.2"
+git push origin v0.10.0-beta.2
 ```
 
-Jeżeli tag `v0.10.0-beta.1` już istnieje na złym commicie, usuń nieudane wydanie oraz tag na
+Jeżeli tag `v0.10.0-beta.2` już istnieje na złym commicie, usuń nieudane wydanie oraz tag na
 GitHubie, usuń tag lokalny i utwórz go ponownie. Nie używaj force push do poprawiania
 opublikowanego tagu.
 
@@ -58,14 +58,14 @@ opublikowanego tagu.
 Wydanie testowe można utworzyć bezpośrednio przez GitHub CLI:
 
 ```powershell
-gh release create v0.10.0-beta.1 `
-  ".\dist\HA-Windows-Bridge-Setup-0.10.0-beta.1.exe" `
-  ".\dist\HA-Windows-Bridge-0.10.0-beta.1-win64.zip" `
-  ".\dist\HA-Windows-Bridge-HA-Integration-0.10.0-beta.1.zip" `
-  ".\dist\SHA256SUMS-0.10.0-beta.1.txt" `
+gh release create v0.10.0-beta.2 `
+  ".\dist\HA-Windows-Bridge-Setup-0.10.0-beta.2.exe" `
+  ".\dist\HA-Windows-Bridge-0.10.0-beta.2-win64.zip" `
+  ".\dist\HA-Windows-Bridge-HA-Integration-0.10.0-beta.2.zip" `
+  ".\dist\SHA256SUMS-0.10.0-beta.2.txt" `
   --verify-tag `
   --prerelease `
-  --title "HA Windows Bridge 0.10.0-beta.1" `
+  --title "HA Windows Bridge 0.10.0-beta.2" `
   --notes "Testowe wydanie nowych funkcji nakładki i bezpośredniego połączenia z Home Assistant."
 ```
 
