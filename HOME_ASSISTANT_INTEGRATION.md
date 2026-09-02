@@ -16,7 +16,7 @@ Przy instalacji ręcznej skopiuj `custom_components/ha_windows_bridge` do
 
 ## Dostępne funkcje
 
-- głośność, wyciszenie i stan wybranych programów;
+- głośność, wyciszenie, stan i osobny Media Player każdego wybranego programu;
 - Media Player aktywnej sesji Windows;
 - stan Windows, CPU, RAM, GPU i wybrane dyski;
 - wybrane urządzenia Windows;

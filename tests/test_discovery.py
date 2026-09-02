@@ -50,6 +50,7 @@ def test_discovery_creates_grouped_entities() -> None:
     assert "homeassistant/number/gaming_pc_123/active_volume/config" in topics
     assert "homeassistant/switch/gaming_pc_123/master_mute/config" in topics
     assert "homeassistant/switch/gaming_pc_123/spotify_mute/config" in topics
+    assert "homeassistant/media_player/gaming_pc_123/spotify/config" in topics
     assert "homeassistant/button/gaming_pc_123/spotify_start/config" in topics
     assert "homeassistant/button/gaming_pc_123/spotify_close/config" in topics
     assert "homeassistant/sensor/gaming_pc_123/active_app/config" in topics
@@ -71,6 +72,16 @@ def test_discovery_creates_grouped_entities() -> None:
     assert spotify["state_topic"] == "hawn/gaming-pc/audio/spotify/volume/state"
     assert spotify["availability_topic"] == "hawn/gaming-pc/status"
     assert spotify["device"]["identifiers"] == ["gaming_pc_123"]
+    spotify_player = next(
+        message.payload
+        for message in messages
+        if message.topic.endswith("/media_player/gaming_pc_123/spotify/config")
+    )
+    assert spotify_player["volume_command_topic"] == "hawn/gaming-pc/audio/spotify/volume/set"
+    assert spotify_player["volume_state_topic"] == "hawn/gaming-pc/audio/spotify/volume/state"
+    assert spotify_player["mute_command_topic"] == "hawn/gaming-pc/audio/spotify/mute/set"
+    assert spotify_player["mute_state_topic"] == "hawn/gaming-pc/audio/spotify/mute/state"
+    assert spotify_player["state_topic"] == "hawn/gaming-pc/app/spotify/running"
     master = next(message.payload for message in messages if "master_volume" in message.topic)
     assert master["command_topic"] == "hawn/gaming-pc/audio/master/volume/set"
     assert master["state_topic"] == "hawn/gaming-pc/audio/master/volume/state"

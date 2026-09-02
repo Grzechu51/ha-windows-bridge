@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from homeassistant.components import mqtt
@@ -18,7 +19,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .const import CONF_DEVICE_ID, CONF_MEDIA_PLAYER
-from .entity import bridge_device_info, message_text
+from .entity import BridgeMqttEntity, bridge_device_info, entity_definitions, message_text
 from .media_payload import parse_media_artwork, parse_media_state
 
 _STATE_MAP = {
@@ -43,9 +44,91 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Create the discovered Windows media player when the feature is enabled."""
+    """Create the active-session player and per-application volume players."""
+    entities: list[MediaPlayerEntity] = [
+        HAWindowsAppVolumePlayer(entry, definition)
+        for definition in entity_definitions(entry, "media_player")
+    ]
     if entry.data.get(CONF_MEDIA_PLAYER, {}).get("enabled", False):
-        async_add_entities([HAWindowsMediaPlayer(entry)])
+        entities.append(HAWindowsMediaPlayer(entry))
+    async_add_entities(entities)
+
+
+class HAWindowsAppVolumePlayer(BridgeMqttEntity, MediaPlayerEntity):
+    """One Windows application audio session exposed as a volume-only player."""
+
+    _attr_device_class = MediaPlayerDeviceClass.SPEAKER
+    _attr_supported_features = (
+        MediaPlayerEntityFeature.VOLUME_SET | MediaPlayerEntityFeature.VOLUME_MUTE
+    )
+
+    def __init__(self, entry: ConfigEntry, definition: dict[str, Any]) -> None:
+        BridgeMqttEntity.__init__(self, entry, definition)
+        self._volume_command_topic = str(definition["volume_command_topic"])
+        self._volume_state_topic = str(definition["volume_state_topic"])
+        self._mute_command_topic = str(definition["mute_command_topic"])
+        self._mute_state_topic = str(definition["mute_state_topic"])
+        self._state_on = str(definition.get("state_on", "ON"))
+        self._state_off = str(definition.get("state_off", "OFF"))
+        self._attr_state = MediaPlayerState.OFF
+        self._attr_volume_level = None
+        self._attr_is_volume_muted = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._unsubscribers.extend(
+            (
+                await mqtt.async_subscribe(
+                    self.hass, self._volume_state_topic, self._volume_received, qos=1
+                ),
+                await mqtt.async_subscribe(
+                    self.hass, self._mute_state_topic, self._mute_received, qos=1
+                ),
+            )
+        )
+
+    @callback
+    def _state_received(self, message: ReceiveMessage) -> None:
+        payload = message_text(message).strip()
+        if payload == self._state_on:
+            self._attr_state = MediaPlayerState.IDLE
+        elif payload == self._state_off:
+            self._attr_state = MediaPlayerState.OFF
+        else:
+            return
+        self.async_write_ha_state()
+
+    @callback
+    def _volume_received(self, message: ReceiveMessage) -> None:
+        try:
+            percentage = float(message_text(message).strip())
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(percentage):
+            return
+        self._attr_volume_level = max(0.0, min(1.0, percentage / 100.0))
+        self.async_write_ha_state()
+
+    @callback
+    def _mute_received(self, message: ReceiveMessage) -> None:
+        payload = message_text(message).strip()
+        if payload == self._state_on:
+            self._attr_is_volume_muted = True
+        elif payload == self._state_off:
+            self._attr_is_volume_muted = False
+        else:
+            return
+        self.async_write_ha_state()
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        percentage = max(0.0, min(1.0, volume)) * 100.0
+        await self._async_publish(self._volume_command_topic, f"{percentage:g}")
+
+    async def async_mute_volume(self, mute: bool) -> None:
+        await self._async_publish(
+            self._mute_command_topic,
+            self._state_on if mute else self._state_off,
+        )
 
 
 class HAWindowsMediaPlayer(MediaPlayerEntity):

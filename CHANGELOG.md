@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0-beta.4 - 2026-09-02
+
+- każda włączona aplikacja audio otrzymuje dodatkową encję `media_player` z dwukierunkową
+  regulacją głośności, wyciszeniem oraz stanem uruchomienia; dotychczasowe encje
+  `number`, `switch` i `binary_sensor` pozostają dostępne;
+
 ## 0.10.0-beta.3 - 2026-09-02
 
 - usunięte pole kanału z formularzy akcji Home Assistant oraz uproszczone globalne

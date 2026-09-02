@@ -323,6 +323,29 @@ def discovery_messages(
             )
         )
 
+        app_player_payload = _base_entity(config, f"{unique_root}_media_player")
+        app_player_payload.update(
+            {
+                "name": app.display_name,
+                "state_topic": app_running_topic(config, app),
+                "volume_command_topic": command_topic,
+                "volume_state_topic": state,
+                "mute_command_topic": mute_command,
+                "mute_state_topic": mute_state,
+                "payload_on": "ON",
+                "payload_off": "OFF",
+                "state_on": "ON",
+                "state_off": "OFF",
+                "icon": "mdi:application-music-outline",
+            }
+        )
+        messages.append(
+            DiscoveryMessage(
+                f"{prefix}/media_player/{object_root}/{app.slug}/config",
+                app_player_payload,
+            )
+        )
+
         running_payload = _base_entity(config, f"{unique_root}_running")
         running_payload.update(
             {

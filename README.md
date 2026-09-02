@@ -11,7 +11,7 @@ funkcje włączone w aplikacji, dzięki czemu urządzenie w HA pozostaje czyteln
 
 ## Możliwości
 
-- głośność i wyciszenie Windows oraz wybranych programów;
+- głośność i wyciszenie Windows oraz osobny Media Player dla każdego wybranego programu;
 - aktywne multimedia z okładką, czasem i sterowaniem;
 - aktywna aplikacja, okno, bezczynność i blokada Windows;
 - osobna telemetria CPU, RAM i GPU;
@@ -54,10 +54,10 @@ Przy instalacji ręcznej skopiuj `custom_components/ha_windows_bridge` do
 `HA-Windows-Bridge-0.9.0-win64.zip` to wersja przenośna. Po rozpakowaniu zachowaj cały
 katalog wraz z folderem `_internal`.
 
-### Wersja testowa 0.10.0-beta.3
+### Wersja testowa 0.10.0-beta.4
 
 W HACS włącz dla tego repozytorium obsługę wersji **pre-release/beta**, a następnie
-wybierz **Redownload → Need a different version? → v0.10.0-beta.3**. Aplikację Windows
+wybierz **Redownload → Need a different version? → v0.10.0-beta.4**. Aplikację Windows
 pobierz z wydania oznaczonego **Pre-release** na GitHubie. Stabilne `v0.9.0` pozostaje
 wydaniem domyślnym.
 
@@ -76,7 +76,8 @@ raportu diagnostycznego.
 ## Funkcje aplikacji
 
 - **System i dyski** — stan Windows, osobne moduły CPU, RAM i GPU oraz wybrane woluminy.
-- **Audio** — Media Player aktywnej sesji Windows, balans kanałów i liczba sesji.
+- **Audio** — osobne odtwarzacze aplikacji, Media Player aktywnej sesji Windows, balans
+  kanałów i liczba sesji.
 - **Urządzenia** — wybór aktywnych lub nieaktywnych urządzeń widocznych w Windows.
 - **Nakładka** — w aplikacji projektujesz i zapisujesz gotowe popupy z podglądem na
   żywo. Home Assistant wybiera zapisany wzór i może podmienić jego treść danymi encji.
@@ -84,6 +85,11 @@ raportu diagnostycznego.
 Wyłączenie modułu usuwa jego encje po zapisaniu i ponownym opublikowaniu konfiguracji.
 
 ## Media Player
+
+Każda aplikacja włączona na liście sterowania głośnością automatycznie otrzymuje własną
+encję `media_player`. Pozwala ona zmieniać głośność, włączać lub wyłączać wyciszenie
+oraz rozpoznać, czy program jest uruchomiony. Dotychczasowe osobne encje głośności,
+wyciszenia i stanu pozostają dostępne dla istniejących dashboardów oraz automatyzacji.
 
 Włącz **Media Player** w aplikacji, aby dodać do Home Assistant aktywną sesję
 multimediów Windows. Dostępne informacje i przyciski zależą od programu odtwarzającego.

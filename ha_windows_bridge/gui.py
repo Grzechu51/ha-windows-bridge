@@ -804,7 +804,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(18)
         header, header_layout = self._page_header(
             "Aplikacje",
-            "Wybierz programy, którymi chcesz sterować z Home Assistant.",
+            "Wybierz programy do sterowania. Każdy otrzyma własny Media Player w Home Assistant.",
         )
         self.scan_apps_button = QPushButton("Wykryj uruchomione")
         self.scan_apps_button.setObjectName("secondaryButton")

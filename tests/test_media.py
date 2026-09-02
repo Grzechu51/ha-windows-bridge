@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from ha_windows_bridge.audio import AudioSessionSnapshot
-from ha_windows_bridge.config import AppConfig, MqttConfig
+from ha_windows_bridge.config import AppConfig, AudioAppConfig, MqttConfig
 from ha_windows_bridge.integration_protocol import integration_announcement_payload
 from ha_windows_bridge.media import (
     MediaArtwork,
@@ -140,6 +140,7 @@ def test_media_protocol_uses_stable_device_and_base_topics() -> None:
         device_name="Gaming PC",
         device_id="gaming_pc_123",
         mqtt=MqttConfig(host="broker", base_topic="ha-windows-bridge/gaming-pc"),
+        apps=[AudioAppConfig("chrome.exe", "Chrome", "chrome", True)],
         media_player_enabled=True,
     )
 
@@ -156,9 +157,18 @@ def test_media_protocol_uses_stable_device_and_base_topics() -> None:
     assert announcement["media_player"]["enabled"] is True
     assert {entity["platform"] for entity in announcement["entities"]} >= {
         "binary_sensor",
+        "media_player",
         "number",
         "switch",
     }
+    app_player = next(
+        entity
+        for entity in announcement["entities"]
+        if entity["platform"] == "media_player"
+    )
+    assert app_player["unique_id"] == "gaming_pc_123_chrome_media_player"
+    assert app_player["volume_command_topic"].endswith("/audio/chrome/volume/set")
+    assert app_player["mute_command_topic"].endswith("/audio/chrome/mute/set")
     assert announcement["media_player"]["availability_topic"].endswith("/status")
     assert announcement["media_player"]["thumbnail_topic"] == media_thumbnail_topic(config)
 
@@ -168,6 +178,7 @@ def test_discovery_announcement_parser_accepts_bridge_payload() -> None:
         device_name="Gaming PC",
         device_id="gaming_pc_123",
         mqtt=MqttConfig(host="broker", base_topic="ha-windows-bridge/gaming-pc"),
+        apps=[AudioAppConfig("chrome.exe", "Chrome", "chrome", True)],
         media_player_enabled=True,
     )
 
@@ -177,12 +188,18 @@ def test_discovery_announcement_parser_accepts_bridge_payload() -> None:
     assert parsed["device_id"] == "gaming_pc_123"
     assert parsed["media_player"]["enabled"] is True
     assert len(parsed["entities"]) >= 3
+    app_players = [
+        entity for entity in parsed["entities"] if entity["platform"] == "media_player"
+    ]
+    assert len(app_players) == 1
+    assert app_players[0]["state_topic"].endswith("/app/chrome/running")
 
 
 def test_discovery_announcement_parser_rejects_wildcards_and_invalid_identifiers() -> None:
     config = AppConfig(
         device_id="gaming_pc_123",
         mqtt=MqttConfig(host="broker", base_topic="ha-windows-bridge/gaming-pc"),
+        apps=[AudioAppConfig("chrome.exe", "Chrome", "chrome", True)],
         media_player_enabled=True,
     )
     announcement = integration_announcement_payload(config)
@@ -198,10 +215,20 @@ def test_discovery_announcement_rejects_topics_outside_bridge_scope_and_duplicat
     config = AppConfig(
         device_id="gaming_pc_123",
         mqtt=MqttConfig(host="broker", base_topic="ha-windows-bridge/gaming-pc"),
+        apps=[AudioAppConfig("chrome.exe", "Chrome", "chrome", True)],
         media_player_enabled=True,
     )
     announcement = integration_announcement_payload(config)
     announcement["entities"][0]["state_topic"] = "another-device/status"
+    assert parse_discovery_announcement(json.dumps(announcement)) is None
+
+    announcement = integration_announcement_payload(config)
+    app_player = next(
+        entity
+        for entity in announcement["entities"]
+        if entity["platform"] == "media_player"
+    )
+    app_player["volume_state_topic"] = "another-device/audio/volume"
     assert parse_discovery_announcement(json.dumps(announcement)) is None
 
     announcement = integration_announcement_payload(config)

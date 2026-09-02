@@ -118,7 +118,10 @@ def test_gui_defaults_and_minimum_size() -> None:
         assert "Podgląd aktualizowany na żywo." not in labels
         assert "Zaznacz opcje do zintegrowania z Home Assistant." not in labels
         assert "Dodatkowe dane z Windows." in labels
-        assert "Wybierz programy, którymi chcesz sterować z Home Assistant." in labels
+        assert (
+            "Wybierz programy do sterowania. Każdy otrzyma własny Media Player w Home Assistant."
+            in labels
+        )
         assert not any(text.startswith("Każda włączona aplikacja") for text in labels)
     finally:
         close_window(window)
