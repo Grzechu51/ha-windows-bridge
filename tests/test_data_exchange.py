@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import json
 
-from ha_windows_bridge.config import AppConfig, MqttConfig, OverlayTemplateConfig
+from ha_windows_bridge.config import AppConfig, MqttConfig
 from ha_windows_bridge.data_exchange import (
     build_diagnostic_report,
     export_configuration,
-    export_overlay_templates,
     import_configuration,
-    import_overlay_templates,
 )
 
 
@@ -65,35 +63,11 @@ def test_diagnostic_report_redacts_connection_details_and_log_secrets(tmp_path) 
     assert report["configuration"]["mqtt"]["host"] == "<configured>"
 
 
-def test_selected_overlay_templates_round_trip_without_the_rest_of_config(tmp_path) -> None:
-    templates = [
-        OverlayTemplateConfig(template_id="door", name="Drzwi", preset="warning"),
-        OverlayTemplateConfig(template_id="battery", name="Bateria", layout="badge"),
-    ]
-    path = tmp_path / "popups.json"
-
-    export_overlay_templates(path, [templates[1]], selected_id="battery")
-    imported, selected = import_overlay_templates(path)
-
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["format"] == "ha-windows-bridge-overlay-templates"
-    assert [item.template_id for item in imported] == ["battery"]
-    assert imported[0].layout == "badge"
-    assert selected == "battery"
-
-
-def test_overlay_import_accepts_complete_configuration_export(tmp_path) -> None:
-    config = AppConfig(
-        overlay_templates=[
-            OverlayTemplateConfig(template_id="security", name="Alarm", preset="error")
-        ],
-        selected_overlay_template_id="security",
-    )
+def test_complete_configuration_export_has_no_removed_designer_data(tmp_path) -> None:
     path = tmp_path / "complete.json"
-    export_configuration(path, config)
+    export_configuration(path, AppConfig())
 
-    imported, selected = import_overlay_templates(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))["config"]
 
-    assert len(imported) == 1
-    assert imported[0].preset == "error"
-    assert selected == "security"
+    assert "overlay_templates" not in payload
+    assert "selected_overlay_template_id" not in payload

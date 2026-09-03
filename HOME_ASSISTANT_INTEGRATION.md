@@ -28,34 +28,29 @@ Wyłączenie funkcji w aplikacji usuwa odpowiadające jej encje po zapisaniu ust
 
 ## Nakładka
 
-Wygląd popupów konfiguruje się teraz w aplikacji Windows, w sekcji
-**Funkcje → Nakładka → Projektant popupów**. Projektant pokazuje efekt na żywo i zapisuje
-wiele nazwanych wzorów osobno dla każdego komputera. Po synchronizacji integracja tworzy
-encję `select` **Zapisany popup** z listą tych wzorów.
+W aplikacji włącz **Funkcje → Nakładka → Wiadomości na ekranie** i wybierz monitor.
+Przycisk **Pokaż przykład** pozwala sprawdzić wiadomości, statusy, kamerę i Media Player
+bez połączenia z HA.
 
-Akcja **Wybierz opcję** dostępna dla tej encji jedynie zmienia aktywny projekt. Następnie
-w automatyzacji dodaj akcję **HA Windows Bridge: Wyświetl zapisany popup**. Jej formularz
-pozwala wskazać encje tytułu, wartości/wiadomości, postępu i czasu, odtwarzacz
-`media_player`, encję `camera` albo `image` oraz opcjonalny adres obrazu.
-
-Rekomendowana akcja automatyzacji to:
+W automatyzacji dodaj **HA Windows Bridge: Wyświetl nakładkę** i wybierz encję nakładki
+komputera jako cel. Treść i wygląd zapisują się w tej automatyzacji. Sekcja **Encje i obrazy**
+pozwala wskazać źródła tytułu i wiadomości, kamerę, encję obrazu albo adres grafiki.
+Postęp, czas i odtwarzacz mają własne pola wyboru.
 
 ```yaml
-action: ha_windows_bridge.show_saved_overlay
+action: ha_windows_bridge.show_overlay
+target:
+  entity_id: notify.pc_windows_overlay
 data:
-  template_entity: select.pc_windows_saved_popup
   title: Pralka
   message_entity: sensor.pralka_pozostaly_czas
   progress_entity: sensor.pralka_postep
+  icon: mdi:washing-machine
+  size_mode: auto
 ```
 
-`template_entity` jednocześnie wskazuje komputer i aktualnie wybrany projekt. Opcjonalne
-`template_id` pozwala wybrać inny zapisany projekt tylko dla danego wywołania. Tytuł,
-wiadomość, postęp i czas mogą pochodzić ze stanu albo wskazanego atrybutu encji. Zmiana
-opcji encji `select` jest odsyłana do aplikacji i zapamiętywana lokalnie.
-
-Rozbudowana akcja `show_overlay` nadal działa jako interfejs zaawansowany i zachowuje
-zgodność z dotychczasowymi automatyzacjami.
+Encje dostarczają stan w momencie wywołania akcji. Aby zmienić już widoczny popup,
+użyj `update_overlay` z jego `notification_id`.
 
 Aktualne multimedia wyświetlisz poleceniem:
 
@@ -79,9 +74,7 @@ okładkę po prawej stronie. Kolory powierzchni i tekstu są dobierane z grafiki
 zachowaniem kontrastu. Bez wyboru encji opcja bieżących multimediów używa sesji z
 komputera docelowego. Tryb automatyczny dopasowuje kartę do treści i ignoruje pola
 `width` oraz `height`. Pole efektu tła oferuje powierzchnię jednolitą, standardowe
-rozmycie i **Liquid Glass**. Standardowe rozmycie korzysta z Desktop Acrylic, a Liquid
-Glass preferuje DXGI Desktop Duplication i adaptacyjne odświeżanie. W trybie zdalnym
-albo przy problemach z wydajnością aplikacja wybiera bezpieczny efekt zastępczy.
+rozmycie **Acrylic** i **Liquid Glass**.
 `edge_offset` odsuwa kartę od wybranych krawędzi ekranu. Ikonę wybiera się z biblioteki
 MDI HA. Priorytet porządkuje kolejkę, `show_lifetime` pokazuje pozostały czas, a
 `pause_on_hover` wstrzymuje zamknięcie po najechaniu.
@@ -99,8 +92,7 @@ podobny do interfejsu telewizora.
 Nakładkę można też dodać ręcznie jako bezpośredni endpoint WebSocket. W konfiguracji
 integracji podaj ID urządzenia widoczne w aplikacji Windows, a w aplikacji skonfiguruj
 adres Home Assistant i długoterminowy token. Tryb bezpośredni obsługuje nakładki oraz
-powiadomienia, a także synchronizację zapisanych popupów. Pozostałe encje nadal używają
-MQTT.
+powiadomienia. Pozostałe encje używają MQTT.
 
 Po restarcie HA dodaj integrację ręcznie, wybierz jej encję `notify` jako cel akcji
 `ha_windows_bridge.show_overlay`, a następnie uruchom usługę w aplikacji Windows.

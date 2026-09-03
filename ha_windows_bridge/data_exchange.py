@@ -4,16 +4,14 @@ import json
 import platform
 import re
 import sys
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .config import MAX_CONFIG_BYTES, AppConfig, OverlayTemplateConfig
+from .config import MAX_CONFIG_BYTES, AppConfig
 
 EXPORT_FORMAT = "ha-windows-bridge-config"
-OVERLAY_EXPORT_FORMAT = "ha-windows-bridge-overlay-templates"
 MAX_DIAGNOSTIC_LOG_BYTES = 512 * 1024
 
 
@@ -47,62 +45,6 @@ def import_configuration(path: Path, current_password: str | None = None) -> App
     if errors:
         raise ValueError("\n".join(errors))
     return config
-
-
-def export_overlay_templates(
-    path: Path,
-    templates: list[OverlayTemplateConfig],
-    selected_id: str = "",
-) -> None:
-    """Export only explicitly selected overlay designs."""
-    if not templates:
-        raise ValueError("Wybierz co najmniej jeden popup do eksportu")
-    selected = selected_id if any(item.template_id == selected_id for item in templates) else ""
-    payload = {
-        "format": OVERLAY_EXPORT_FORMAT,
-        "version": 1,
-        "exported_at": datetime.now(UTC).isoformat(),
-        "selected_overlay_template_id": selected,
-        "overlay_templates": [asdict(template) for template in templates[:64]],
-    }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def import_overlay_templates(
-    path: Path,
-) -> tuple[list[OverlayTemplateConfig], str]:
-    """Read overlay designs from a focused export or a complete app export."""
-    if path.stat().st_size > MAX_CONFIG_BYTES:
-        raise ValueError("Plik konfiguracji jest zbyt duży")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("Nie można odczytać pliku konfiguracji") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("Plik konfiguracji jest nieprawidłowy")
-    if payload.get("format") == EXPORT_FORMAT:
-        payload = payload.get("config")
-    if not isinstance(payload, dict):
-        raise ValueError("Plik konfiguracji jest nieprawidłowy")
-    raw_templates = payload.get("overlay_templates")
-    if not isinstance(raw_templates, list):
-        raise ValueError("Plik nie zawiera zapisanych popupów")
-    templates: list[OverlayTemplateConfig] = []
-    seen: set[str] = set()
-    for raw in raw_templates[:64]:
-        if not isinstance(raw, dict):
-            continue
-        template = OverlayTemplateConfig.from_dict(raw)
-        if template.template_id in seen:
-            continue
-        seen.add(template.template_id)
-        templates.append(template)
-    if not templates:
-        raise ValueError("Plik nie zawiera prawidłowych popupów")
-    selected = str(payload.get("selected_overlay_template_id", ""))
-    if selected not in seen:
-        selected = templates[0].template_id
-    return templates, selected
 
 
 def _redact(text: str, config: AppConfig) -> str:

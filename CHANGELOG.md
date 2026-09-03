@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.10.0-beta.5 - 2026-09-03
+
+- naprawione znikające ikony i tekst przy pierwszym animowanym wyświetleniu paska
+  wskaźników oraz uproszczony wygląd samych ikon;
+- prosty panel przykładów nakładek zamiast projektanta: wiadomości, statusy, znaczniki,
+  kamera, Media Player, Acrylic i Liquid Glass;
+- usunięta synchronizacja szablonów oraz encja „Zapisany popup”; źródła treści,
+  kamer i obrazów są dostępne w akcjach `show_overlay` i `update_overlay`;
+- wspólna siatka ikony, tytułu i wiadomości, pomiar szerokości tekstu i poprawione
+  dopasowanie paska czasu oraz miniatur;
+- stabilny układ tekstu podczas animacji i krótsze opisy interfejsu w obu językach;
+- usunięty nieużywany kod, style i opcje dawnego projektanta.
+
+Automatyzacje używające `show_saved_overlay` należy zastąpić akcją `show_overlay`.
+Stare projekty nie są przenoszone. Dane połączeń i pozostałe ustawienia pozostają bez zmian.
+
 ## 0.10.0-beta.4 - 2026-09-02
 
 - każda włączona aplikacja audio otrzymuje dodatkową encję `media_player` z dwukierunkową

@@ -146,7 +146,8 @@ def overlay_monitor_topics(config: AppConfig) -> tuple[str, str]:
     return f"{root}/set", f"{root}/state"
 
 
-def overlay_template_topics(config: AppConfig) -> tuple[str, str]:
+def _legacy_overlay_template_topics(config: AppConfig) -> tuple[str, str]:
+    """Topics removed in schema 15; retained here so cleanup can clear old states."""
     root = f"{config.mqtt.base_topic}/overlay/templates"
     return f"{root}/set", f"{root}/state"
 
@@ -1082,7 +1083,7 @@ def all_possible_mqtt_topics(config: AppConfig) -> set[str]:
         topics.update(referenced_mqtt_topics(message.payload))
     topics.add(status_topic(config))
     media_command, media_state = media_topics(config)
-    template_command, template_state = overlay_template_topics(config)
+    template_command, template_state = _legacy_overlay_template_topics(config)
     topics.update(
         (
             media_announcement_topic(config),

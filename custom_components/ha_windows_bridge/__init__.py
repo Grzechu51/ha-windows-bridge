@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urljoin
@@ -14,13 +15,12 @@ from homeassistant.components import image as image_component
 from homeassistant.components import mqtt
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import target as target_helpers
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.network import get_url
 from homeassistant.helpers.typing import ConfigType
 
@@ -33,13 +33,9 @@ from .const import (
     SERVICE_CLEAR_OVERLAY,
     SERVICE_REMOVE_OVERLAY,
     SERVICE_SHOW_OVERLAY,
-    SERVICE_SHOW_SAVED_OVERLAY,
     SERVICE_UPDATE_OVERLAY,
     TRANSPORT_DIRECT,
     direct_overlay_event,
-    direct_template_catalog_event,
-    direct_template_command_event,
-    template_dispatcher_signal,
 )
 
 PLATFORMS = [
@@ -55,9 +51,6 @@ PLATFORMS = [
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 _OVERLAY_ID = vol.All(cv.string, vol.Length(min=1, max=64), vol.Match(r"^[A-Za-z0-9_.:-]+$"))
-_TEMPLATE_ID = vol.All(
-    cv.string, vol.Length(min=1, max=64), vol.Match(r"^[a-z0-9_]+$")
-)
 _OVERLAY_COMMON_OPTIONS = {
     vol.Optional("icon"): vol.All(cv.string, vol.Length(max=128)),
     vol.Optional("image"): vol.All(cv.string, vol.Length(max=700 * 1024)),
@@ -71,19 +64,22 @@ _OVERLAY_COMMON_OPTIONS = {
     vol.Optional("duration_attribute"): vol.All(cv.string, vol.Length(max=128)),
     vol.Optional("monitor"): vol.All(vol.Coerce(int), vol.Range(min=0, max=15)),
     vol.Optional("edge_offset"): vol.All(vol.Coerce(int), vol.Range(min=0, max=240)),
-    # Kept for existing YAML automations; the visual editor now uses size_mode.
-    vol.Optional("size"): vol.In({"small", "medium", "large"}),
     vol.Optional("preset"): vol.In({"default", "success", "warning", "error", "info"}),
     vol.Optional("background_effect"): vol.In({"none", "blur", "liquid"}),
-    # Backward compatibility for automations created before background_effect.
-    vol.Optional("glass"): cv.boolean,
     vol.Optional("media_player_entity"): cv.entity_id,
     vol.Optional("layout"): vol.In(
         {"auto", "compact", "status", "badge", "standard", "media", "camera"}
     ),
     vol.Optional("display_mode"): vol.In({"queue", "parallel"}),
-    vol.Optional("channel"): vol.In({"general", "security", "system", "media", "work"}),
     vol.Optional("priority"): vol.In({"low", "normal", "high", "critical"}),
+}
+_OVERLAY_SOURCE_OPTIONS = {
+    vol.Optional("title_entity"): cv.entity_id,
+    vol.Optional("title_attribute"): vol.All(cv.string, vol.Length(max=128)),
+    vol.Optional("message_entity"): cv.entity_id,
+    vol.Optional("message_attribute"): vol.All(cv.string, vol.Length(max=128)),
+    vol.Optional("image_entity"): cv.entity_id,
+    vol.Optional("image_url"): vol.All(cv.string, vol.Length(max=700 * 1024)),
 }
 _OVERLAY_UPDATE_OPTIONS = {
     **_OVERLAY_COMMON_OPTIONS,
@@ -108,6 +104,7 @@ _SHOW_OVERLAY_SCHEMA = cv.make_entity_service_schema(
         vol.Optional("title"): vol.All(cv.string, vol.Length(max=128)),
         vol.Optional("notification_id"): _OVERLAY_ID,
         **_OVERLAY_COMMON_OPTIONS,
+        **_OVERLAY_SOURCE_OPTIONS,
         vol.Optional("media"): cv.boolean,
         vol.Required("opacity", default=0.94): vol.All(
             vol.Coerce(float), vol.Range(min=0.0, max=1.0)
@@ -138,36 +135,13 @@ _UPDATE_OVERLAY_SCHEMA = cv.make_entity_service_schema(
         vol.Optional("message"): vol.All(cv.string, vol.Length(max=2048)),
         vol.Optional("title"): vol.All(cv.string, vol.Length(max=128)),
         **_OVERLAY_UPDATE_OPTIONS,
+        **_OVERLAY_SOURCE_OPTIONS,
     }
 )
 _REMOVE_OVERLAY_SCHEMA = cv.make_entity_service_schema(
     {vol.Required("notification_id"): _OVERLAY_ID}
 )
-_CLEAR_OVERLAY_SCHEMA = cv.make_entity_service_schema(
-    {vol.Optional("channel"): vol.In({"general", "security", "system", "media", "work"})}
-)
-_SHOW_SAVED_OVERLAY_SCHEMA = vol.Schema(
-    {
-        vol.Required("template_entity"): cv.entity_id,
-        vol.Optional("template_id"): _TEMPLATE_ID,
-        vol.Optional("title"): vol.All(cv.string, vol.Length(max=128)),
-        vol.Optional("message"): vol.All(cv.string, vol.Length(max=2048)),
-        vol.Optional("notification_id"): _OVERLAY_ID,
-        vol.Optional("title_entity"): cv.entity_id,
-        vol.Optional("title_attribute"): vol.All(cv.string, vol.Length(max=128)),
-        vol.Optional("message_entity"): cv.entity_id,
-        vol.Optional("message_attribute"): vol.All(cv.string, vol.Length(max=128)),
-        vol.Optional("image_entity"): cv.entity_id,
-        vol.Optional("image_url"): vol.All(cv.string, vol.Length(max=700 * 1024)),
-        vol.Optional("progress_entity"): cv.entity_id,
-        vol.Optional("progress_attribute"): vol.All(cv.string, vol.Length(max=128)),
-        vol.Optional("progress_min", default=0): vol.Coerce(float),
-        vol.Optional("progress_max", default=100): vol.Coerce(float),
-        vol.Optional("duration_entity"): cv.entity_id,
-        vol.Optional("duration_attribute"): vol.All(cv.string, vol.Length(max=128)),
-        vol.Optional("media_player_entity"): cv.entity_id,
-    }
-)
+_CLEAR_OVERLAY_SCHEMA = cv.make_entity_service_schema({})
 _MAX_MEDIA_IMAGE_BYTES = 512 * 1024
 _MEDIA_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
@@ -183,45 +157,6 @@ def _image_data_uri(content_type: str, content: bytes) -> str:
         return ""
     encoded = base64.b64encode(content).decode("ascii")
     return f"data:{normalized_type};base64,{encoded}"
-
-
-def _normalize_template_catalog(raw: Any, device_id: str) -> tuple[list[dict[str, str]], str]:
-    if isinstance(raw, bytes):
-        try:
-            raw = raw.decode("utf-8", errors="strict")
-        except UnicodeDecodeError:
-            return [], ""
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError:
-            return [], ""
-    if not isinstance(raw, dict) or str(raw.get("device_id", "")) != device_id:
-        return [], ""
-    templates: list[dict[str, str]] = []
-    names: set[str] = set()
-    identifiers: set[str] = set()
-    for item in raw.get("templates", [])[:64]:
-        if not isinstance(item, dict):
-            continue
-        template_id = str(item.get("id", "")).strip()
-        name = str(item.get("name", "")).strip()[:64]
-        if (
-            not template_id
-            or len(template_id) > 64
-            or not template_id.replace("_", "").isalnum()
-            or template_id in identifiers
-            or not name
-            or name.casefold() in names
-        ):
-            continue
-        identifiers.add(template_id)
-        names.add(name.casefold())
-        templates.append({"id": template_id, "name": name})
-    selected = str(raw.get("selected", "")).strip()
-    if selected not in identifiers:
-        selected = templates[0]["id"] if templates else ""
-    return templates, selected
 
 
 def _text_attribute(value: Any) -> str:
@@ -306,24 +241,18 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
     async def publish_overlay(call: ServiceCall) -> None:
         action = {
             SERVICE_SHOW_OVERLAY: "show",
-            SERVICE_SHOW_SAVED_OVERLAY: "show",
             SERVICE_UPDATE_OVERLAY: "update",
             SERVICE_REMOVE_OVERLAY: "remove",
             SERVICE_CLEAR_OVERLAY: "clear",
         }[call.service]
         registry = er.async_get(hass)
-        saved_template_action = call.service == SERVICE_SHOW_SAVED_OVERLAY
-        if saved_template_action:
-            entity_ids = {str(call.data["template_entity"])}
-        else:
-            selected = target_helpers.TargetSelection(call.data)
-            referenced = target_helpers.async_extract_referenced_entity_ids(
-                hass, selected, expand_group=True
-            )
-            entity_ids = referenced.referenced | referenced.indirectly_referenced
+        selected = target_helpers.TargetSelection(call.data)
+        referenced = target_helpers.async_extract_referenced_entity_ids(
+            hass, selected, expand_group=True
+        )
+        entity_ids = referenced.referenced | referenced.indirectly_referenced
         topics: set[str] = set()
         event_types: set[str] = set()
-        selected_template_id = ""
         for entity_id in entity_ids:
             if call.context.user_id:
                 user = await hass.auth.async_get_user(call.context.user_id)
@@ -333,28 +262,14 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             if registered is None or registered.config_entry_id is None:
                 continue
             runtime = hass.data.get(DOMAIN, {}).get(registered.config_entry_id, {})
-            expected_unique_id = (
-                runtime.get("template_select_unique_id")
-                if saved_template_action
-                else runtime.get("overlay_unique_id")
-            )
-            if registered.unique_id != expected_unique_id:
+            if registered.unique_id != runtime.get("overlay_unique_id"):
                 continue
-            if saved_template_action:
-                selected_template_id = str(
-                    call.data.get("template_id")
-                    or runtime.get("selected_template_id", "")
-                ).strip()
             if topic := runtime.get("overlay_topic"):
                 topics.add(str(topic))
             if event_type := runtime.get("overlay_event_type"):
                 event_types.add(str(event_type))
         if not topics and not event_types:
             raise HomeAssistantError("Select an enabled HA Windows Bridge popup entity")
-        if saved_template_action and not selected_template_id:
-            raise HomeAssistantError(
-                "The selected computer has not synchronized any saved popup yet"
-            )
 
         options: dict[str, Any] = {
             key: value
@@ -365,16 +280,12 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
                 "title",
                 "message",
                 "notification_id",
-                "template_entity",
-                "template_id",
                 "title_entity",
                 "title_attribute",
                 "message_entity",
                 "message_attribute",
             }
         }
-        if saved_template_action:
-            options["template_id"] = selected_template_id
         for value_field, entity_field, attribute_field, minimum, maximum in (
             ("progress", "progress_entity", "progress_attribute", 0, 100),
             ("duration", "duration_entity", "duration_attribute", 2, 60),
@@ -382,6 +293,10 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             entity_id = str(call.data.get(entity_field, "")).strip()
             if not entity_id:
                 continue
+            if call.context.user_id:
+                user = await hass.auth.async_get_user(call.context.user_id)
+                if user is None or not user.permissions.check_entity(entity_id, POLICY_READ):
+                    raise HomeAssistantError(f"Not authorized to read the source entity: {entity_id}")
             state = hass.states.get(entity_id)
             if state is None:
                 raise HomeAssistantError(f"Source entity is unavailable: {entity_id}")
@@ -389,6 +304,8 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             raw_value = state.attributes.get(attribute) if attribute else state.state
             try:
                 numeric = float(raw_value)
+                if not math.isfinite(numeric):
+                    raise ValueError
             except (TypeError, ValueError):
                 raise HomeAssistantError(
                     f"Source entity does not contain a numeric value: {entity_id}"
@@ -531,8 +448,9 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             and not message
             and not title
             and not options.get("media")
+            and not options.get("image")
+            and not options.get("qr")
             and not badge_has_content
-            and not options.get("template_id")
         ):
             raise HomeAssistantError(
                 "Provide content, select a Home Assistant media player, "
@@ -561,12 +479,6 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
         DOMAIN, SERVICE_SHOW_OVERLAY, publish_overlay, schema=_SHOW_OVERLAY_SCHEMA
     )
     hass.services.async_register(
-        DOMAIN,
-        SERVICE_SHOW_SAVED_OVERLAY,
-        publish_overlay,
-        schema=_SHOW_SAVED_OVERLAY_SCHEMA,
-    )
-    hass.services.async_register(
         DOMAIN, SERVICE_UPDATE_OVERLAY, publish_overlay, schema=_UPDATE_OVERLAY_SCHEMA
     )
     hass.services.async_register(
@@ -591,7 +503,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
     if entry.data.get(CONF_MEDIA_PLAYER, {}).get("enabled", False):
         valid_unique_ids.add(f"{entry.data[CONF_DEVICE_ID]}_media_player")
-    valid_unique_ids.add(f"{entry.data[CONF_DEVICE_ID]}_overlay_template")
 
     registry = er.async_get(hass)
     for registered in er.async_entries_for_config_entry(registry, entry.entry_id):
@@ -612,62 +523,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         {},
     )
     overlay_topic = "" if direct else str(overlay_definition.get("command_topic", ""))
-    template_root = (
-        f"{overlay_topic.removesuffix('/show/set')}/templates" if overlay_topic else ""
-    )
     runtime: dict[str, Any] = {
         "unique_ids": valid_unique_ids,
         "overlay_unique_id": overlay_definition.get("unique_id", ""),
-        "template_select_unique_id": f"{entry.data[CONF_DEVICE_ID]}_overlay_template",
         "overlay_topic": overlay_topic,
         "overlay_event_type": (
             direct_overlay_event(str(entry.data[CONF_DEVICE_ID])) if direct else ""
         ),
-        "template_command_topic": f"{template_root}/set" if template_root else "",
-        "template_state_topic": f"{template_root}/state" if template_root else "",
-        "template_catalog": [],
-        "selected_template_id": "",
-        "unsubscribers": [],
     }
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
-
-    @callback
-    def apply_template_catalog(raw: Any) -> None:
-        templates, selected = _normalize_template_catalog(
-            raw, str(entry.data[CONF_DEVICE_ID])
-        )
-        runtime["template_catalog"] = templates
-        runtime["selected_template_id"] = selected
-        async_dispatcher_send(hass, template_dispatcher_signal(entry.entry_id))
-
-    if direct:
-        @callback
-        def direct_catalog_received(event: Event) -> None:
-            apply_template_catalog(event.data)
-
-        runtime["unsubscribers"].append(
-            hass.bus.async_listen(
-                direct_template_catalog_event(str(entry.data[CONF_DEVICE_ID])),
-                direct_catalog_received,
-            )
-        )
-        hass.bus.async_fire(
-            direct_template_command_event(str(entry.data[CONF_DEVICE_ID])),
-            {"action": "catalog"},
-        )
-    elif runtime["template_state_topic"]:
-        @callback
-        def mqtt_catalog_received(message) -> None:
-            apply_template_catalog(message.payload)
-
-        runtime["unsubscribers"].append(
-            await mqtt.async_subscribe(
-                hass,
-                runtime["template_state_topic"],
-                mqtt_catalog_received,
-                qos=1,
-            )
-        )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -676,7 +540,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload HA Windows Bridge."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        runtime = hass.data.get(DOMAIN, {}).pop(entry.entry_id, {})
-        for unsubscribe in runtime.get("unsubscribers", []):
-            unsubscribe()
+        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     return unload_ok

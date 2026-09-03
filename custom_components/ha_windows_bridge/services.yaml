@@ -1,82 +1,3 @@
-show_saved_overlay:
-  fields:
-    template_entity:
-      required: true
-      selector:
-        entity:
-          filter:
-            - domain: select
-              integration: ha_windows_bridge
-    template_id:
-      selector:
-        text:
-    content:
-      collapsed: false
-      fields:
-        title:
-          selector:
-            text:
-        title_entity:
-          selector:
-            entity:
-        title_attribute:
-          selector:
-            text:
-        message:
-          selector:
-            text:
-              multiline: true
-        message_entity:
-          selector:
-            entity:
-        message_attribute:
-          selector:
-            text:
-        notification_id:
-          selector:
-            text:
-    media_sources:
-      collapsed: false
-      fields:
-        image_entity:
-          selector:
-            entity:
-              domain:
-                - camera
-                - image
-        image_url:
-          selector:
-            text:
-        media_player_entity:
-          selector:
-            entity:
-              domain: media_player
-    values:
-      collapsed: false
-      fields:
-        progress_entity:
-          selector:
-            entity:
-        progress_attribute:
-          selector:
-            text:
-        progress_min:
-          default: 0
-          selector:
-            number:
-              mode: box
-        progress_max:
-          default: 100
-          selector:
-            number:
-              mode: box
-        duration_entity:
-          selector:
-            entity:
-        duration_attribute:
-          selector:
-            text:
-
 show_overlay:
   target:
     entity:
@@ -138,6 +59,30 @@ show_overlay:
                 - normal
                 - high
                 - critical
+    sources:
+      collapsed: true
+      fields:
+        title_entity:
+          selector:
+            entity:
+        title_attribute:
+          selector:
+            text:
+        message_entity:
+          selector:
+            entity:
+        message_attribute:
+          selector:
+            text:
+        image_entity:
+          selector:
+            entity:
+              domain:
+                - camera
+                - image
+        image_url:
+          selector:
+            text:
     appearance:
       collapsed: true
       fields:
@@ -327,6 +272,27 @@ update_overlay:
       selector:
         text:
           multiline: true
+    title_entity:
+      selector:
+        entity:
+    title_attribute:
+      selector:
+        text:
+    message_entity:
+      selector:
+        entity:
+    message_attribute:
+      selector:
+        text:
+    image_entity:
+      selector:
+        entity:
+          domain:
+            - camera
+            - image
+    image_url:
+      selector:
+        text:
     media:
       selector:
         constant:

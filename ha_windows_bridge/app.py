@@ -160,22 +160,6 @@ QListWidget#devicesList::item {
 QListWidget#devicesList::item:selected {
     background: #183629;
 }
-QListView#mdiIconList {
-    background: #0c0e10;
-    border: 1px solid #40464b;
-    border-radius: 7px;
-    color: #edf4f1;
-    padding: 5px;
-    outline: none;
-}
-QListView#mdiIconList::item {
-    min-height: 34px;
-    border-radius: 5px;
-    padding: 4px 8px;
-}
-QListView#mdiIconList::item:selected {
-    background: #1c3d31;
-}
 QLabel#pageTitle {
     color: #ffffff;
     font-size: 18pt;
@@ -186,7 +170,7 @@ QLabel#sectionTitle {
     font-size: 14pt;
     font-weight: 600;
 }
-QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit#templateMessage {
+QLineEdit, QSpinBox, QDoubleSpinBox {
     background: #121417;
     border: 1px solid #40464b;
     border-radius: 6px;
@@ -195,12 +179,10 @@ QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit#templateMessage {
     padding: 8px 10px;
     selection-background-color: #2f9868;
 }
-QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover,
-QPlainTextEdit#templateMessage:hover {
+QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover {
     border-color: #465a61;
 }
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
-QPlainTextEdit#templateMessage:focus {
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
     border-color: #46b87b;
 }
 QFrame#passwordBox {

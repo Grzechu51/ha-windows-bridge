@@ -366,17 +366,19 @@ def test_overlay_service_form_uses_single_booleans_and_native_icon_selector() ->
     assert services.count("background_effect:") == 2
     assert services.count("translation_key: overlay_background_effect") == 2
     assert services.count("edge_offset:") == 2
-    assert services.count("media_player_entity:") == 3
-    assert services.count("domain: media_player") == 3
+    assert services.count("media_player_entity:") == 2
+    assert services.count("domain: media_player") == 2
     assert "visible:" not in services
     assert services.count("translation_key: overlay_size_mode") == 2
     assert services.count("display_mode:") == 2
     assert services.count("translation_key: overlay_display_mode") == 2
     assert "channel:" not in services
     assert "translation_key: overlay_channel" not in services
-    assert services.count("image_entity:") == 1
-    assert "- camera\n                - image" in services
-    assert services.count("image_url:") == 1
+    assert services.count("image_entity:") == 2
+    service_lines = [line.strip() for line in services.splitlines()]
+    assert service_lines.count("- camera") == 4  # Two layout options and two entity filters.
+    assert service_lines.count("- image") == 2
+    assert services.count("image_url:") == 2
     assert (
         strings["services"]["show_overlay"]["fields"]["background_effect"]["name"]
         == "Background effect"
@@ -393,9 +395,10 @@ def test_overlay_service_form_uses_single_booleans_and_native_icon_selector() ->
         strings["services"]["show_overlay"]["fields"]["media_player_entity"]["name"]
         == "Home Assistant media player"
     )
-    saved_fields = strings["services"]["show_saved_overlay"]["fields"]
-    assert saved_fields["image_entity"]["name"] == "Camera or image entity"
-    assert saved_fields["image_url"]["name"] == "Image URL"
+    show_fields = strings["services"]["show_overlay"]["fields"]
+    assert show_fields["image_entity"]["name"] == "Camera or image entity"
+    assert show_fields["image_url"]["name"] == "Image URL"
+    assert "show_saved_overlay" not in strings["services"]
     assert "channel" not in strings["services"]["show_overlay"]["fields"]
     assert "channel" not in strings["services"]["update_overlay"]["fields"]
     assert "fields" not in strings["services"]["clear_overlay"]

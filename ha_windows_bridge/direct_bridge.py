@@ -26,16 +26,12 @@ class DirectHaBridge:
         logger: logging.Logger,
         overlay_callback: Callable[[str, str, dict[str, Any]], None],
         status_callback: Callable[[str, bool], None] | None = None,
-        template_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self.config = config
         self.logger = logger
         self.overlay_callback = overlay_callback
         self.status_callback = status_callback or (lambda _text, _connected: None)
-        self.template_callback = template_callback or (lambda _action, _template_id: None)
         self._stop_event = threading.Event()
-        self._send_lock = threading.Lock()
-        self._next_message_id = 3
         self._thread: threading.Thread | None = None
         self._socket: websocket.WebSocket | None = None
         self.connected = False
@@ -125,25 +121,6 @@ class DirectHaBridge:
         if subscribed.get("type") != "result" or not subscribed.get("success"):
             socket.close()
             raise ConnectionError("Home Assistant rejected the overlay subscription")
-        socket.send(
-            json.dumps(
-                {
-                    "id": 2,
-                    "type": "subscribe_events",
-                    "event_type": (
-                        f"ha_windows_bridge_template_command_{self.config.device_id}"
-                    ),
-                },
-                separators=(",", ":"),
-            )
-        )
-        template_subscription = self._receive_json(socket)
-        if (
-            template_subscription.get("type") != "result"
-            or not template_subscription.get("success")
-        ):
-            socket.close()
-            raise ConnectionError("Home Assistant rejected the popup template subscription")
         socket.settimeout(30)
         return socket
 
@@ -153,7 +130,6 @@ class DirectHaBridge:
             try:
                 self._socket = self._connect()
                 self._set_status("Połączono bezpośrednio z Home Assistant", True)
-                self.publish_overlay_templates()
                 retry_seconds = 1
                 self._read_events(self._socket)
             except Exception as exc:
@@ -176,19 +152,11 @@ class DirectHaBridge:
             except websocket.WebSocketTimeoutException:
                 socket.ping()
                 continue
-            if message.get("type") != "event" or message.get("id") not in {1, 2}:
+            if message.get("type") != "event" or message.get("id") != 1:
                 continue
             event = message.get("event")
             data = event.get("data") if isinstance(event, dict) else None
             if not isinstance(data, dict):
-                continue
-            if message.get("id") == 2:
-                action = str(data.get("action", "")).strip().lower()
-                template_id = str(data.get("template_id", "")).strip()
-                if action == "catalog" or (
-                    action in {"select", "show"} and template_id
-                ):
-                    self.template_callback(action, template_id)
                 continue
             options = data.get("data")
             self.overlay_callback(
@@ -196,32 +164,6 @@ class DirectHaBridge:
                 str(data.get("message", ""))[:2048],
                 options if isinstance(options, dict) else {},
             )
-
-    def publish_overlay_templates(self) -> bool:
-        socket = self._socket
-        if socket is None or not self.connected:
-            return False
-        with self._send_lock:
-            message_id = self._next_message_id
-            self._next_message_id += 1
-            try:
-                socket.send(
-                    json.dumps(
-                        {
-                            "id": message_id,
-                            "type": "fire_event",
-                            "event_type": (
-                                f"ha_windows_bridge_templates_{self.config.device_id}"
-                            ),
-                            "event_data": self.config.overlay_template_catalog(),
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
-                )
-            except (OSError, websocket.WebSocketException):
-                return False
-        return True
 
     @classmethod
     def test_connection(cls, config: AppConfig) -> tuple[bool, str]:

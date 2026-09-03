@@ -25,7 +25,6 @@ def test_overlay_request_is_bounded_and_uses_safe_defaults() -> None:
         {
             "id": "invalid id with spaces",
             "corner": "somewhere",
-            "size": "huge",
             "layout": "unknown",
             "preset": "unknown",
             "progress": 250,
@@ -75,17 +74,17 @@ def test_overlay_request_is_bounded_and_uses_safe_defaults() -> None:
     assert icon_badge["layout"] == "badge"
     assert icon_badge["title"] == ""
 
-    glass_request = manager._validated_request(  # noqa: SLF001
-        "Title", "Message", {"glass": True}
+    blur_request = manager._validated_request(  # noqa: SLF001
+        "Title", "Message", {"background_effect": "blur"}
     )
     liquid_request = manager._validated_request(  # noqa: SLF001
         "Title", "Message", {"background_effect": "liquid"}
     )
     invalid_effect = manager._validated_request(  # noqa: SLF001
-        "Title", "Message", {"background_effect": "unknown", "glass": True}
+        "Title", "Message", {"background_effect": "unknown"}
     )
-    assert glass_request["background_effect"] == "blur"
-    assert glass_request["glass"] is True
+    assert blur_request["background_effect"] == "blur"
+    assert blur_request["glass"] is True
     assert liquid_request["background_effect"] == "liquid"
     assert liquid_request["glass"] is True
     assert invalid_effect["background_effect"] == "none"
@@ -105,21 +104,23 @@ def test_overlay_uses_action_defaults_and_configured_monitor() -> None:
     assert request["close_on_click"] is False
 
 
-def test_overlay_manual_size_and_legacy_size_are_supported() -> None:
+def test_overlay_manual_size_is_supported_and_removed_alias_is_ignored() -> None:
     manager = OverlayManager()
 
     manual = manager._validated_request(  # noqa: SLF001
         "Title", "Message", {"size_mode": "manual", "width": 730, "height": 410}
     )
-    legacy = manager._validated_request("Title", "Message", {"size": "large"})  # noqa: SLF001
+    removed_alias = manager._validated_request(  # noqa: SLF001
+        "Title", "Message", {"size": "large"}
+    )
 
     assert (manual["size_mode"], manual["width"], manual["height"]) == (
         "manual",
         730,
         410,
     )
-    assert legacy["size_mode"] == "manual"
-    assert legacy["width"] == 520
+    assert removed_alias["size_mode"] == "auto"
+    assert removed_alias["width"] == 400
 
 
 def test_overlay_queue_can_update_remove_and_clear_messages() -> None:
@@ -138,28 +139,27 @@ def test_overlay_queue_can_update_remove_and_clear_messages() -> None:
     assert manager._current is None  # noqa: SLF001
 
 
-def test_overlay_channels_priorities_and_automatic_layouts() -> None:
+def test_overlay_priorities_and_automatic_layouts() -> None:
     manager = OverlayManager()
     manager._display = lambda _request: True  # type: ignore[method-assign]  # noqa: SLF001
 
     assert manager.handle_message(
-        "Routine", "Queued", {"id": "routine", "channel": "general", "priority": "low"}
+        "Routine", "Queued", {"id": "routine", "priority": "low"}
     )
     assert manager.handle_message(
-        "Security", "Motion", {"id": "camera", "channel": "security", "priority": "critical"}
+        "Security", "Motion", {"id": "camera", "priority": "critical"}
     )
     assert manager._current["id"] == "camera"  # noqa: SLF001
     assert manager._queue[0]["id"] == "routine"  # noqa: SLF001
 
-    assert manager.handle_message("", "", {"action": "clear", "channel": "general"})
-    assert manager._current["id"] == "camera"  # noqa: SLF001
+    assert manager.handle_message("", "", {"action": "clear"})
+    assert manager._current is None  # noqa: SLF001
     assert not manager._queue  # noqa: SLF001
 
     compact = manager._validated_request("Short", "Text", {})  # noqa: SLF001
     camera = manager._validated_request("Camera", "Motion", {"layout": "camera"})  # noqa: SLF001
     assert manager._resolve_layout(compact, False) == "compact"  # noqa: SLF001
     assert manager._resolve_layout(camera, True) == "camera"  # noqa: SLF001
-    assert camera["channel"] == "general"
     assert camera["camera"] is True
 
 

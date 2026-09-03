@@ -54,10 +54,10 @@ Przy instalacji ręcznej skopiuj `custom_components/ha_windows_bridge` do
 `HA-Windows-Bridge-0.9.0-win64.zip` to wersja przenośna. Po rozpakowaniu zachowaj cały
 katalog wraz z folderem `_internal`.
 
-### Wersja testowa 0.10.0-beta.4
+### Wersja testowa 0.10.0-beta.5
 
 W HACS włącz dla tego repozytorium obsługę wersji **pre-release/beta**, a następnie
-wybierz **Redownload → Need a different version? → v0.10.0-beta.4**. Aplikację Windows
+wybierz **Redownload → Need a different version? → v0.10.0-beta.5**. Aplikację Windows
 pobierz z wydania oznaczonego **Pre-release** na GitHubie. Stabilne `v0.9.0` pozostaje
 wydaniem domyślnym.
 
@@ -79,8 +79,8 @@ raportu diagnostycznego.
 - **Audio** — osobne odtwarzacze aplikacji, Media Player aktywnej sesji Windows, balans
   kanałów i liczba sesji.
 - **Urządzenia** — wybór aktywnych lub nieaktywnych urządzeń widocznych w Windows.
-- **Nakładka** — w aplikacji projektujesz i zapisujesz gotowe popupy z podglądem na
-  żywo. Home Assistant wybiera zapisany wzór i może podmienić jego treść danymi encji.
+- **Nakładka** — wiadomości, statusy, obrazy i multimedia na pulpicie. W aplikacji
+  wybierasz monitor i sprawdzasz przykłady, a treść i wygląd ustawiasz w akcji Home Assistant.
 
 Wyłączenie modułu usuwa jego encje po zapisaniu i ponownym opublikowaniu konfiguracji.
 
@@ -96,42 +96,30 @@ multimediów Windows. Dostępne informacje i przyciski zależą od programu odtw
 
 ## Nakładka Windows
 
-Najwygodniejszy sposób konfiguracji:
+1. W aplikacji otwórz **Funkcje → Nakładka**, włącz wiadomości na ekranie i wybierz monitor.
+2. W sekcji **Przykłady nakładek** sprawdź wybrany układ przyciskiem **Pokaż przykład**.
+3. W automatyzacji Home Assistant dodaj akcję **HA Windows Bridge: Wyświetl nakładkę**
+   (`ha_windows_bridge.show_overlay`) i jako cel wybierz encję nakładki komputera.
+4. Wypełnij treść albo rozwiń **Encje i obrazy**, aby wybrać encję tytułu, wiadomości,
+   kamerę, obraz lub jego adres. Odtwarzacz wybierzesz w sekcji **Treść**.
 
-1. Otwórz w aplikacji **Funkcje → Nakładka → Projektant popupów**.
-2. Wybierz istniejący wzór albo utwórz nowy. Każda zmiana wyglądu jest pokazywana na
-   pulpicie po krótkim opóźnieniu.
-3. Ustaw układ, efekt tła, pozycję, rozmiar, czas, zachowanie oraz treść i wybierz
-   **Zapisz popup**.
-4. Po połączeniu z HA pojawi się encja `select` z listą wzorów zapisanych na tym
-   komputerze. Akcja **Wybierz opcję** tylko zmienia aktywny wzór. Do wyświetlenia
-   karty dodaj osobną akcję **HA Windows Bridge: Wyświetl zapisany popup**
-   (`ha_windows_bridge.show_saved_overlay`).
-
-Przykład, w którym zapisany wygląd pozostaje bez zmian, a tekst i postęp pochodzą z
-encji Home Assistant:
+Przykład statusu baterii:
 
 ```yaml
-action: ha_windows_bridge.show_saved_overlay
+action: ha_windows_bridge.show_overlay
+target:
+  entity_id: notify.pc_windows_overlay
 data:
-  template_entity: select.pc_windows_saved_popup
-  title: Stan baterii
+  title: Bateria
   message_entity: sensor.laptop_battery
   progress_entity: sensor.laptop_battery
+  icon: mdi:battery
+  layout: status
 ```
 
-W edytorze wizualnym tej akcji można bez YAML wybrać encje tytułu i
-wartości/wiadomości, encję postępu, czas, odtwarzacz `media_player`, aktualny obraz z
-encji `camera` lub `image`, a także adres obrazu. Wygląd nadal pochodzi z projektu
-zapisanego w aplikacji Windows.
-
-Pole `template_id` jest opcjonalne. Bez niego używany jest wzór aktualnie wybrany w
-encji `select`. Możesz też wskazać encję lub jej atrybut jako źródło tytułu, wiadomości,
-postępu i czasu. Dzięki temu rozbudowana konfiguracja wizualna pozostaje w aplikacji,
-a automatyzacja HA zawiera tylko źródła danych.
-
-Poniższa akcja `show_overlay` pozostaje dostępna jako tryb zaawansowany i dla zgodności
-z istniejącymi automatyzacjami.
+Treść i wygląd zapisujesz razem z automatyzacją w Home Assistant. Nie ma osobnego
+katalogu szablonów w aplikacji Windows. Wybrana encja dostarcza bieżący stan przy
+wywołaniu akcji; do kolejnych zmian użyj `update_overlay` z tym samym `notification_id`.
 
 Po włączeniu nakładki użyj akcji `ha_windows_bridge.show_overlay`. Najprostsza komenda
 wyświetlająca aktualne multimedia z prawdziwym czasem i postępem utworu:
@@ -162,11 +150,8 @@ width: 520
 height: 220
 ```
 
-Pole **Efekt tła** pozwala wybrać jednolitą powierzchnię, natywny Windows Desktop
-Acrylic albo warstwowy efekt **Liquid Glass**. Liquid Glass przechwytuje pulpit przez
-DXGI Desktop Duplication i automatycznie ogranicza częstotliwość odświeżania, gdy obraz
-się nie zmienia. Przy zdalnym pulpicie, błędach sterownika lub słabszym sprzęcie używany
-jest bezpieczny tryb zgodności. Pole **Odstęp od krawędzi** odsuwa widoczną kartę w głąb
+Pole **Efekt tła** pozwala wybrać jednolitą powierzchnię, standardowe rozmycie
+**Acrylic** albo **Liquid Glass**. Pole **Odstęp od krawędzi** odsuwa kartę w głąb
 ekranu. Ikonę wybiera się z biblioteki MDI Home Assistant.
 
 Tryb automatyczny dobiera układ kompaktowy, standardowy, multimedialny albo kamerę.
@@ -221,10 +206,10 @@ przez `remove_overlay`, a całą kolejkę wyczyścisz przez `clear_overlay`.
 
 ## Testowanie lokalne przed publikacją
 
-Zmiany można sprawdzać bez commita, taga i GitHuba. W zakładce **Funkcje → Nakładka**
-włącz wiadomości ekranowe i użyj projektanta popupów. Podgląd aktualizuje się na żywo,
-a po jego wyłączeniu nakładka znika. Zapisane projekty można selektywnie importować i
-eksportować jako JSON, bez przenoszenia całej konfiguracji programu.
+Zmiany można sprawdzać bez publikowania na GitHubie. W zakładce **Funkcje → Nakładka**
+włącz wiadomości ekranowe, wybierz przykład i kliknij **Pokaż przykład**. Dostępne są
+wiadomości, statusy, małe wskaźniki, kamera, Media Player oraz oba efekty rozmycia.
+Przykłady używają danych demonstracyjnych i nie wymagają połączenia z Home Assistant.
 
 Uruchomienie z kodu źródłowego:
 
@@ -274,8 +259,6 @@ data:
 
 Zastąp `notify.windows_pc_overlay` encją utworzoną przez integrację. Token jest
 szyfrowany przez Windows DPAPI i nie trafia do pliku konfiguracji ani eksportu.
-Bezpośredni kanał synchronizuje również katalog zapisanych popupów i encję wyboru;
-nie wymaga do tego MQTT.
 
 Ten kanał obsługuje obecnie nakładki i powiadomienia. Telemetria oraz sterowanie Windows
 pozostają dostępne przez MQTT; oba połączenia mogą działać równolegle.

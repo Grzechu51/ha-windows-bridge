@@ -23,11 +23,6 @@
       "media_player": {
         "name": "Media Player"
       }
-    },
-    "select": {
-      "overlay_template": {
-        "name": "Zapisany popup"
-      }
     }
   },
   "selector": {
@@ -69,41 +64,18 @@
     }
   },
   "services": {
-    "show_saved_overlay": {
-      "name": "Wyświetl zapisany popup",
-      "description": "Wyświetla projekt wybrany w encji Zapisany popup i wypełnia go wskazanymi niżej encjami. Akcja Wybierz opcję tylko zmienia aktywny projekt.",
-      "fields": {
-        "template_entity": {"name": "Lista popupów komputera", "description": "Wybierz encję Zapisany popup należącą do docelowego komputera."},
-        "template_id": {"name": "ID szablonu", "description": "Opcjonalne zaawansowane zastąpienie aktualnie wybranego popupu."},
-        "title": {"name": "Własny tytuł"},
-        "title_entity": {"name": "Encja źródłowa tytułu"},
-        "title_attribute": {"name": "Atrybut źródłowy tytułu"},
-        "message": {"name": "Własna wiadomość"},
-        "message_entity": {"name": "Encja wartości lub wiadomości", "description": "Używa stanu encji albo wskazanego atrybutu jako głównej wartości lub wiadomości popupu."},
-        "message_attribute": {"name": "Atrybut źródłowy wiadomości"},
-        "image_entity": {"name": "Kamera lub encja obrazu", "description": "Pobiera bieżącą klatkę z encji camera albo image."},
-        "image_url": {"name": "Adres obrazu", "description": "Opcjonalny adres HTTP(S) albo data URI obrazu."},
-        "notification_id": {"name": "ID wiadomości"},
-        "progress_entity": {"name": "Encja źródłowa postępu"},
-        "progress_attribute": {"name": "Atrybut źródłowy postępu"},
-        "progress_min": {"name": "Minimum źródła"},
-        "progress_max": {"name": "Maksimum źródła"},
-        "duration_entity": {"name": "Encja czasu wyświetlania"},
-        "duration_attribute": {"name": "Atrybut czasu wyświetlania"},
-        "media_player_entity": {"name": "Odtwarzacz Home Assistant"}
-      },
-      "sections": {
-        "content": {"name": "Treść dynamiczna"},
-        "media_sources": {"name": "Kamera, obraz i multimedia"},
-        "values": {"name": "Wartości z encji"}
-      }
-    },
     "show_overlay": {
       "name": "Wyświetl nakładkę Windows",
       "description": "Wyświetla konfigurowalną kartę z wiadomością lub informacjami o odtwarzanych multimediach.",
       "fields": {
         "title": {"name": "Tytuł", "description": "Krótki nagłówek wyświetlany u góry karty."},
         "message": {"name": "Wiadomość", "description": "Główna treść karty. Może pozostać pusta po wybraniu źródła multimediów."},
+        "title_entity": {"name": "Encja tytułu"},
+        "title_attribute": {"name": "Atrybut tytułu"},
+        "message_entity": {"name": "Encja wiadomości", "description": "Używa stanu encji lub wybranego atrybutu jako wiadomości."},
+        "message_attribute": {"name": "Atrybut wiadomości"},
+        "image_entity": {"name": "Kamera lub encja obrazu", "description": "Pobiera bieżącą klatkę z encji camera albo image."},
+        "image_url": {"name": "Adres obrazu", "description": "Używa adresu HTTP(S) albo data URI obrazu."},
         "media": {"name": "Bieżące multimedia Windows", "description": "Używa aktywnej sesji multimediów na docelowym komputerze."},
         "media_player_entity": {"name": "Odtwarzacz Home Assistant", "description": "Pobiera tytuł, wykonawcę, okładkę i postęp z wybranego odtwarzacza."},
         "layout": {"name": "Układ treści", "description": "Tryb automatyczny dobiera układ do treści. Status wyróżnia krótką wartość, a Znacznik tworzy małą kapsułkę z ikoną, obrazem lub wartością."},
@@ -138,6 +110,7 @@
       },
       "sections": {
         "content": {"name": "Treść"},
+        "sources": {"name": "Encje i obrazy"},
         "appearance": {"name": "Wygląd"},
         "sizing": {"name": "Rozmiar"},
         "progress_options": {"name": "Postęp"},
@@ -152,6 +125,12 @@
         "notification_id": {"name": "ID wiadomości"},
         "title": {"name": "Tytuł"},
         "message": {"name": "Wiadomość"},
+        "title_entity": {"name": "Encja tytułu"},
+        "title_attribute": {"name": "Atrybut tytułu"},
+        "message_entity": {"name": "Encja wiadomości"},
+        "message_attribute": {"name": "Atrybut wiadomości"},
+        "image_entity": {"name": "Kamera lub encja obrazu"},
+        "image_url": {"name": "Adres obrazu"},
         "media": {"name": "Bieżące multimedia Windows"},
         "media_player_entity": {"name": "Odtwarzacz Home Assistant"},
         "layout": {"name": "Układ treści"},
