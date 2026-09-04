@@ -226,7 +226,7 @@ class WindowsAudioService:
             except Exception:
                 return False
 
-    def list_audio_applications(self) -> list[AudioApplication]:
+    def list_audio_applications(self, *, include_processes=()) -> list[AudioApplication]:
         found: dict[str, AudioApplication] = {}
         with com_scope():
             for session in AudioUtilities.GetAllSessions():
@@ -237,7 +237,10 @@ class WindowsAudioService:
                     process_name = process.name()
                     key = process_name.lower()
                     state = self._read_session_state(session)
-                    executable = process.exe()
+                    try:
+                        executable = process.exe()
+                    except (psutil.Error, OSError):
+                        executable = ""
                     display_name = Path(executable).stem or process_name.removesuffix(".exe")
                     if key not in found and state is not None:
                         found[key] = AudioApplication(
@@ -249,6 +252,19 @@ class WindowsAudioService:
                         )
                 except (psutil.Error, OSError):
                     continue
+        # Configured programs may be running without an audio session yet. Resolve
+        # only those names, so icons do not require playing sound or remote access.
+        missing = {name.casefold() for name in include_processes} - found.keys()
+        if missing:
+            for process in psutil.process_iter(["name", "exe"], ad_value=None):
+                info = process.info
+                name, executable = info.get("name") or "", info.get("exe") or ""
+                key = name.casefold()
+                if key in missing and executable:
+                    found[key] = AudioApplication(name, Path(executable).stem, executable)
+                    missing.remove(key)
+                    if not missing:
+                        break
         return sorted(found.values(), key=lambda app: app.display_name.lower())
 
     def session_snapshot(self, process_names: list[str]) -> dict[str, AudioSessionSnapshot]:

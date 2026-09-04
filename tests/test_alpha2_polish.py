@@ -80,7 +80,7 @@ def test_application_discovery_preserves_permissions_icons_and_alignment(tmp_pat
     qt = qt_app()
     config = AppConfig(auto_connect=False, apps=[AudioAppConfig("chrome.exe", "Chrome", "chrome", True)])
     application = runtime(config)
-    application.audio = SimpleNamespace(list_audio_applications=lambda: [])
+    application.audio = SimpleNamespace(list_audio_applications=lambda **_: [])
     window = DesktopWindow(application)
     application.request_inventory = lambda _kind: False
     try:
@@ -143,7 +143,7 @@ def test_resource_cpu_is_machine_normalized_and_sampling_is_cached():
 def test_inventory_coalesces_requests_and_works_without_mqtt():
     app = runtime(AppConfig(auto_connect=False))
     entered, release, received = threading.Event(), threading.Event(), threading.Event()
-    def scan():
+    def scan(**_kwargs):
         entered.set()
         assert release.wait(2)
         return [AudioApplication("a.exe", "A")]

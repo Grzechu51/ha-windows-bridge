@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 
 from ..config import AppConfig, AudioAppConfig, TrackedDeviceConfig, slugify
 from ..core.configuration import ConfigurationStore
-from ..ui_components import AppCard, SettingRow
+from ..ui_components import AppCard, SettingControlRow, SettingRow
 from .inputs import SettingsWheelGuard
 from .navigation import PageStack
 
@@ -341,8 +341,10 @@ class DesktopWindow(QMainWindow):
                 self._add_card(AudioAppConfig(item.process_name, item.display_name, slug, False, executable_path=item.executable_path))
                 card = self._cards[-1]
                 existing[key] = card
-            elif not card.config.executable_path and item.executable_path:
-                card.set_executable_icon(item.executable_path)
+            elif item.executable_path:
+                # Refresh the displayed icon after app upgrades. Never silently
+                # redirect a previously authorised remote-launch executable.
+                card.set_executable_icon(item.executable_path, update_config=not card.config.allow_remote_start)
             card.set_volume(item.volume)
             card.set_muted(item.muted)
         for key, card in existing.items():
@@ -372,10 +374,10 @@ class DesktopWindow(QMainWindow):
         for label, value in (("Ciemny", "dark"), ("Jasny", "light"), ("Systemowy", "system")):
             self.theme.addItem(label, value)
         self.theme.setCurrentIndex(max(0, self.theme.findData(self.draft.theme)))
-        theme_form = QFormLayout()
-        theme_form.addRow("Motyw", self.theme)
+        self.theme.setFixedWidth(220)
+        self.theme_row = SettingControlRow("Motyw", self.theme)
         self.theme.setAccessibleName("Motyw")
-        content.addLayout(theme_form)
+        content.addWidget(self.theme_row)
         card, inner = self._card("Konfiguracja", "Eksport nie zawiera haseł ani tokenów.")
         inner.addWidget(self._button("Eksportuj ustawienia…", self._export_settings))
         inner.addWidget(self._button("Importuj ustawienia…", self._import_settings))

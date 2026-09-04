@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QProgressBar, QToolBu
 
 from ..ui.motion import MotionSystem
 from ..windows_effects import NativeBackdrop
+from .media_style import artwork_rect, media_palette, transition_bounds
 
 ACCENTS = {"default": "#b5c6cd", "success": "#62d6a1", "warning": "#efc261", "error": "#fa8798"}
 
@@ -38,6 +39,7 @@ class NotificationWindow(QFrame):
         self._target = QPoint()
         self._options = {}
         self._media_image = QPixmap()
+        self._media_palette = media_palette(None)
         self._width_limit = 1200
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(16, 14, 16, 12)
@@ -101,6 +103,8 @@ class NotificationWindow(QFrame):
                            f"QProgressBar {{ border: none; background: rgba(160,180,188,65); }} QProgressBar::chunk {{ background: {accent}; }}"
                            "QToolButton { color: white; background: transparent; border: none; padding: 5px; }")
         self.title.setStyleSheet("font-size: 12pt; font-weight: 600;")
+        self.title.setMaximumWidth(16777215)
+        self.message.setMaximumWidth(16777215)
         self.message.setStyleSheet("color: #c3cccf; font-size: 10pt;")
         self.source.setStyleSheet("font-size: 9pt; color: #d8e0e2;")
         self.media_time.setStyleSheet("font-size: 8pt; color: #c3cccf;")
@@ -164,6 +168,30 @@ class NotificationWindow(QFrame):
                         row += 1
             except (ValueError, IndexError):
                 pass
+        if media:
+            self._media_palette = media_palette(self._media_image)
+            surface, primary, secondary = self._media_palette
+            self.title.setStyleSheet(f"color: {primary.name()}; font-size: 15px; font-weight: 700;")
+            self.source.setStyleSheet(f"color: {primary.name()}; font-size: 12px; font-weight: 600;")
+            self.message.setStyleSheet(f"color: {secondary.name()}; font-size: 12px;")
+            self.media_time.setStyleSheet(f"color: {secondary.name()}; font-size: 11px;")
+            track = "rgba(0,0,0,58)" if surface.lightness() >= 145 else "rgba(255,255,255,54)"
+            for bar in (self.progress, self.lifetime):
+                bar.setStyleSheet(f"QProgressBar {{ border: none; background: {track}; }} QProgressBar::chunk {{ background: {primary.name()}; }}")
+            self.close_button.setStyleSheet(f"color: {primary.name()};")
+            if icon:
+                self.icon.setPixmap(qta.icon(icon_name, color=primary.name()).pixmap(24, 24))
+            for button, name in zip(self._media_buttons, ("skip-previous", "pause" if options["media_playing"] else "play", "skip-next"), strict=True):
+                button.setIcon(qta.icon("mdi6." + name, color=primary.name()))
+            if not self._media_image.isNull():
+                cover = artwork_rect(QSize(self.width(), 180), self._media_image.size())
+                start, end = transition_bounds(self.width(), cover)
+                text_width = max(120, round(start + (end - start) * .35) - 32)
+                self.title.setMaximumWidth(text_width)
+                self.message.setMaximumWidth(text_width)
+        else:
+            for widget in (self.progress, self.lifetime, self.close_button):
+                widget.setStyleSheet("")
         if not badge and options["qr"]:
             import qrcode
             code = qrcode.make(options["qr"]).convert("RGBA")
@@ -195,7 +223,7 @@ class NotificationWindow(QFrame):
         if options["show_lifetime"] and not options["pinned"] and not badge:
             self._grid.addWidget(self.lifetime, row, 0, 1, 5)
             self.lifetime.show()
-        self.setMinimumHeight(174 if media else 0)
+        self.setMinimumHeight(180 if media else 0)
         self.setMaximumHeight(16777215)
         self._grid.activate()
         self.adjustSize()
@@ -226,22 +254,26 @@ class NotificationWindow(QFrame):
         path = QPainterPath()
         path.addRoundedRect(bounds, 14, 14)
         painter.setClipPath(path)
-        color = QColor(24, 28, 31)
+        media = self._options.get("layout") == "media"
+        color = QColor(self._media_palette[0]) if media else QColor(24, 28, 31)
         color.setAlphaF(max(0.0, min(1.0, self._options.get("opacity", 0.94))))
         painter.fillPath(path, color)
         if not self._media_image.isNull():
             image = self._media_image
-            scale = max(self.width() / image.width(), self.height() / image.height())
-            width, height = image.width() * scale, image.height() * scale
-            painter.drawPixmap(QRectF(self.width() - width, (self.height() - height) / 2, width, height), image, QRectF(image.rect()))
-            shade = QLinearGradient(0, 0, self.width(), 0)
-            shade.setColorAt(0, QColor(16, 21, 26, 246))
-            shade.setColorAt(0.48, QColor(16, 21, 26, 208))
-            shade.setColorAt(1, QColor(16, 21, 26, 60))
+            cover = artwork_rect(self.size(), image.size())
+            painter.setOpacity(self._options.get("opacity", .94))
+            painter.drawPixmap(cover, image, QRectF(image.rect()))
+            start, end = transition_bounds(self.width(), cover)
+            shade = QLinearGradient(start, 0, end, 0)
+            for stop, alpha in ((0, 255), (.18, 250), (.45, 205), (.72, 105), (1, 0)):
+                tone = QColor(self._media_palette[0])
+                tone.setAlpha(alpha)
+                shade.setColorAt(stop, tone)
             painter.fillPath(path, shade)
+            painter.setOpacity(1)
         if self._options.get("layout") != "badge":
-            accent = QColor(ACCENTS.get(self._options.get("preset"), ACCENTS["default"]))
-            accent.setAlpha(75)
+            accent = QColor(self._media_palette[1]) if media else QColor(ACCENTS.get(self._options.get("preset"), ACCENTS["default"]))
+            accent.setAlpha(88 if media else 75)
             painter.setPen(QPen(accent, 1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import qtawesome as qta
 from PySide6.QtCore import (
     Property,
+    QEvent,
     QFileInfo,
     QPoint,
     QPropertyAnimation,
@@ -22,7 +23,6 @@ from PySide6.QtGui import (
     QPaintEvent,
     QPen,
     QPixmap,
-    qAlpha,
 )
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -298,6 +298,8 @@ class AppCard(QFrame):
         self._mute_available = False
 
         layout = QGridLayout(self)
+        self._icon_key = None
+        self._icon_path = config.executable_path
         layout.setContentsMargins(14, 10, 12, 10)
         layout.setHorizontalSpacing(12)
         layout.setVerticalSpacing(4)
@@ -405,26 +407,41 @@ class AppCard(QFrame):
         position.setX(position.x() - self.options_menu.sizeHint().width())
         self.options_menu.exec(position)
 
-    def set_executable_icon(self, executable_path: str) -> None:
-        self.config.executable_path = executable_path.strip()
-        file_info = QFileInfo(self.config.executable_path)
-        if self.config.executable_path and file_info.exists():
-            pixmap = QFileIconProvider().icon(file_info).pixmap(64, 64)
+    def set_executable_icon(self, executable_path: str, *, update_config=True) -> None:
+        self._icon_path = executable_path.strip()
+        if update_config:
+            self.config.executable_path = self._icon_path
+        file_info = QFileInfo(self._icon_path)
+        ratio = self.devicePixelRatioF()
+        key = (self._icon_path.casefold(), file_info.lastModified().toMSecsSinceEpoch(), file_info.size(), ratio)
+        if key == self._icon_key and not self.avatar.pixmap().isNull():
+            return
+        if self._icon_path and file_info.exists():
+            pixmap = QFileIconProvider().icon(file_info).pixmap(256, 256)
             if pixmap.isNull():
-                pixmap = self._extract_windows_icon(self.config.executable_path)
+                pixmap = self._extract_windows_icon(self._icon_path)
             if not pixmap.isNull():
+                pixmap.setDevicePixelRatio(1)
                 pixmap = self._trim_transparent(pixmap)
                 pixmap = pixmap.scaled(
-                    46,
-                    46,
+                    round(46 * ratio),
+                    round(46 * ratio),
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
+                pixmap.setDevicePixelRatio(ratio)
+                self._icon_key = key
                 self.avatar.setText("")
                 self.avatar.setPixmap(pixmap)
                 self.avatar.setStyleSheet("background: transparent; border: none;")
                 return
         self._show_initials()
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() == QEvent.Type.DevicePixelRatioChange and hasattr(self, "_icon_path"):
+            self.set_executable_icon(self._icon_path, update_config=False)
+        return result
 
     def _remote_start_toggled(self, checked: bool) -> None:
         if checked and not QFileInfo(self.config.executable_path).exists():
@@ -461,26 +478,19 @@ class AppCard(QFrame):
 
     @staticmethod
     def _trim_transparent(pixmap: QPixmap) -> QPixmap:
-        image = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
-        left, top = image.width(), image.height()
-        right = bottom = -1
-        for y in range(image.height()):
-            for x in range(image.width()):
-                if qAlpha(image.pixel(x, y)) <= 8:
-                    continue
-                left = min(left, x)
-                top = min(top, y)
-                right = max(right, x)
-                bottom = max(bottom, y)
-        if right < left or bottom < top:
+        # Native Pillow operations avoid a Python loop over 65k source pixels.
+        from PIL import Image
+        image = pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+        alpha = Image.frombytes("RGBA", (image.width(), image.height()), bytes(image.constBits()),
+                                "raw", "RGBA", image.bytesPerLine()).getchannel("A")
+        bounds = alpha.point([0] * 9 + [255] * 247).getbbox()
+        if bounds is None:
             return pixmap
+        left, top, right, bottom = bounds
         padding = max(1, round(max(right - left, bottom - top) * 0.04))
-        crop = QRect(
-            max(0, left - padding),
-            max(0, top - padding),
-            min(image.width() - left + padding, right - left + 1 + padding * 2),
-            min(image.height() - top + padding, bottom - top + 1 + padding * 2),
-        )
+        left, top = max(0, left - padding), max(0, top - padding)
+        right, bottom = min(image.width(), right + padding), min(image.height(), bottom + padding)
+        crop = QRect(left, top, right - left, bottom - top)
         return QPixmap.fromImage(image.copy(crop))
 
     def edit(self) -> None:
@@ -555,8 +565,8 @@ class AppCard(QFrame):
 
     def _apply_enabled_state(self, enabled: bool) -> None:
         self.setProperty("featureEnabled", enabled)
-        self.avatar_effect.setOpacity(1.0 if enabled else 0.28)
-        for widget in (self.avatar, self.name_label, self.process_label, self.percent_label):
+        self.avatar_effect.setOpacity(1.0 if enabled else 0.72)
+        for widget in (self.name_label, self.process_label, self.percent_label):
             widget.setEnabled(enabled)
         self.slider.setEnabled(enabled and self._volume_available)
         self.mute_button.setEnabled(enabled and self._mute_available)
@@ -891,33 +901,46 @@ class AudioOutputCard(QFrame):
         self.style().polish(self)
 
 
-class SettingRow(QFrame):
-    def __init__(self, title: str, description: str, parent: QWidget | None = None):
+class SettingControlRow(QFrame):
+    """Shared geometry for a setting label and a right-aligned control."""
+
+    def __init__(self, title: str, control: QWidget, description: str = "", parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("settingRow")
+        self.setMinimumHeight(68)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
         text = QVBoxLayout()
+        text.setContentsMargins(0, 0, 0, 0)
         text.setSpacing(4)
         self.title_label = QLabel(title)
         self.title_label.setObjectName("settingTitle")
+        self.title_label.setWordWrap(True)
+        self.title_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.title_label.setBuddy(control)
         self.description_label = QLabel(description)
         self.description_label.setObjectName("settingDescription")
         self.description_label.setWordWrap(True)
         text.addWidget(self.title_label)
         text.addWidget(self.description_label)
+        self.description_label.setVisible(bool(description.strip()))
         layout.addLayout(text, 1)
-        self.switch = ToggleSwitch()
+        layout.addWidget(control, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+
+class SettingRow(SettingControlRow):
+    def __init__(self, title: str, description: str, parent: QWidget | None = None):
+        switch = ToggleSwitch()
+        super().__init__(title, switch, description, parent)
+        self.switch = switch
         self.switch.setAccessibleName(title)
         self.switch.setAccessibleDescription(description)
         self.switch.toggled.connect(self._apply_enabled_style)
-        layout.addWidget(self.switch)
         self._apply_enabled_style(False)
 
     def _apply_enabled_style(self, enabled: bool) -> None:
         self.setProperty("featureEnabled", enabled)
-        self.title_label.setEnabled(enabled)
-        self.description_label.setEnabled(enabled)
+        # Off is a valid setting, not a disabled/unavailable control.
         self.style().unpolish(self)
         self.style().polish(self)
 

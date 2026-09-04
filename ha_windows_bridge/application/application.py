@@ -171,7 +171,7 @@ class Application:
         def query():
             try:
                 if kind == "applications":
-                    items = self.audio.list_audio_applications()
+                    items = self.audio.list_audio_applications(include_processes=[app.process_name for app in self.config.apps])
                 else:
                     items = self.system.list_disk_volumes() if kind == "disks" else self.system.list_pnp_devices()
                 self.events.emit("inventory." + kind, items)

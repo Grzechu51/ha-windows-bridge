@@ -26,7 +26,7 @@ def runtime(config=None):
     return Application(config or AppConfig(mqtt=MqttConfig(host="broker"), control_master_volume=False),
                        SimpleNamespace(save=lambda config: None),
                        SimpleNamespace(set_enabled=lambda enabled: None),
-                       object(), object(), SimpleNamespace(reopen=lambda: None, close=lambda: None), object(),
+                       SimpleNamespace(list_audio_applications=lambda **_: []), object(), SimpleNamespace(reopen=lambda: None, close=lambda: None), object(),
                        mqtt_factory=FakeGateway, events=EventBus())
 
 
