@@ -1,6 +1,6 @@
 # Walidacja 2.0.0-alpha.2
 
-- Pełny zestaw pytest: 213 passed.
+- Pełny zestaw pytest: 214 passed, w tym regresja kolejności pól manifestu hassfest.
 - Dodatkowe testy skalowania 125%, 150%, 200%: po 13 passed.
 - Nowe regresje: fokus przełącznika, rzeczywiście narysowane tło odtwarzacza, grubość pasków, czas utworu, powrót do małej karty, ikony EXE, wyrównanie kontrolek, deduplikacja wykrytych programów, bezpieczeństwo nowych wpisów, lokalne audio niezależne od MQTT, pomiary CPU/RAM i scalanie równoczesnych zapytań.
 - Ruff i compileall: PASS.

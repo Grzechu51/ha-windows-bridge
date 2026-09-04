@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import sys
 import threading
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 from PySide6.QtCore import QEvent, Qt
@@ -21,6 +23,12 @@ from ha_windows_bridge.overlays.presentation import NotificationWindow
 from ha_windows_bridge.ui.shell import DesktopWindow
 from ha_windows_bridge.ui_components import ToggleSwitch
 from ha_windows_bridge.windows.resources import ProcessResources
+
+
+def test_ha_manifest_has_hassfest_key_order():
+    manifest = json.loads((Path(__file__).parents[1] / "custom_components/ha_windows_bridge/manifest.json").read_text(encoding="utf-8"))
+    assert list(manifest)[:2] == ["domain", "name"]
+    assert list(manifest)[2:] == sorted(list(manifest)[2:])
 
 
 def test_toggle_mouse_focus_has_no_second_outline_but_keyboard_keeps_focus():
