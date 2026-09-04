@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import platform
-import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +9,7 @@ from typing import Any
 
 from . import __version__
 from .config import MAX_CONFIG_BYTES, AppConfig
+from .security import redact_data, redact_text
 
 EXPORT_FORMAT = "ha-windows-bridge-config"
 MAX_DIAGNOSTIC_LOG_BYTES = 512 * 1024
@@ -21,7 +21,7 @@ def export_configuration(path: Path, config: AppConfig) -> None:
         "version": 1,
         "exported_at": datetime.now(UTC).isoformat(),
         "config": config.to_dict(),
-        "notice": "MQTT password is intentionally not included.",
+        "notice": "MQTT password and Home Assistant token are intentionally not included.",
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -53,15 +53,12 @@ def _redact(text: str, config: AppConfig) -> str:
         config.mqtt.host: "<mqtt-host>",
         config.mqtt.username: "<mqtt-user>",
         config.mqtt.base_topic: "<base-topic>",
+        config.home_assistant.url: "<ha-url>",
     }
     for value, replacement in replacements.items():
         if value:
             text = text.replace(value, replacement)
-    return re.sub(
-        r"(?i)(password|token|authorization|secret)\s*[:=]\s*\S+",
-        r"\1=<redacted>",
-        text,
-    )
+    return redact_text(text, (config.mqtt.password, config.home_assistant.token))
 
 
 def build_diagnostic_report(
@@ -73,9 +70,15 @@ def build_diagnostic_report(
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     log_tail: list[str] = []
-    if log_path and log_path.is_file() and log_path.stat().st_size <= MAX_DIAGNOSTIC_LOG_BYTES:
+    if log_path:
         try:
-            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            with log_path.open("rb") as stream:
+                size = stream.seek(0, 2)
+                start = max(0, size - MAX_DIAGNOSTIC_LOG_BYTES)
+                stream.seek(start)
+                lines = stream.read(MAX_DIAGNOSTIC_LOG_BYTES).decode("utf-8", errors="replace").splitlines()
+                if start:
+                    lines = lines[1:]
             log_tail = [_redact(line, config) for line in lines[-100:]]
         except OSError:
             pass
@@ -85,6 +88,7 @@ def build_diagnostic_report(
         safe_mqtt["host"] = "<configured>" if config.mqtt.host else ""
         safe_mqtt["username"] = "<configured>" if config.mqtt.username else ""
         safe_mqtt["base_topic"] = "<configured>" if config.mqtt.base_topic else ""
+    safe_config["home_assistant"]["url"] = "<configured>" if config.home_assistant.url else ""
 
     report: dict[str, Any] = {
         "format": "ha-windows-bridge-diagnostics",
@@ -105,7 +109,16 @@ def build_diagnostic_report(
     }
     if extra:
         report["checks"] = extra
-    return report
+    report = redact_data(report, (config.mqtt.password, config.home_assistant.token))
+    return _redact_report(report, config)
+
+
+def _redact_report(value: Any, config: AppConfig) -> Any:
+    if isinstance(value, dict):
+        return {_redact(str(key), config): _redact_report(item, config) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_report(item, config) for item in value]
+    return _redact(value, config) if isinstance(value, str) else value
 
 
 def save_diagnostic_report(path: Path, report: dict[str, Any]) -> None:

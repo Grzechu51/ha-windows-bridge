@@ -1,12 +1,19 @@
 {
   "config": {
+    "error": {"invalid_name": "Name cannot be empty."},
     "abort": {
+      "reconfigure_successful": "The device has been updated.",
       "already_configured": "This device is already configured.",
       "discovery_only": "HA Windows Bridge is discovered automatically after the Windows application connects to MQTT.",
       "invalid_discovery": "The MQTT discovery message is invalid.",
       "no_entities": "No entities are enabled in the Windows application."
     },
     "step": {
+      "reconfigure": {
+        "title": "Rename direct overlay",
+        "description": "Changes the display name only. Device and entity IDs stay unchanged.",
+        "data": {"name": "Computer name"}
+      },
       "confirm": {
         "title": "Add {name}",
         "description": "Do you want to add **{name}**? All enabled controls, switches, sensors and the Media Player will appear in one HA Windows Bridge integration."

@@ -320,6 +320,14 @@ class DesktopDuplicationCapture:
                 camera.release()
         self._cameras.clear()
 
+    def invalidate(self) -> None:
+        """Re-enumerate outputs after a display topology/DPI change."""
+        self.release()
+        self._dxcam = None
+        self._outputs = None
+        self.disabled = False
+        self.last_error = ""
+
 
 def on_battery_power() -> bool:
     if sys.platform != "win32":

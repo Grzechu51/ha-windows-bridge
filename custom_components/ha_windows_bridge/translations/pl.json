@@ -1,12 +1,19 @@
 {
   "config": {
+    "error": {"invalid_name": "Nazwa nie może być pusta."},
     "abort": {
+      "reconfigure_successful": "Dane urządzenia zostały zaktualizowane.",
       "already_configured": "To urządzenie jest już skonfigurowane.",
       "discovery_only": "HA Windows Bridge zostanie wykryty automatycznie po połączeniu aplikacji Windows z MQTT.",
       "invalid_discovery": "Wiadomość wykrywania MQTT jest nieprawidłowa.",
       "no_entities": "W aplikacji Windows nie włączono żadnych encji."
     },
     "step": {
+      "reconfigure": {
+        "title": "Zmień nazwę nakładki bezpośredniej",
+        "description": "Zmienia tylko nazwę. Identyfikatory urządzenia i encji pozostają bez zmian.",
+        "data": {"name": "Nazwa komputera"}
+      },
       "confirm": {
         "title": "Dodaj {name}",
         "description": "Czy chcesz dodać komputer **{name}**? Wszystkie włączone regulatory, przełączniki, sensory i Media Player będą widoczne w jednej integracji HA Windows Bridge."

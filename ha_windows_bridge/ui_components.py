@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import qtawesome as qta
 from PySide6.QtCore import (
     Property,
-    QEasingCurve,
     QFileInfo,
     QPoint,
     QPropertyAnimation,
@@ -46,6 +46,8 @@ from PySide6.QtWidgets import (
 
 from .config import AudioAppConfig, slugify
 from .i18n import translate
+from .ui.motion import MotionSystem
+from .ui.theme import PALETTES
 
 
 class HelpButton(QToolButton):
@@ -78,12 +80,13 @@ class ToggleSwitch(QAbstractButton):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setCheckable(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedSize(46, 25)
         self._position = 0.0
         self._animation = QPropertyAnimation(self, b"knobPosition", self)
-        self._animation.setDuration(150)
-        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation.setDuration(MotionSystem.TOKENS["toggle"].duration)
+        self._animation.setEasingCurve(MotionSystem.TOKENS["toggle"].easing)
         self.toggled.connect(self._animate)
 
     def sizeHint(self) -> QSize:
@@ -100,6 +103,9 @@ class ToggleSwitch(QAbstractButton):
 
     def _animate(self, checked: bool) -> None:
         self._animation.stop()
+        if not MotionSystem.enabled():
+            self.set_knob_position(1.0 if checked else 0.0)
+            return
         self._animation.setStartValue(self._position)
         self._animation.setEndValue(1.0 if checked else 0.0)
         self._animation.start()
@@ -108,19 +114,15 @@ class ToggleSwitch(QAbstractButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         track = self.rect().adjusted(1, 2, -1, -2)
-        light = QApplication.instance().property("bridgeTheme") == "light"
+        palette = PALETTES["light" if QApplication.instance().property("bridgeTheme") == "light" else "dark"]
         if self.isChecked():
-            track_color = QColor("#287d57")
-            knob_color = QColor("#ffffff")
-            border_color = QColor("#246f50")
-        elif light:
-            track_color = QColor("#d7dee1")
-            knob_color = QColor("#64716c")
-            border_color = QColor("#95a19c")
+            track_color = QColor(palette.accent)
+            knob_color = QColor(palette.accent_text)
+            border_color = QColor(palette.accent)
         else:
-            track_color = QColor("#253238")
-            knob_color = QColor("#9aa7ac")
-            border_color = QColor("#4b5c62")
+            track_color = QColor(palette.field)
+            knob_color = QColor(palette.muted)
+            border_color = QColor(palette.muted)
         if not self.isEnabled():
             track_color.setAlpha(115)
             knob_color.setAlpha(115)
@@ -135,6 +137,10 @@ class ToggleSwitch(QAbstractButton):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(knob_color)
         painter.drawEllipse(int(x), int(track.top() + 2), int(diameter), int(diameter))
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(palette.accent), 1))
+            painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 12, 12)
         painter.end()
 
 
@@ -234,17 +240,32 @@ class TitleBar(QFrame):
 
 class NavButton(QPushButton):
     def __init__(self, icon: str, text: str, parent: QWidget | None = None):
-        super().__init__(f"{icon}    {text}", parent)
+        super().__init__(text, parent)
         self.nav_icon = icon
         self.nav_label = text
+        self._compact = False
         self.setObjectName("navButton")
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(54)
+        self.setIconSize(QSize(20, 20))
+        self.refresh_icon()
+
+    def refresh_icon(self) -> None:
+        names = {"⇄": "lan-connect", "▦": "apps", "✦": "tune-variant", "◷": "text-box-outline", "⚙": "cog-outline"}
+        theme = QApplication.instance().property("bridgeTheme") or "dark"
+        self.setIcon(qta.icon("mdi6." + names.get(self.nav_icon, "circle-outline"), color=PALETTES[theme].text))
 
     def set_language(self, language: str) -> None:
         self.nav_label = translate(self.nav_label, language)
-        self.setText(f"{self.nav_icon}    {self.nav_label}")
+        self.setText("" if self._compact else self.nav_label)
+        self.setAccessibleName(self.nav_label)
+        self.setToolTip(self.nav_label if self._compact else "")
+
+    def set_compact(self, compact: bool) -> None:
+        self._compact = compact
+        self.setText("" if compact else self.nav_label)
+        self.setToolTip(self.nav_label if compact else "")
 
 
 class AppCard(QFrame):
@@ -870,6 +891,8 @@ class SettingRow(QFrame):
         text.addWidget(self.description_label)
         layout.addLayout(text, 1)
         self.switch = ToggleSwitch()
+        self.switch.setAccessibleName(title)
+        self.switch.setAccessibleDescription(description)
         self.switch.toggled.connect(self._apply_enabled_style)
         layout.addWidget(self.switch)
         self._apply_enabled_style(False)

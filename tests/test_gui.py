@@ -30,6 +30,8 @@ from ha_windows_bridge.gui import MainWindow
 from ha_windows_bridge.overlay import OverlayCard, OverlayManager
 from ha_windows_bridge.system_monitor import PnpDevice
 from ha_windows_bridge.theme import style_for_theme
+from ha_windows_bridge.ui.motion import MotionSystem
+from ha_windows_bridge.ui.navigation import PageStack
 from ha_windows_bridge.ui_components import AppCard, HelpButton
 
 
@@ -114,6 +116,7 @@ def test_polished_pages_fit_minimum_window(language: str, theme: str) -> None:
         window.show()
         for page in range(window.pages.count()):
             window.pages.setCurrentIndex(page)
+            assert window.nav_buttons[page].isChecked()
             tabs = range(window.feature_tabs.count()) if page == window.FEATURES_PAGE else [0]
             for tab in tabs:
                 if page == window.FEATURES_PAGE:
@@ -127,6 +130,17 @@ def test_polished_pages_fit_minimum_window(language: str, theme: str) -> None:
                     else:
                         assert label.width() >= label.minimumSizeHint().width(), label.text()
                 save_layout_artifact(window, f"page-{page}-{tab}-{language}-{theme}")
+        window.pages.setCurrentIndex(window.CONNECTION_PAGE)
+        window.connection_tabs.setCurrentIndex(1)
+        QApplication.processEvents()
+        direct_form = window.connection_tabs.currentWidget()
+        assert window.direct_enabled.y() < 150
+        assert window.ha_device_id.geometry().bottom() < 450
+        assert direct_form.layout().alignment() & Qt.AlignmentFlag.AlignTop
+        for label in window.connection_tabs.currentWidget().findChildren(QLabel):
+            if label.isVisible() and label.text():
+                assert label.width() >= label.minimumSizeHint().width(), label.text()
+        save_layout_artifact(window, f"direct-{language}-{theme}")
     finally:
         close_window(window)
 
@@ -177,7 +191,7 @@ def test_automatic_grid_has_no_overlapping_sectors(layout: str) -> None:
 def test_gui_defaults_and_minimum_size() -> None:
     window = make_window()
     try:
-        assert window.minimumWidth() >= 980
+        assert window.minimumWidth() == 800
         assert "Integracja Windows" in window.title_bar.subtitle.text()
         assert window.pages.count() == 5
         assert len(window.nav_buttons) == 5
@@ -1148,14 +1162,14 @@ def test_overlay_animates_show_resize_and_hide_when_system_allows_it() -> None:
             },
         )
         assert manager._animation is not None
-        assert manager._animation.duration() == 760
-        assert manager._animation_offset_x == 14
-        assert manager._animation_offset_y > 0
-        assert manager._card.width() < round(420 * 0.7)
-        assert manager._window.windowOpacity() == 1.0
-        assert not manager._card.layout().isEnabled()
+        assert manager._animation.duration() == MotionSystem.TOKENS["popup_enter"].duration
+        assert manager._animation_offset_x == 12
+        assert manager._animation_offset_y == 0
+        assert manager._card.size() == QSize(420, 180)
+        assert manager._window.windowOpacity() == 0.0
+        assert manager._card.layout().isEnabled()
         initial_text_geometry = QRect(manager._label.geometry())
-        manager._animation.setCurrentTime(300)
+        manager._animation.setCurrentTime(110)
         assert manager._label.geometry() == initial_text_geometry
         assert wait_for_qt_condition(lambda: manager._animation is None)
         assert manager._card.size() == QSize(420, 180)
@@ -1168,18 +1182,18 @@ def test_overlay_animates_show_resize_and_hide_when_system_allows_it() -> None:
             {"action": "update", "id": "animation", "size_mode": "auto"},
         )
         assert manager._animation is not None
-        assert manager._animation.duration() == 500
+        assert manager._animation.duration() == MotionSystem.TOKENS["reposition"].duration
         assert wait_for_qt_condition(lambda: manager._animation is None)
         assert manager._card.height() < 120
 
         manager.hide(show_next=False)
         assert manager._animation is not None
-        assert manager._animation.duration() == 620
+        assert manager._animation.duration() == MotionSystem.TOKENS["popup_exit"].duration
         start_width = manager._card.width()
         assert wait_for_qt_condition(
             lambda: manager._window.isVisible()
             and 0.0 < manager._window.windowOpacity() < 1.0
-            and manager._card.width() < start_width,
+            and manager._card.width() == start_width,
             timeout_ms=450,
         )
         assert wait_for_qt_condition(manager._window.isHidden)
@@ -1210,3 +1224,67 @@ def test_device_filter_separates_active_and_inactive_devices() -> None:
         assert not window.devices_list.item(1).isHidden()
     finally:
         close_window(window)
+
+
+def test_reduced_motion_persists_and_tray_example_can_be_closed():
+    window = make_window(AppConfig(reduced_motion=True, auto_connect=False))
+    try:
+        assert window.reduced_motion_row.switch.isChecked()
+        assert window._config_from_form().reduced_motion
+        assert not MotionSystem.enabled()
+        assert window.reduced_motion_row.switch.accessibleName()
+        window._show_overlay_example()
+        assert window.overlay_preview_manager is not None
+        assert window.overlay_preview_manager._animation is None
+        window._close_overlay_example()
+        assert window.overlay_preview_manager is None
+    finally:
+        close_window(window)
+
+
+def test_page_transition_can_be_interrupted_without_live_effects(monkeypatch):
+    monkeypatch.setattr(MotionSystem, "enabled", staticmethod(lambda: True))
+    stack = PageStack()
+    for text in ("Connection", "Applications", "Settings"):
+        stack.addWidget(QLabel(text))
+    stack.resize(400, 250)
+    stack.show()
+    QApplication.processEvents()
+    try:
+        stack.setCurrentIndex(1)
+        first = stack._snapshot
+        assert first is not None
+        stack.setCurrentIndex(2)
+        assert stack._snapshot is not first
+        assert first.isHidden()
+        assert stack.currentWidget().graphicsEffect() is None
+        assert wait_for_qt_condition(lambda: stack._transition is None)
+        assert stack._snapshot is None
+        monkeypatch.setattr(MotionSystem, "enabled", staticmethod(lambda: False))
+        stack.setCurrentIndex(0)
+        assert stack._transition is None
+    finally:
+        stack._clear_transition()
+        stack.close()
+        stack.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_overlay_closes_screen_subscriptions_and_invalidates_capture(monkeypatch):
+    manager = OverlayManager(allow_fullscreen=True)
+    manager._animations_allowed = False
+    invalidated = []
+    monkeypatch.setattr(manager._desktop_capture, "invalidate", lambda: invalidated.append(True))
+    try:
+        manager.handle_message("Screen", "Geometry test", {"background_effect": "solid"})
+        assert manager._screen_connections
+        connections = len(manager._screen_connections)
+        manager._screen_configuration_changed()
+        assert invalidated == [True]
+        assert len(manager._screen_connections) == connections
+    finally:
+        manager.close()
+    assert manager._screen_connections == []
+    assert not manager._screen_signals_connected
+    assert manager._window is None
+    manager.close()

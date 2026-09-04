@@ -59,19 +59,18 @@ class BridgeMqttEntity:
         self._bridge_online = not bool(self._availability_topic)
         self._mqtt_connected = False
         self._attr_available = False
-        self._unsubscribers: list[Any] = []
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         self._mqtt_connected = mqtt.is_connected(self.hass)
-        self._unsubscribers.append(
+        self.async_on_remove(
             mqtt.async_subscribe_connection_status(
                 self.hass,
                 self._mqtt_connection_received,
             )
         )
         if self._availability_topic:
-            self._unsubscribers.append(
+            self.async_on_remove(
                 await mqtt.async_subscribe(
                     self.hass,
                     self._availability_topic,
@@ -80,7 +79,7 @@ class BridgeMqttEntity:
                 )
             )
         if self._state_topic:
-            self._unsubscribers.append(
+            self.async_on_remove(
                 await mqtt.async_subscribe(
                     self.hass,
                     self._state_topic,
@@ -90,12 +89,6 @@ class BridgeMqttEntity:
             )
 
         self._update_availability()
-
-    async def async_will_remove_from_hass(self) -> None:
-        for unsubscribe in self._unsubscribers:
-            unsubscribe()
-        self._unsubscribers.clear()
-        await super().async_will_remove_from_hass()
 
     @callback
     def _availability_received(self, message: ReceiveMessage) -> None:

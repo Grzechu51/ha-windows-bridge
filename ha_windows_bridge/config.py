@@ -170,6 +170,7 @@ class AppConfig:
     language: str = "pl"
     control_master_volume: bool = True
     theme: str = "dark"
+    reduced_motion: bool = False
     control_active_app: bool = False
     publish_initial_state: bool = True
     poll_interval: float = 0.5
@@ -225,7 +226,20 @@ class AppConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> AppConfig:
+        if not isinstance(data, dict):
+            raise ValueError("Konfiguracja musi być obiektem JSON.")
+        for key in ("mqtt", "home_assistant"):
+            if key in data and not isinstance(data[key], dict):
+                raise ValueError(f"Nieprawidłowa sekcja konfiguracji: {key}")
+        for key in ("apps", "tracked_devices", "disk_mounts"):
+            if key in data and not isinstance(data[key], list):
+                raise ValueError(f"Nieprawidłowa lista konfiguracji: {key}")
+        for key in ("apps", "tracked_devices"):
+            if any(not isinstance(item, dict) for item in data.get(key, [])):
+                raise ValueError(f"Nieprawidłowy element konfiguracji: {key}")
         stored_schema = int(data.get("schema_version", 1))
+        if stored_schema > CONFIG_SCHEMA_VERSION:
+            raise ValueError("Konfiguracja pochodzi z nowszej wersji aplikacji. Zaktualizuj aplikację.")
         reset_legacy_optional_features = stored_schema < 2
         legacy_system_stats = not reset_legacy_optional_features and bool(
             data.get("publish_system_stats", False)
@@ -249,6 +263,7 @@ class AppConfig:
             auto_connect=bool(data.get("auto_connect", True)),
             language=str(data.get("language", "pl")),
             theme=str(data.get("theme", "dark")),
+            reduced_motion=bool(data.get("reduced_motion", False)),
             control_master_volume=bool(data.get("control_master_volume", True)),
             control_active_app=(
                 False
@@ -452,7 +467,7 @@ class SettingsStore:
                     raise ValueError("plik konfiguracji jest zbyt duży")
                 data = json.loads(self.config_path.read_text(encoding="utf-8"))
                 config = AppConfig.from_dict(data)
-            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            except (OSError, ValueError, TypeError, OverflowError, json.JSONDecodeError) as exc:
                 raise RuntimeError(f"Nie można odczytać konfiguracji: {exc}") from exc
         config.mqtt.password = self.secrets.load()
         config.home_assistant.token = self.home_assistant_secrets.load()

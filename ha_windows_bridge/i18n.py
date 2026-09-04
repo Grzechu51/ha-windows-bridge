@@ -7,6 +7,10 @@ import logging
 # possible to retranslate existing widgets at runtime without rebuilding the
 # window or losing unsaved form values.
 PL_TO_EN: dict[str, str] = {
+    "Pokaż przykład nakładki": "Show overlay example",
+    "Zamknij przykład nakładki": "Close overlay example",
+    "Ogranicz animacje": "Reduce motion",
+    "Spokojniejszy interfejs i natychmiastowe przejścia nakładek.": "Calmer interface and instant overlay transitions.",
     "np. Gaming PC": "e.g. Gaming PC",
     "192.168.1.10 lub homeassistant.local": "192.168.1.10 or homeassistant.local",
     "Hasło MQTT": "MQTT password",
@@ -443,8 +447,15 @@ def active_language() -> str:
 class LocalizedFormatter(logging.Formatter):
     """Translate a log record at formatting time using the current UI language."""
 
+    _secrets: tuple[str, ...] = ()
+
+    def add_secrets(self, *secrets: str) -> None:
+        self._secrets = tuple(dict.fromkeys((*self._secrets, *(value for value in secrets if value))))
+
     def format(self, record: logging.LogRecord) -> str:
         localized = copy.copy(record)
         if isinstance(localized.msg, str):
             localized.msg = translate(localized.msg, active_language())
-        return super().format(localized)
+        from .security import redact_text
+
+        return redact_text(super().format(localized), self._secrets)

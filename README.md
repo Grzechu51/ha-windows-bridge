@@ -228,6 +228,11 @@ Skrypt uruchamia lint, pełny zestaw testów, buduje lokalną paczkę Windows i 
 Gotowy program znajduje się w `dist\HA Windows Bridge`. Żaden z tych kroków nie tworzy
 commita, taga ani wydania na GitHubie.
 
+Dokumentacja trwającej modernizacji i lokalnej paczki testowej:
+[audyt](docs/MODERNIZATION_AUDIT.md), [architektura](docs/MODERNIZATION_ARCHITECTURE.md),
+[wyniki i uruchomienie wersji lokalnej](docs/MODERNIZATION_FINAL_AUDIT.md).
+Nie jest to nowe wydanie na GitHubie.
+
 ## Bezpośredni kanał Home Assistant
 
 Nakładki mogą docierać lokalnym WebSocketem bez brokera MQTT:
@@ -237,7 +242,7 @@ Nakładki mogą docierać lokalnym WebSocketem bez brokera MQTT:
 2. W HA wybierz **Ustawienia → Urządzenia i usługi → Dodaj integrację → HA Windows
    Bridge**. Podaj nazwę komputera i dokładne ID widoczne na stronie połączenia aplikacji.
 3. W profilu użytkownika HA, na karcie **Bezpieczeństwo**, utwórz długoterminowy token.
-4. W aplikacji otwórz **Połączenie**, zaznacz **Włącz połączenie bezpośrednie**, wpisz
+4. W aplikacji otwórz **Połączenie → Home Assistant**, zaznacz **Włącz połączenie bezpośrednie**, wpisz
    adres HA z `http://` lub `https://`, wklej token i wybierz **Testuj połączenie**.
 5. Włącz **Funkcje → Nakładka → Wiadomości na ekranie**, zapisz ustawienia i uruchom
    usługę.
@@ -266,7 +271,7 @@ pozostają dostępne przez MQTT; oba połączenia mogą działać równolegle.
 ## Aktualizacje i diagnostyka
 
 - **Opublikuj encje ponownie** odświeża urządzenie w Home Assistant bez tworzenia kopii.
-- **Eksportuj** zapisuje ustawienia bez hasła MQTT.
+- **Eksportuj** zapisuje ustawienia bez hasła MQTT i tokenu Home Assistant.
 - **Raport diagnostyczny** usuwa dane logowania i dane połączenia.
 - **Wyczyść dane MQTT** usuwa zachowane wpisy utworzone przez aplikację.
 

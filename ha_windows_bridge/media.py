@@ -122,19 +122,37 @@ async def _read_artwork(reference: Any) -> MediaArtwork:
 class _AsyncRunner:
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
+        self._ready = threading.Event()
+        self._closing = threading.Event()
+        self._submission_lock = threading.Lock()
         self._thread = threading.Thread(
             target=self._run,
             name="windows-media-control",
             daemon=True,
         )
         self._thread.start()
+        self._ready.wait()
 
     def _run(self) -> None:
         asyncio.set_event_loop(self._loop)
-        self._loop.run_forever()
+        self._loop.call_soon(self._ready.set)
+        try:
+            self._loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(self._loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+            self._loop.close()
 
     def call(self, coroutine: Coroutine[Any, Any, Any], timeout: float = 3.0) -> Any:
-        future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        with self._submission_lock:
+            if self._closing.is_set():
+                coroutine.close()
+                raise RuntimeError("Media runner is closed")
+            future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
         try:
             return future.result(timeout)
         except concurrent.futures.TimeoutError:
@@ -142,12 +160,12 @@ class _AsyncRunner:
             raise
 
     def close(self) -> None:
-        if self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
-        if self._thread.is_alive():
+        with self._submission_lock:
+            if not self._closing.is_set():
+                self._closing.set()
+                self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._thread.is_alive() and self._thread is not threading.current_thread():
             self._thread.join(timeout=1)
-        if not self._loop.is_running() and not self._loop.is_closed():
-            self._loop.close()
 
 
 class WindowsMediaService:
@@ -155,6 +173,8 @@ class WindowsMediaService:
 
     def __init__(self, logger: logging.Logger | None = None) -> None:
         self.log = logger or logging.getLogger(__name__)
+        self._runner_lock = threading.RLock()
+        self._closed = False
         self._runner: _AsyncRunner | None = None
         self._manager: Any = None
         self._import_error = ""
@@ -163,19 +183,22 @@ class WindowsMediaService:
         self._artwork = MediaArtwork()
 
     def _ensure_runner(self) -> _AsyncRunner | None:
-        if self._import_error:
-            return None
-        if self._runner is None:
-            try:
-                from winrt.windows.media.control import (  # noqa: F401
-                    GlobalSystemMediaTransportControlsSessionManager,
-                )
-            except Exception as exc:
-                self._import_error = str(exc)
-                self.log.warning("Windows Media Control jest niedostępne: %s", exc)
+        with self._runner_lock:
+            if self._closed:
                 return None
-            self._runner = _AsyncRunner()
-        return self._runner
+            if self._import_error:
+                return None
+            if self._runner is None:
+                try:
+                    from winrt.windows.media.control import (  # noqa: F401
+                        GlobalSystemMediaTransportControlsSessionManager,
+                    )
+                except Exception as exc:
+                    self._import_error = str(exc)
+                    self.log.warning("Windows Media Control jest niedostępne: %s", exc)
+                    return None
+                self._runner = _AsyncRunner()
+            return self._runner
 
     async def _manager_async(self) -> Any:
         if self._manager is None:
@@ -288,7 +311,19 @@ class WindowsMediaService:
             return False
 
     def close(self) -> None:
-        if self._runner is not None:
-            self._runner.close()
+        with self._runner_lock:
+            self._closed = True
+            if self._runner is not None:
+                self._runner.close()
+                if not self._runner._thread.is_alive():
+                    self._runner = None
+                self._manager = None
+
+    def reopen(self) -> None:
+        with self._runner_lock:
+            if self._runner is not None and self._runner._thread.is_alive():
+                if self._closed:
+                    raise RuntimeError("Previous media runner is still stopping")
+                return
             self._runner = None
-            self._manager = None
+            self._closed = False

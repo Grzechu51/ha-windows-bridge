@@ -60,10 +60,30 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Ask the user to confirm the discovered Windows PC."""
         if user_input is not None:
             return self.async_create_entry(title=self._title, data=self._data)
-        self._set_confirm_only()
         return self.async_show_form(
             step_id="confirm",
             description_placeholders={"name": self._title},
+            last_step=True,
+        )
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Rename a direct endpoint without changing its device/entity identities."""
+        entry = self.hass.config_entries.async_get_known_entry(self.context["entry_id"])
+        if entry.data.get(CONF_TRANSPORT) != TRANSPORT_DIRECT:
+            return self.async_abort(reason="discovery_only")
+        if user_input is not None:
+            name = str(user_input["name"]).strip()
+            if name:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    title=name,
+                    data_updates={CONF_DEVICE: {**entry.data[CONF_DEVICE], "name": name}},
+                    reason="reconfigure_successful",
+                )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema({vol.Required("name", default=entry.data[CONF_DEVICE]["name"]): vol.All(str, vol.Length(min=1, max=128))}),
+            errors={"base": "invalid_name"} if user_input is not None else {},
         )
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:

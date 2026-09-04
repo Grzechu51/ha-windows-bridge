@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import logging
 import math
@@ -9,6 +10,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from contextlib import suppress
+from functools import partial
 
 import paho.mqtt.client as mqtt
 
@@ -55,6 +57,8 @@ from .media_protocol import (
     media_thumbnail_topic,
     media_topics,
 )
+from .runtime.polling import PollScheduler
+from .runtime.worker import SerialWorker
 from .system_actions import WindowsPowerActions
 from .system_monitor import PcContext, WindowsSystemMonitor
 
@@ -100,6 +104,7 @@ class MqttBridge:
         self._stop_event = threading.Event()
         self._connected = threading.Event()
         self._monitor_thread: threading.Thread | None = None
+        self._command_worker: SerialWorker | None = None
         self._intentional_stop = False
 
         self._last_volumes: dict[str, float] = {}
@@ -146,15 +151,23 @@ class MqttBridge:
     def start(self) -> None:
         if self.client is not None:
             return
+        if (self._monitor_thread and self._monitor_thread.is_alive()) or (
+            self._command_worker and self._command_worker.is_alive
+        ):
+            raise RuntimeError("Previous bridge worker is still stopping")
         errors = self.config.validation_errors()
         if errors:
             raise ValueError("\n".join(errors))
 
         self._intentional_stop = False
         self._stop_event.clear()
+        reopen_media = getattr(self.media, "reopen", None)
+        if callable(reopen_media):
+            reopen_media()
         self.started_at = time.monotonic()
         self.messages_processed = 0
         self._build_command_map()
+        self._command_worker = SerialWorker("mqtt-commands", self.log)
         self.client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"ha-windows-bridge-{self.config.device_id}"[:64],
@@ -192,6 +205,8 @@ class MqttBridge:
             return
         self._intentional_stop = True
         self._stop_event.set()
+        if self._command_worker is not None:
+            self._command_worker.close()
         if self._connected.is_set():
             try:
                 client.publish(
@@ -207,7 +222,8 @@ class MqttBridge:
             self.client = None
             if self._monitor_thread and self._monitor_thread.is_alive():
                 self._monitor_thread.join(timeout=2)
-            self._monitor_thread = None
+            if self._monitor_thread is not None and not self._monitor_thread.is_alive():
+                self._monitor_thread = None
             close_media = getattr(self.media, "close", None)
             if callable(close_media):
                 close_media()
@@ -405,12 +421,24 @@ class MqttBridge:
             self._emit_status("MQTT rozłączone — ponawianie", False)
 
     def _on_message(self, _client, _userdata, message) -> None:
+        if self._intentional_stop:
+            return
         self.messages_processed += 1
         payload_limit = (
             MAX_OVERLAY_PAYLOAD if message.topic == self._overlay_command else MAX_COMMAND_PAYLOAD
         )
         if len(message.payload) > payload_limit:
             self.log.warning("Zignorowano zbyt dużą komendę MQTT na %s", message.topic)
+            return
+        if self._command_worker is not None:
+            queued = copy.copy(message)
+            if not self._command_worker.submit(lambda: self._dispatch_message(queued)):
+                self.log.warning("MQTT command queue is full or stopping; command ignored")
+            return
+        self._dispatch_message(message)
+
+    def _dispatch_message(self, message) -> None:
+        if self._stop_event.is_set():
             return
         birth_topic = f"{self.config.mqtt.discovery_prefix}/status"
         if message.topic == birth_topic:
@@ -874,71 +902,36 @@ class MqttBridge:
     def _monitor_loop(self) -> None:
         enabled = [app for app in self.config.apps if app.enabled]
         names = [app.process_name for app in enabled]
-        next_context = 0.0
-        next_system = 0.0
-        next_output = 0.0
-        next_process_scan = 0.0
-        next_media = 0.0
-        next_audio_sessions = 0.0
-        next_health = 0.0
-        next_disk = 0.0
-        next_devices = 0.0
-        running_processes: set[str] = set()
+        scheduler = PollScheduler(self.log)
         while not self._stop_event.wait(self.config.poll_interval):
             if not self._connected.is_set():
                 continue
-            try:
-                if self.config.control_master_volume:
-                    self._monitor_master()
-                snapshot = self.audio.session_snapshot(names)
-                now = time.monotonic()
-                if now >= next_process_scan:
-                    running_processes = self.system.running_process_names(names)
-                    next_process_scan = now + 2.0
-                self._monitor_apps(enabled, snapshot, running_processes)
-                if (
-                    now >= next_audio_sessions
-                    and self.config.audio_enhancements_enabled
-                    and self.config.publish_audio_sessions
-                ):
-                    next_audio_sessions = now + 2.0
-                    self._monitor_total_audio_sessions()
+            if self.config.control_master_volume:
+                scheduler.run("master_audio", 0, self._monitor_master)
+            if names or self.config.control_active_app:
+                snapshot = scheduler.run("audio_sessions", 0, lambda: self.audio.session_snapshot(names), {})
+                running = scheduler.run("processes", 2, lambda: self.system.running_process_names(names), set())
+                scheduler.run("applications", 0, partial(self._monitor_apps, enabled, snapshot, running))
                 if self.config.control_active_app:
-                    self._monitor_active(snapshot)
-                if self.config.control_microphone:
-                    self._monitor_microphone()
-
-                if now >= next_context and (
-                    self.config.publish_activity
-                    or self.config.publish_idle
-                    or self.config.publish_session_lock
-                ):
-                    next_context = now + 1.0
-                    self._monitor_context()
-                if now >= next_system and (
-                    self.config.publish_ram_stats
-                    or self.config.publish_cpu_stats
-                    or self.config.publish_gpu_stats
-                ):
-                    next_system = now + 5.0
-                    self._monitor_system()
-                if now >= next_health and self.config.publish_windows_health:
-                    next_health = now + 30.0
-                    self._monitor_windows_health()
-                if now >= next_disk and self.config.publish_disk_stats:
-                    next_disk = now + 5.0
-                    self._monitor_disks()
-                if now >= next_devices and self.config.publish_devices:
-                    next_devices = now + 10.0
-                    self._monitor_devices()
-                if now >= next_output and self.config.control_audio_output:
-                    next_output = now + 3.0
-                    self._monitor_audio_output()
-                if now >= next_media and self.config.media_player_enabled:
-                    next_media = now + 1.0
-                    self._monitor_media()
-            except Exception:
-                self.log.exception("Błąd podczas odczytu stanu Windows")
+                    scheduler.run("active_application", 0, partial(self._monitor_active, snapshot))
+            if self.config.control_microphone:
+                scheduler.run("microphone", 0, self._monitor_microphone)
+            if self.config.audio_enhancements_enabled and self.config.publish_audio_sessions:
+                scheduler.run("session_count", 2, self._monitor_total_audio_sessions)
+            if self.config.publish_activity or self.config.publish_idle or self.config.publish_session_lock:
+                scheduler.run("desktop_context", 1, self._monitor_context)
+            if self.config.publish_ram_stats or self.config.publish_cpu_stats or self.config.publish_gpu_stats:
+                scheduler.run("system_metrics", 5, self._monitor_system)
+            if self.config.publish_windows_health:
+                scheduler.run("windows_health", 30, self._monitor_windows_health)
+            if self.config.publish_disk_stats:
+                scheduler.run("disks", 5, self._monitor_disks)
+            if self.config.publish_devices:
+                scheduler.run("devices", 10, self._monitor_devices)
+            if self.config.control_audio_output:
+                scheduler.run("audio_output", 3, self._monitor_audio_output)
+            if self.config.media_player_enabled:
+                scheduler.run("media", 1, self._monitor_media)
 
     def _monitor_master(self) -> None:
         snapshot = self.audio.get_master_snapshot()

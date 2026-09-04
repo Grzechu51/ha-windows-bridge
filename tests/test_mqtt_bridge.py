@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import threading
 
 import pytest
 
@@ -32,6 +34,7 @@ from ha_windows_bridge.media_protocol import (
     media_topics,
 )
 from ha_windows_bridge.mqtt_bridge import MAX_COMMAND_PAYLOAD, MqttBridge
+from ha_windows_bridge.runtime.worker import SerialWorker
 from ha_windows_bridge.system_monitor import PcContext, SystemMetrics
 
 
@@ -210,6 +213,41 @@ class FakeMessage:
         self.topic = topic
         self.payload = payload
         self.retain = retain
+
+
+def test_queued_commands_copy_payload_reject_retained_and_stop_without_side_effects():
+    app = AudioAppConfig("Spotify.exe", "Spotify", "spotify", True)
+    config = AppConfig(mqtt=MqttConfig(host="broker"), apps=[app])
+    audio = FakeAudio()
+    bridge = MqttBridge(config, audio=audio)
+    bridge.client = FakeClient()
+    bridge._connected.set()
+    bridge._build_command_map()
+    command, _ = app_volume_topics(config, app)
+    worker = SerialWorker("mqtt-test", logging.getLogger(__name__))
+    bridge._command_worker = worker
+    started, release, completed = threading.Event(), threading.Event(), threading.Event()
+    worker.submit(lambda: (started.set(), release.wait(2)))
+    try:
+        assert started.wait(1)
+        message = FakeMessage(command, b"80", False)
+        bridge._on_message(None, None, message)
+        message.payload = b"10"
+        bridge._on_message(None, None, FakeMessage(command, b"20", True))
+        assert audio.set_calls == []
+        worker.submit(completed.set)
+        release.set()
+        assert completed.wait(1)
+        assert audio.set_calls == [("Spotify.exe", 0.8)]
+        bridge._stop_event.set()
+        completed.clear()
+        bridge._on_message(None, None, FakeMessage(command, b"50", False))
+        worker.submit(completed.set)
+        assert completed.wait(1)
+        assert audio.set_calls == [("Spotify.exe", 0.8)]
+    finally:
+        release.set()
+        worker.close()
 
 
 def test_retained_command_never_changes_windows_volume() -> None:
