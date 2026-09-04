@@ -136,6 +136,7 @@ def validated_request(
         "media_position": media_position,
         "media_duration": media_duration,
         "media_playing": bool(options.get("media_playing", False)),
+        "media_controls": bool(options.get("media_controls", False)),
     }
 
 

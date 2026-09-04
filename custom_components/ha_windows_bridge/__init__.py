@@ -37,6 +37,8 @@ from .const import (
     TRANSPORT_DIRECT,
     direct_overlay_event,
 )
+from .runtime import BridgeRuntime
+from .websocket import async_register_commands
 
 PLATFORMS = [
     Platform.BINARY_SENSOR,
@@ -237,6 +239,7 @@ async def _async_entity_image(hass: HomeAssistant, entity_id: str) -> str:
 
 async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
     """Register validated actions shared by all configured Windows bridges."""
+    async_register_commands(hass)
 
     async def publish_overlay(call: ServiceCall) -> None:
         action = {
@@ -251,8 +254,7 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             hass, selected, expand_group=True
         )
         entity_ids = referenced.referenced | referenced.indirectly_referenced
-        topics: set[str] = set()
-        event_types: set[str] = set()
+        runtimes = {}
         for entity_id in entity_ids:
             if call.context.user_id:
                 user = await hass.auth.async_get_user(call.context.user_id)
@@ -261,14 +263,12 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             registered = registry.async_get(entity_id)
             if registered is None or registered.config_entry_id is None:
                 continue
-            runtime = hass.data.get(DOMAIN, {}).get(registered.config_entry_id, {})
-            if registered.unique_id != runtime.get("overlay_unique_id"):
+            entry = hass.config_entries.async_get_entry(registered.config_entry_id)
+            runtime = getattr(entry, "runtime_data", None)
+            if runtime is None or registered.unique_id != runtime.overlay_unique_id:
                 continue
-            if topic := runtime.get("overlay_topic"):
-                topics.add(str(topic))
-            if event_type := runtime.get("overlay_event_type"):
-                event_types.add(str(event_type))
-        if not topics and not event_types:
+            runtimes[registered.config_entry_id] = runtime
+        if not runtimes:
             raise HomeAssistantError("Select an enabled HA Windows Bridge popup entity")
 
         options: dict[str, Any] = {
@@ -469,11 +469,13 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
         )
         if len(payload.encode("utf-8")) > 768 * 1024:
             raise HomeAssistantError("Overlay payload is too large")
-        for topic in topics:
-            await mqtt.async_publish(hass, topic, payload, qos=1, retain=False)
-        event_data = {"title": payload_title, "message": message, "data": options}
-        for event_type in event_types:
-            hass.bus.async_fire(event_type, event_data, context=call.context)
+        results = await asyncio.gather(*(
+            runtime.send(runtime.overlay_topic, payload, direct=bool(runtime.overlay_event_type))
+            for runtime in runtimes.values()
+        ), return_exceptions=True)
+        failed = sum(isinstance(result, Exception) for result in results)
+        if failed:
+            raise HomeAssistantError(f"{failed} Windows Bridge target(s) did not confirm the command")
 
     hass.services.async_register(
         DOMAIN, SERVICE_SHOW_OVERLAY, publish_overlay, schema=_SHOW_OVERLAY_SCHEMA
@@ -523,16 +525,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         {},
     )
     overlay_topic = "" if direct else str(overlay_definition.get("command_topic", ""))
-    runtime: dict[str, Any] = {
-        "unique_ids": valid_unique_ids,
-        "overlay_unique_id": overlay_definition.get("unique_id", ""),
-        "overlay_topic": overlay_topic,
-        "overlay_event_type": (
-            direct_overlay_event(str(entry.data[CONF_DEVICE_ID])) if direct else ""
-        ),
-    }
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    runtime = BridgeRuntime(
+        hass=hass, device_id=str(entry.data[CONF_DEVICE_ID]), unique_ids=valid_unique_ids,
+        overlay_unique_id=str(overlay_definition.get("unique_id", "")), overlay_topic=overlay_topic,
+        overlay_event_type=direct_overlay_event(str(entry.data[CONF_DEVICE_ID])) if direct else "",
+        protocol=entry.data.get("protocol", {}),
+    )
+    entry.runtime_data = runtime
+    entry.async_on_unload(runtime.close)
+    try:
+        await runtime.start()
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except BaseException:
+        runtime.close()
+        raise
     return True
 
 
@@ -540,5 +546,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload HA Windows Bridge."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        entry.runtime_data.close()
     return unload_ok

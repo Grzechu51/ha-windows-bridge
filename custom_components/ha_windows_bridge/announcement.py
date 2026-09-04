@@ -171,7 +171,7 @@ def parse_discovery_announcement(raw: str | bytes) -> dict[str, Any] | None:
         return None
     if not isinstance(payload, dict) or type(payload.get("schema")) is not int:
         return None
-    if payload["schema"] not in {1, 2}:
+    if payload["schema"] not in {1, 2, 3}:
         return None
 
     device_id = payload.get("device_id")
@@ -204,7 +204,7 @@ def parse_discovery_announcement(raw: str | bytes) -> dict[str, Any] | None:
     if thumbnail_topic and not thumbnail_topic.startswith(topic_prefix):
         return None
 
-    raw_entities = payload.get("entities", []) if payload["schema"] == 2 else []
+    raw_entities = payload.get("entities", []) if payload["schema"] in {2, 3} else []
     if not isinstance(raw_entities, list) or len(raw_entities) > MAX_ENTITIES:
         return None
     entities: list[dict[str, Any]] = []
@@ -216,7 +216,7 @@ def parse_discovery_announcement(raw: str | bytes) -> dict[str, Any] | None:
         unique_ids.add(entity["unique_id"])
         entities.append(entity)
 
-    return {
+    result = {
         "device_id": device_id,
         "device": {
             "name": name,
@@ -233,3 +233,32 @@ def parse_discovery_announcement(raw: str | bytes) -> dict[str, Any] | None:
             "availability_topic": availability_topic,
         },
     }
+    if payload["schema"] == 3:
+        protocol = _protocol(payload.get("protocol"), topic_prefix)
+        if protocol is None:
+            return None
+        result["protocol"] = protocol
+    return result
+
+
+def _protocol(value, prefix):
+    if not isinstance(value, dict) or value.get("version") != 2:
+        return None
+    if value.get("command_topic") != prefix + "v2/command" or value.get("result_topic") != prefix + "v2/result":
+        return None
+    routes = value.get("routes")
+    if not isinstance(routes, dict) or len(routes) > 512:
+        return None
+    clean = {}
+    for topic, route in routes.items():
+        if _topic(topic) is None or not topic.startswith(prefix) or not isinstance(route, dict):
+            return None
+        kind, target, parser = route.get("kind"), route.get("target", ""), route.get("parser")
+        if not isinstance(kind, str) or not re.fullmatch(r"[a-z][a-z0-9_.]{1,63}", kind):
+            return None
+        if not isinstance(target, str) or (target and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", target)):
+            return None
+        if not isinstance(parser, str) or parser not in {"json", "value", "volume", "balance", "switch", "button"}:
+            return None
+        clean[topic] = {"kind": kind, "target": target, "parser": parser}
+    return {"version": 2, "command_topic": value["command_topic"], "result_topic": value["result_topic"], "routes": clean}

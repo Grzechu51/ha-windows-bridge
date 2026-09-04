@@ -6,7 +6,8 @@ import numpy as np
 from PySide6.QtCore import QRect
 from PySide6.QtWidgets import QApplication
 
-from ha_windows_bridge.windows_effects import DesktopDuplicationCapture, NativeBackdrop
+from ha_windows_bridge.windows.capture import DesktopDuplicationCapture
+from ha_windows_bridge.windows_effects import NativeBackdrop
 
 
 def test_native_backdrop_prefers_layered_window_acrylic(monkeypatch) -> None:

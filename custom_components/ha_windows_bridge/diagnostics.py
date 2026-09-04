@@ -8,7 +8,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_ENTITIES, CONF_MEDIA_PLAYER, CONF_TRANSPORT, DOMAIN
+from .const import CONF_ENTITIES, CONF_MEDIA_PLAYER, CONF_TRANSPORT
 
 
 async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
@@ -26,6 +26,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
         "transport": "direct" if entry.data.get(CONF_TRANSPORT) == "direct" else "mqtt",
         "entity_counts": dict(counts),
         "media_player_enabled": bool(entry.data.get(CONF_MEDIA_PLAYER, {}).get("enabled")),
-        "runtime_loaded": entry.entry_id in hass.data.get(DOMAIN, {}),
-        "direct_delivery_acknowledged": False,
+        "runtime_loaded": getattr(entry, "runtime_data", None) is not None,
+        "direct_delivery_acknowledged": True,
+        "pending_commands": len(entry.runtime_data.pending) if getattr(entry, "runtime_data", None) else 0,
     }

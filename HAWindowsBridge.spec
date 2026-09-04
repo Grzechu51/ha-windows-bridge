@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 
 def _is_foreign_windows_icu(binary):
@@ -14,7 +14,6 @@ def _is_foreign_windows_icu(binary):
 
 hiddenimports = (
     collect_submodules("pycaw")
-    + collect_submodules("dxcam")
     + ["qrcode", "qrcode.image.pil"]
     + collect_submodules("winrt")
 )
@@ -27,12 +26,12 @@ a = Analysis(
     ["main.py"],
     pathex=["."],
     binaries=[],
-    datas=[("assets/icon.png", "assets")] + collect_data_files("qtawesome"),
+    datas=[("assets/icon.png", "assets")] + collect_data_files("qtawesome") + copy_metadata("PySide6"),
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["dxcam", "numpy", "PySide6.QtDataVisualization", "PySide6.QtCharts", "PySide6.QtQml", "PySide6.QtQuick"],
     noarchive=False,
     optimize=1,
 )

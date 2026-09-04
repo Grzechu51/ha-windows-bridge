@@ -44,6 +44,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_DEVICE: device,
             CONF_ENTITIES: entities,
             CONF_MEDIA_PLAYER: media_player,
+            "protocol": payload.get("protocol", {}),
         }
         await self.async_set_unique_id(device_id)
         self._abort_if_unique_id_configured(

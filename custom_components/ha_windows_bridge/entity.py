@@ -44,6 +44,7 @@ class BridgeMqttEntity:
     _attr_should_poll = False
 
     def __init__(self, entry: ConfigEntry, definition: dict[str, Any]) -> None:
+        self._entry = entry
         self._definition = definition
         self._attr_unique_id = str(definition["unique_id"])
         self._attr_name = str(definition["name"])
@@ -114,4 +115,4 @@ class BridgeMqttEntity:
         raise NotImplementedError
 
     async def _async_publish(self, topic: str, payload: str) -> None:
-        await mqtt.async_publish(self.hass, topic, payload, qos=1, retain=False)
+        await self._entry.runtime_data.send(topic, payload)

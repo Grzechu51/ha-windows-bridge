@@ -32,11 +32,13 @@ from PySide6.QtWidgets import (
     QFileIconProvider,
     QFrame,
     QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QToolButton,
     QToolTip,
@@ -284,7 +286,7 @@ class AppCard(QFrame):
         self._volume_available = False
         self._mute_available = False
 
-        layout = QHBoxLayout(self)
+        layout = QGridLayout(self)
         layout.setContentsMargins(14, 10, 12, 10)
         layout.setSpacing(13)
 
@@ -297,32 +299,34 @@ class AppCard(QFrame):
         color = self._COLORS[sum(config.slug.encode("utf-8")) % len(self._COLORS)]
         self._avatar_color = color
         self._show_initials()
-        layout.addWidget(self.avatar)
+        layout.addWidget(self.avatar, 0, 0, 3, 1)
 
-        text_layout = QVBoxLayout()
-        text_layout.setSpacing(2)
         self.name_label = QLabel(config.display_name)
         self.name_label.setObjectName("appName")
+        self.name_label.setWordWrap(True)
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.process_label = QLabel(config.process_name)
         self.process_label.setObjectName("appProcess")
-        text_layout.addWidget(self.name_label)
-        text_layout.addWidget(self.process_label)
-        layout.addLayout(text_layout, 1)
+        self.process_label.setWordWrap(True)
+        self.process_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.name_label, 0, 1, 1, 3)
+        layout.addWidget(self.process_label, 1, 1, 1, 3)
+        layout.setColumnStretch(1, 1)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(0, 100)
-        self.slider.setFixedWidth(165)
+        self.slider.setMinimumWidth(90)
         self.slider.setEnabled(False)
         self.slider.sliderPressed.connect(self._slider_pressed)
         self.slider.sliderReleased.connect(self._slider_released)
         self.slider.valueChanged.connect(self._slider_value_changed)
-        layout.addWidget(self.slider)
+        layout.addWidget(self.slider, 2, 1)
 
         self.percent_label = QLabel("—")
         self.percent_label.setObjectName("volumePercent")
         self.percent_label.setFixedWidth(43)
         self.percent_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(self.percent_label)
+        layout.addWidget(self.percent_label, 2, 2)
 
         self.mute_button = QToolButton()
         self.mute_button.setObjectName("muteButton")
@@ -332,13 +336,13 @@ class AppCard(QFrame):
         self.mute_button.setEnabled(False)
         self.mute_button.setFixedSize(36, 36)
         self.mute_button.toggled.connect(self._mute_toggled)
-        layout.addWidget(self.mute_button)
+        layout.addWidget(self.mute_button, 2, 3)
 
         self.enabled_switch = ToggleSwitch()
         self.enabled_switch.setChecked(config.enabled)
         self.enabled_switch.setToolTip("Włącz encje Home Assistant dla tej aplikacji")
         self.enabled_switch.toggled.connect(self._apply_enabled_state)
-        layout.addWidget(self.enabled_switch)
+        layout.addWidget(self.enabled_switch, 0, 4, 3, 1)
 
         self.more_button = QToolButton()
         self.more_button.setObjectName("moreButton")
@@ -364,7 +368,7 @@ class AppCard(QFrame):
         self.options_menu.addSeparator()
         self.options_menu.addAction("Usuń", lambda: self.remove_requested.emit(self))
         self.more_button.clicked.connect(self._show_options_menu)
-        layout.addWidget(self.more_button)
+        layout.addWidget(self.more_button, 0, 5, 3, 1)
         self.set_executable_icon(config.executable_path)
         self._apply_enabled_state(config.enabled)
 

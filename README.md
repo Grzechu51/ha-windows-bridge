@@ -4,6 +4,11 @@
 
 <h1 align="center">HA Windows Bridge</h1>
 
+> Ta gałąź zawiera **2.0.0-alpha.1**: nowy rdzeń, GUI i protokół integracji.
+> To wersja do lokalnych testów, nie wydanie produkcyjne. Nie została jeszcze opublikowana w GitHub Releases.
+> Zacznij od [instrukcji 2.0](docs/V2_QUICKSTART.md) i [raportu przebudowy](docs/V2_REBUILD.md).
+> Instrukcje instalacji opublikowanych wydań poniżej dotyczą wcześniejszej linii 0.x.
+
 <p align="center">Sterowanie komputerem z Windows w Home Assistant przez lokalne MQTT.</p>
 
 HA Windows Bridge łączy aplikację Windows z integracją Home Assistant. Pokazuje tylko

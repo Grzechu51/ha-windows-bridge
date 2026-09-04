@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from string import Template
 
@@ -114,6 +115,10 @@ QSlider::groove:horizontal:disabled, QSlider::sub-page:horizontal:disabled, QSli
 QCheckBox { spacing: 9px; }
 QCheckBox::indicator { width: 18px; height: 18px; }
 QCheckBox:disabled { color: $disabled; }
+QListWidget#navigationRail { background: $chrome; border: none; outline: none; }
+QListWidget#navigationRail::item { min-height: 38px; padding: 5px 10px; margin: 3px 0; border-radius: 6px; }
+QListWidget#navigationRail::item:hover { background: $hover; }
+QListWidget#navigationRail::item:selected { background: $selection; color: $text; border-left: 3px solid $accent; }
 QListWidget#devicesList { background: $surface; border: 1px solid $border; border-radius: 6px; padding: 6px; }
 QListWidget#devicesList::item { min-height: 30px; padding: 4px; }
 QListWidget#devicesList::item:selected { background: $selection; }
@@ -140,5 +145,12 @@ QProgressBar#resourceBar::chunk, QProgressBar#microphoneLevelBar::chunk { backgr
 ''')
 
 
-def style_for_theme(base_style: str, theme: str) -> str:
-    return base_style + "\n" + _STYLE.substitute(asdict(PALETTES[normalize_theme(theme)]))
+def style_for_theme(base_style: str, theme: str, accent: str | None = None) -> str:
+    tokens = asdict(PALETTES[normalize_theme(theme)])
+    if accent and re.fullmatch(r"#[0-9a-fA-F]{6}", accent):
+        tokens["accent"] = accent
+        channels = [int(accent[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+        linear = [channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4 for channel in channels]
+        luminance = sum(weight * channel for weight, channel in zip((0.2126, 0.7152, 0.0722), linear, strict=True))
+        tokens["accent_text"] = "#000000" if luminance > 0.179 else "#ffffff"
+    return base_style + "\n" + _STYLE.substitute(tokens)

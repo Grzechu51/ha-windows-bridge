@@ -205,7 +205,7 @@ class AppConfig:
             self.language = "pl"
         self.device_name = self.device_name.strip() or "Windows PC"
         self.theme = self.theme.strip().lower()
-        if self.theme not in {"dark", "light"}:
+        if self.theme not in {"dark", "light", "system"}:
             self.theme = "dark"
         self.device_id = slugify(self.device_id, default_device_id())
         self.mqtt.base_topic = self.mqtt.base_topic.strip().strip("/")

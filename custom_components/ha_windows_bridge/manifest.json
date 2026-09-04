@@ -2,6 +2,7 @@
   "domain": "ha_windows_bridge",
   "name": "HA Windows Bridge",
   "after_dependencies": ["mqtt"],
+  "dependencies": ["websocket_api"],
   "codeowners": ["@Grzechu51"],
   "config_flow": true,
   "documentation": "https://github.com/Grzechu51/ha-windows-bridge",
@@ -10,5 +11,5 @@
   "issue_tracker": "https://github.com/Grzechu51/ha-windows-bridge/issues",
   "mqtt": ["ha-windows-bridge/devices/+"],
   "requirements": [],
-  "version": "0.10.0-beta.5"
+  "version": "2.0.0-alpha.1"
 }

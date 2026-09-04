@@ -141,6 +141,7 @@ class HAWindowsMediaPlayer(MediaPlayerEntity):
     _attr_translation_key = "media_player"
 
     def __init__(self, entry: ConfigEntry) -> None:
+        self._entry = entry
         device_id = str(entry.data[CONF_DEVICE_ID])
         media = entry.data[CONF_MEDIA_PLAYER]
         self._attr_unique_id = f"{device_id}_media_player"
@@ -263,12 +264,9 @@ class HAWindowsMediaPlayer(MediaPlayerEntity):
         return self._media_image, self._media_image_content_type
 
     async def _send_command(self, action: str, value: Any = None) -> None:
-        await mqtt.async_publish(
-            self.hass,
+        await self._entry.runtime_data.send(
             self._command_topic,
             json.dumps({"action": action, "value": value}, separators=(",", ":")),
-            qos=1,
-            retain=False,
         )
 
     async def async_media_play(self) -> None:

@@ -28,6 +28,8 @@ def service_harness(*, denied: str = ""):
     image = AsyncMock(return_value="data:image/png;base64,TEST")
     namespace = {
         "json": json,
+        "asyncio": asyncio,
+        "async_register_commands": lambda hass: None,
         "math": math,
         "DOMAIN": "ha_windows_bridge",
         "HomeAssistantError": RuntimeError,
@@ -51,7 +53,12 @@ def service_harness(*, denied: str = ""):
         "sensor.title": SimpleNamespace(state="Battery", attributes={}),
         "sensor.battery": SimpleNamespace(state="78", attributes={"formatted": "78%"}),
     }
+    async def send(topic, payload, **kwargs):
+        await publish(hass, topic, payload, qos=1, retain=False)
+
+    runtime = SimpleNamespace(overlay_unique_id="pc_overlay", overlay_topic="pc/overlay", overlay_event_type="", send=send)
     hass = SimpleNamespace(
+        config_entries=SimpleNamespace(async_get_entry=lambda key: SimpleNamespace(runtime_data=runtime)),
         data={
             "ha_windows_bridge": {
                 "pc": {"overlay_unique_id": "pc_overlay", "overlay_topic": "pc/overlay"}

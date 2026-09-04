@@ -31,7 +31,8 @@ def test_diagnostics_does_not_export_identities_topics_or_payloads():
         "device_id": "secret-device", "token": "secret-token", "transport": "mqtt", "media_player": {"enabled": True},
         "entities": [{"platform": "sensor", "state_topic": "secret-topic", "name": "secret-name"}, {"platform": "secret-platform"}],
     })
-    report = asyncio.run(diagnostic(SimpleNamespace(data={"ha_windows_bridge": {entry.entry_id: {}}}), entry))
+    entry.runtime_data = SimpleNamespace(pending={})
+    report = asyncio.run(diagnostic(SimpleNamespace(), entry))
     assert report["entity_counts"] == {"sensor": 1}
     assert report["runtime_loaded"]
     assert "secret" not in json.dumps(report)
