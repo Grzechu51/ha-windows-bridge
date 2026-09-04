@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 
 from .engine import NotificationEngine
+from .glass import GlassRenderer
 from .positioning import CardSize, PlacementEngine, Rect
 from .presentation import NotificationWindow
 
@@ -20,6 +21,7 @@ class OverlayService(QObject):
         self.application = application
         self.engine = NotificationEngine()
         self.windows = {}
+        self.glass = GlassRenderer(self.windows, application.log)
         self._rendered = {}
         self._retiring = set()
         self._connections = []
@@ -31,10 +33,21 @@ class OverlayService(QObject):
         self.timer = QTimer(self)
         self.timer.setInterval(50)
         self.timer.timeout.connect(self._tick)
+        self.media_timer = QTimer(self)
+        self.media_timer.setInterval(500)
+        self.media_timer.timeout.connect(self.application.request_media_refresh)
         app = QGuiApplication.instance()
         self._connections.extend((app.screenAdded.connect(self._screens_changed),
                                   app.screenRemoved.connect(self._screens_changed)))
         self._screens_changed()
+        self._apply_preferences(application.config)
+
+    @staticmethod
+    def _apply_preferences(config):
+        app = QGuiApplication.instance()
+        app.setProperty("bridgeReducedMotion", config.reduced_motion)
+        app.setProperty("bridgePopupAnimation", config.overlay_animation)
+        app.setProperty("bridgePopupAnimationDuration", config.overlay_animation_duration)
 
     def _event(self, event):
         if self._closed:
@@ -46,14 +59,27 @@ class OverlayService(QObject):
             self.example(event.data)
         elif event.topic == "overlay.media_example":
             if event.data["request_id"] == self._media_request:
-                self.engine.submit(event.data["payload"])
+                payload = event.data["payload"]
+                payload["data"].update(self._example_options())
+                self.engine.submit(payload)
                 self._sync()
+        elif event.topic == "overlay.media_refresh":
+            if self.engine.refresh_media(event.data):
+                self._sync()
+        elif event.topic == "command.result" and self.media_timer.isActive():
+            self.application.request_media_refresh()
         elif event.topic == "overlay.clear" or event.topic == "windows.locked" and event.data:
             self._media_request += 1
             self.engine.submit({"data": {"action": "clear"}})
             self._sync()
         elif event.topic == "configuration.changed":
-            QGuiApplication.instance().setProperty("bridgeReducedMotion", event.data.reduced_motion)
+            self._apply_preferences(event.data)
+        elif event.topic == "windows.display_changed":
+            self.glass.invalidate()
+
+    def _example_options(self):
+        config = self.application.config
+        return {"duration": config.overlay_example_duration, "background_effect": config.overlay_background_effect}
 
     def example(self, pattern):
         request_id = self._media_request + 1
@@ -61,7 +87,7 @@ class OverlayService(QObject):
             for identifier, icon, value in (("battery", "mdi:battery", "88%"), ("light", "mdi:lightbulb", ""), ("clock", "", "14:01")):
                 self.engine.submit({"title": "", "message": value, "data": {
                     "id": "example-" + identifier, "icon": icon, "layout": "badge", "display_mode": "parallel",
-                    "duration": 8, "edge_offset": 16}})
+                    "duration": self.application.config.overlay_example_duration, "edge_offset": 16}})
         elif pattern == "media":
             if self.application.request_media_example(request_id):
                 self._media_request = request_id
@@ -71,7 +97,7 @@ class OverlayService(QObject):
                                 "message": "Twoje powiadomienia. Na Twoim komputerze.",
                                 "data": {"id": "example-message", "layout": pattern, "icon": "mdi:home-assistant",
                                          "show_lifetime": True, "pause_on_hover": True, "show_close_button": True,
-                                         "edge_offset": 16, "duration": 8}})
+                                         "edge_offset": 16, **self._example_options()}})
         self._sync()
 
     def _screens_changed(self, *_args):
@@ -108,6 +134,7 @@ class OverlayService(QObject):
                 window.update_notification(notification.options)
             self._rendered[identifier] = notification.options.copy()
         self._place(appearing=new)
+        self.glass.sync()
         self._clock_state()
 
     def _place(self, *_args, appearing=None):
@@ -133,8 +160,18 @@ class OverlayService(QObject):
                     continue
                 position = positions[identifier]
                 target = QPoint(position.x, position.y)
-                if (appearing and identifier in appearing) or window.pos() != target or not window.isVisible():
-                    window.place(target, appearing=bool(appearing and identifier in appearing))
+                if window._awaiting_glass:
+                    if window._target != target:
+                        window.stage(target, screens[monitor])
+                    continue
+                first_appearance = bool(appearing and identifier in appearing)
+                needs_background = _options["background_effect"] in {"blur", "liquid"} and window._glass_image.isNull()
+                if first_appearance and needs_background and self.glass.can_prime():
+                    window.stage(target, screens[monitor])
+                    continue
+                moving_to_target = window._animation is not None and window._target == target
+                if (appearing and identifier in appearing) or (window.pos() != target and not moving_to_target) or not window.isVisible():
+                    window.place(target, appearing=first_appearance)
 
     def _dismiss(self, identifier):
         self.engine.remove(identifier)
@@ -145,6 +182,11 @@ class OverlayService(QObject):
         self._clock_state()
 
     def _clock_state(self):
+        live = any(item.options.get("media_live") for item in self.engine.visible.values())
+        if live and not self.media_timer.isActive():
+            self.media_timer.start()
+        elif not live:
+            self.media_timer.stop()
         if self.engine.needs_clock:
             smooth = any(item.deadline is not None and item.options["show_lifetime"] for item in self.engine.visible.values())
             self.timer.setInterval(50 if smooth else 500)
@@ -170,6 +212,8 @@ class OverlayService(QObject):
         self._media_request += 1
         self._unsubscribe()
         self.timer.stop()
+        self.media_timer.stop()
+        self.glass.close()
         for connection in self._connections:
             with suppress(RuntimeError):
                 QObject.disconnect(connection)

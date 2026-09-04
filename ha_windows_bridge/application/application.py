@@ -243,6 +243,20 @@ class Application:
         # Serialize media open/read against configuration changes and shutdown.
         return self._query_once("media_example", query, worker=self._operations)
 
+    def request_media_refresh(self):
+        def query():
+            if self._closed or self._suspended:
+                return
+            self.media.reopen()
+            snapshot = self.media.snapshot()
+            if snapshot.supported:
+                from ..overlays.windows_media import windows_media_payload
+                payload = windows_media_payload(snapshot, controls=self.config.media_player_enabled and not self.router.closed)
+                if not snapshot.source_app and not snapshot.title:
+                    payload["title"] = "Brak aktywnego odtwarzacza"
+                self.events.emit("overlay.media_refresh", payload)
+        return self._query_once("media_refresh", query, worker=self._operations)
+
     def suspend(self):
         self._suspended = True
         return self._schedule(self._stop)

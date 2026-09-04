@@ -28,7 +28,7 @@ class ThemeTokens:
 
 
 PALETTES = {
-    "dark": ThemeTokens("#202020", "#181818", "#2b2b2b", "#343434", "#242424", "#454545",
+    "dark": ThemeTokens("#151515", "#101010", "#202020", "#2a2a2a", "#191919", "#383838",
                         "#f4f4f4", "#b5b5b5", "#858585", "#69d7a0", "#10251b", "#294439", "#ffb4bd", "#462c32"),
     "light": ThemeTokens("#f3f3f3", "#ebebeb", "#ffffff", "#f6f6f6", "#ffffff", "#d0d0d0",
                          "#1b1b1b", "#606060", "#737373", "#19764d", "#ffffff", "#e0eee6", "#a5283f", "#fff1f3"),
@@ -42,7 +42,8 @@ def normalize_theme(theme: str) -> str:
 
 _STYLE = Template('''
 QWidget { background: transparent; color: $text; font-family: "Segoe UI"; font-size: 10pt; }
-QFrame#windowFrame { background: $canvas; border: 1px solid $border; border-radius: 10px; }
+QMainWindow { background: $canvas; }
+QFrame#windowFrame { background: $canvas; border: none; border-radius: 0px; }
 QFrame#titleBar { background: $chrome; border: none; border-top-left-radius: 10px; border-top-right-radius: 10px; }
 QFrame#sidebar, QFrame#sidebarFooter, QFrame#footer { background: $chrome; border: none; }
 QFrame#titleDivider, QFrame#statusVerticalDivider { background: $border; border: none; }
@@ -64,17 +65,17 @@ QLabel#resourceLabel { font-size: 7.5pt; color: $muted; }
 QLabel#topStatusDot, QLabel#footerStatusDot { color: $accent; }
 QPushButton#navButton { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 8px 12px; text-align: left; icon-size: 20px; }
 QPushButton#navButton:hover { background: $hover; }
-QPushButton#navButton:checked { background: $selection; border-left: 3px solid $accent; font-weight: 600; }
+QPushButton#navButton:checked { background: $selection; font-weight: 600; }
 QStackedWidget#pageStack, QScrollArea#pageScroll, QScrollArea#pageScroll > QWidget > QWidget { background: $canvas; border: none; }
 QTabWidget#featureTabs::pane { background: $canvas; border: none; border-top: 1px solid $border; }
 QTabBar::tab { background: transparent; color: $muted; border: none; border-bottom: 2px solid transparent; padding: 10px 14px; margin-right: 4px; }
 QTabBar::tab:hover { background: $hover; color: $text; }
 QTabBar::tab:selected { color: $text; border-bottom: 2px solid $accent; }
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-    background: $field; border: 1px solid $border; border-bottom: 1px solid $muted;
+    background: $field; border: 1px solid $border;
     border-radius: 5px; min-height: 22px; padding: 7px 10px; selection-background-color: $selection;
 }
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border-bottom: 2px solid $accent; }
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border: 1px solid $accent; }
 QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled { color: $disabled; background: $chrome; border-color: $border; }
 QComboBox { padding-right: 28px; }
 QComboBox::drop-down { width: 24px; border: none; }
@@ -118,7 +119,7 @@ QCheckBox:disabled { color: $disabled; }
 QListWidget#navigationRail { background: $chrome; border: none; outline: none; }
 QListWidget#navigationRail::item { min-height: 38px; padding: 5px 10px; margin: 3px 0; border-radius: 6px; }
 QListWidget#navigationRail::item:hover { background: $hover; }
-QListWidget#navigationRail::item:selected { background: $selection; color: $text; border-left: 3px solid $accent; }
+QListWidget#navigationRail::item:selected { background: $selection; color: $text; }
 QListWidget#devicesList { background: $surface; border: 1px solid $border; border-radius: 6px; padding: 6px; }
 QListWidget#devicesList::item { min-height: 30px; padding: 4px; }
 QListWidget#devicesList::item:selected { background: $selection; }

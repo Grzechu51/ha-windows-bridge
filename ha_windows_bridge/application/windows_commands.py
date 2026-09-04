@@ -119,6 +119,7 @@ class WindowsCommands:
             raise CommandError("notification_arguments")
         data = dict(data)
         data["media_controls"] = False
+        data["media_live"] = False
         if data.get("action", "show") not in {"show", "update", "remove", "clear"}:
             raise CommandError("notification_action")
         if command.kind == "overlay.show" and data.get("action", "show") in {"show", "update"}:
@@ -132,7 +133,7 @@ class WindowsCommands:
                 message = " · ".join(part for part in (snapshot.artist, snapshot.album_title) if part) or message
                 data.update(layout="media", media_source=self.config.device_name, media_position=snapshot.position,
                             media_duration=snapshot.duration, media_playing=snapshot.state == "playing",
-                            media_controls=self.config.media_player_enabled)
+                            media_controls=self.config.media_player_enabled, media_live=True)
                 if snapshot.artwork.data and len(snapshot.artwork.data) <= 512 * 1024:
                     data["image"] = f"data:{snapshot.artwork.content_type};base64," + base64.b64encode(snapshot.artwork.data).decode()
         data.setdefault("monitor", self.config.overlay_monitor)

@@ -1,4 +1,4 @@
-"""Experimental capture adapter; not imported or bundled by the 2.0 runtime."""
+"""On-demand DXGI region capture, without a continuous full-screen capture loop."""
 from __future__ import annotations
 
 import ctypes
@@ -152,6 +152,35 @@ class DesktopDuplicationCapture:
             with suppress(Exception):
                 camera.release()
         self._cameras.clear()
+
+    def grab_image(self, screen_index, screen_name, logical_region, device_pixel_ratio=1.0):
+        """Worker-safe image; windows are persistently excluded by the Qt owner."""
+        try:
+            camera = self._camera(screen_index)
+            if camera is None:
+                return None
+            # DXGI and Qt can enumerate monitors differently. Match the Windows
+            # display name, never sample another monitor on a mixed-DPI desktop.
+            if camera._output.devicename.casefold() != screen_name.casefold():
+                camera = next((candidate for index in range(len(self._outputs or []))
+                               if (candidate := self._camera(index))._output.devicename.casefold() == screen_name.casefold()), None)
+            if camera is None:
+                return None
+            scale = max(.5, min(8., device_pixel_ratio))
+            left, top = round(logical_region.x() * scale), round(logical_region.y() * scale)
+            right, bottom = left + round(logical_region.width() * scale), top + round(logical_region.height() * scale)
+            if left < 0 or top < 0 or right > camera.width or bottom > camera.height:
+                return None
+            frame = camera.grab(region=(left, top, right, bottom), new_frame_only=False)
+            if frame is None:
+                return None
+            height, width, channels = frame.shape
+            if channels != 4:
+                return None
+            return QImage(frame.data, width, height, int(frame.strides[0]), QImage.Format.Format_ARGB32).copy()
+        except Exception as exc:
+            self.last_error = type(exc).__name__
+            return None
 
     def invalidate(self) -> None:
         """Re-enumerate outputs after a display topology/DPI change."""

@@ -48,6 +48,7 @@ class NativeBackdrop:
     DWMSBT_TRANSIENTWINDOW = 3
     WCA_ACCENT_POLICY = 19
     ACCENT_DISABLED = 0
+    ACCENT_ENABLE_BLURBEHIND = 3
     ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
     GWL_EXSTYLE = -20
     WS_EX_LAYERED = 0x00080000
@@ -73,7 +74,7 @@ class NativeBackdrop:
     @classmethod
     def _legacy_acrylic(cls, hwnd: int, opacity: float) -> bool:
         try:
-            alpha = max(1, min(255, round(float(opacity) * 190)))
+            alpha = max(1, min(255, round(float(opacity) * 80)))
             policy = _AccentPolicy(
                 cls.ACCENT_ENABLE_ACRYLICBLURBEHIND,
                 2,
@@ -113,7 +114,7 @@ class NativeBackdrop:
             self._hwnd, self.DWMWA_BORDER_COLOR, self.DWMWA_COLOR_NONE
         )
         self._dwm_attribute(
-            self._hwnd, self.DWMWA_WINDOW_CORNER_PREFERENCE, self.DWMWCP_ROUND
+            self._hwnd, self.DWMWA_WINDOW_CORNER_PREFERENCE, self.DWMWCP_DONOTROUND
         )
         # Qt's WA_TranslucentBackground creates a layered window. The public
         # DWM transient backdrop can report success for that window and still
@@ -145,6 +146,27 @@ class NativeBackdrop:
             self.DWMWA_WINDOW_CORNER_PREFERENCE,
             self.DWMWCP_DONOTROUND,
         )
+
+    @staticmethod
+    def exclude_capture(hwnd, excluded):
+        if sys.platform != "win32" or not hwnd:
+            return False
+        try:
+            return bool(ctypes.windll.user32.SetWindowDisplayAffinity(wintypes.HWND(hwnd), wintypes.DWORD(0x11 if excluded else 0)))
+        except (AttributeError, OSError):
+            return False
+
+    def apply_blur(self, hwnd):
+        self.prepare_window(hwnd)
+        try:
+            policy = _AccentPolicy(self.ACCENT_ENABLE_BLURBEHIND, 0, 0, 0)
+            data = _WindowCompositionAttributeData(self.WCA_ACCENT_POLICY, ctypes.cast(ctypes.byref(policy), ctypes.c_void_p), ctypes.sizeof(policy))
+            if ctypes.windll.user32.SetWindowCompositionAttribute(wintypes.HWND(hwnd), ctypes.byref(data)):
+                self.backend = "native_blur"
+                return True
+        except (AttributeError, OSError):
+            pass
+        return self.apply_acrylic(hwnd, .3)
 
     def disable(self) -> None:
         hwnd = self._hwnd

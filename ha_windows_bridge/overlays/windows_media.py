@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import base64
 
+from ..media import friendly_media_source
+
 
 def windows_media_payload(snapshot, *, device_name="Windows", controls=False):
     data = {
         "layout": "media", "icon": "mdi:music-note",
-        "media_source": snapshot.source_app or device_name,
+        "media_source": friendly_media_source(snapshot.source_app) or device_name,
         "media_position": snapshot.position, "media_duration": snapshot.duration,
         "media_playing": snapshot.state == "playing", "media_controls": controls,
+        "media_live": True,
         "show_lifetime": False,
     }
     artwork = snapshot.artwork

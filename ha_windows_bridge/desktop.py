@@ -71,6 +71,8 @@ def main(argv=None):
         qt.setStyleSheet(style_for_theme("", selected, system_accent() if qt.platformName() != "offscreen" else None))
         if sys.platform == "win32" and qt.platformName() != "offscreen":
             NativeBackdrop._dwm_attribute(int(window.winId()), 20, int(selected == "dark"))
+            caption = 0x151515 if selected == "dark" else 0xF3F3F3
+            NativeBackdrop._dwm_attribute(int(window.winId()), 35, caption)
         # Native window frame owns resize, caption buttons, Snap and the system menu.
     apply_theme(config)
     window._signals.received.connect(lambda event: apply_theme(event.data if event.topic == "configuration.changed" else runtime.config) if event.topic in {"configuration.changed", "windows.theme_changed"} else None)

@@ -57,8 +57,8 @@ def test_media_background_is_painted_and_bars_are_thin(tmp_path):
         assert not window._media_image.isNull()
         assert window.source.text() == "PC Media Player"
         assert window.media_time.text() == "1:05 / 3:42"
-        assert window.progress.height() == 3
-        assert window.lifetime.height() == 2
+        assert window.progress.height() == 4
+        assert window.lifetime.height() == 4
         assert window.progress.value() == 29
         frame = window.grab().toImage()
         ratio = window.devicePixelRatioF()

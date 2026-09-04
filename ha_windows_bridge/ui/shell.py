@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 from enum import IntEnum
+from html import escape
 from pathlib import Path
 
 import qtawesome as qta
@@ -74,7 +75,7 @@ class DesktopWindow(QMainWindow):
         super().__init__()
         self.application = application
         self.draft = copy.deepcopy(application.config)
-        self.setWindowTitle("HA Windows Bridge 2.0 · wersja rozwojowa")
+        self.setWindowTitle("HA Windows Bridge")
         self.setWindowIcon(qta.icon("mdi6.lan-connect"))
         self.setMinimumSize(820, 620)
         self.resize(1120, 780)
@@ -114,14 +115,7 @@ class DesktopWindow(QMainWindow):
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(12, 24, 12, 16)
-        brand = QLabel("HA Windows Bridge")
-        brand.setObjectName("settingTitle")
-        sidebar_layout.addWidget(brand)
-        version = QLabel("2.0 • wersja rozwojowa")
-        version.setObjectName("settingDescription")
-        sidebar_layout.addWidget(version)
-        sidebar_layout.addSpacing(24)
+        sidebar_layout.setContentsMargins(12, 16, 12, 16)
         sidebar_layout.addWidget(self.navigation, 1)
         self.pages = PageStack()
         for title in PAGES:
@@ -215,7 +209,7 @@ class DesktopWindow(QMainWindow):
         hero, hero_layout = self._card(self.draft.device_name, "Twój komputer w Home Assistant")
         self.summary = QLabel()
         self.summary.setWordWrap(True)
-        self.summary.setTextFormat(Qt.TextFormat.PlainText)
+        self.summary.setTextFormat(Qt.TextFormat.RichText)
         hero_layout.addWidget(self.summary)
         actions = QHBoxLayout()
         actions.addWidget(self._button("Uruchom", self.application.start))
@@ -377,6 +371,31 @@ class DesktopWindow(QMainWindow):
         self._toggle(Page.OVERLAYS, "overlay_enabled", "Wiadomości na ekranie")
         self._toggle(Page.OVERLAYS, "overlay_allow_fullscreen", "Wyświetlaj także nad pełnym ekranem")
         content = self._content(Page.OVERLAYS)
+        for key, title, choices in (
+            ("overlay_animation", "Animacja", (("Przesunięcie", "slide"), ("Przenikanie", "fade"), ("Rozwinięcie", "reveal"), ("Brak", "none"))),
+            ("overlay_background_effect", "Tło przykładów", (("Jednolite", "none"), ("Rozmycie", "blur"), ("Liquid Glass", "liquid"))),
+        ):
+            combo = QComboBox()
+            for label, value in choices:
+                combo.addItem(label, value)
+            combo.setCurrentIndex(max(0, combo.findData(self._get(key))))
+            combo.setFixedWidth(220)
+            combo.setAccessibleName(title)
+            self._fields[key] = combo
+            content.addWidget(SettingControlRow(title, combo))
+        for key, title, minimum, maximum, suffix in (
+            ("overlay_animation_duration", "Czas animacji", 80, 1000, " ms"),
+            ("overlay_example_duration", "Czas przykładu", 2, 60, " s"),
+        ):
+            spin = QSpinBox()
+            spin.setRange(minimum, maximum)
+            spin.setSuffix(suffix)
+            spin.setValue(self._get(key))
+            spin.setFixedWidth(220)
+            spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+            spin.setAccessibleName(title)
+            self._fields[key] = spin
+            content.addWidget(SettingControlRow(title, spin))
         card, inner = self._card("Sprawdź nakładki", "Przykłady wyświetlają się tylko na tym komputerze.")
         for title, pattern in (("Krótka wiadomość", "compact"), ("Zestaw wskaźników", "badges"),
                                ("Odtwarzacz", "media"), ("Duża wiadomość", "standard")):
@@ -410,7 +429,7 @@ class DesktopWindow(QMainWindow):
     def _collect(self):
         self.draft.apps = [card.to_config() for card in self._cards]
         for key, widget in self._fields.items():
-            self._set(key, widget.value() if isinstance(widget, QSpinBox) else widget.text())
+            self._set(key, widget.currentData() if isinstance(widget, QComboBox) else widget.value() if isinstance(widget, QSpinBox) else widget.text())
         for key, widget in self._toggles.items():
             self._set(key, widget.isChecked())
         self.draft.theme = self.theme.currentData()
@@ -421,7 +440,12 @@ class DesktopWindow(QMainWindow):
 
     def _refresh_fields(self):
         for key, widget in self._fields.items():
-            widget.setValue(self._get(key)) if isinstance(widget, QSpinBox) else widget.setText(self._get(key))
+            if isinstance(widget, QComboBox):
+                widget.setCurrentIndex(max(0, widget.findData(self._get(key))))
+            elif isinstance(widget, QSpinBox):
+                widget.setValue(self._get(key))
+            else:
+                widget.setText(self._get(key))
         for key, widget in self._toggles.items():
             widget.setChecked(self._get(key))
         self.theme.setCurrentIndex(max(0, self.theme.findData(self.draft.theme)))
@@ -513,14 +537,20 @@ class DesktopWindow(QMainWindow):
     def _refresh_status(self):
         config = self.application.config
         lines = []
+        rich_lines = []
         for name, enabled in (("mqtt", bool(config.mqtt.host)), ("home_assistant", config.home_assistant.enabled)):
             state = self._connection_states.get(name)
             label = connection_text(state) if enabled and state else "Zatrzymane" if enabled else "Wyłączone"
             if name == "home_assistant" and enabled and not config.overlay_enabled:
                 label = "Nakładki wyłączone — włącz „Wiadomości na ekranie” na stronie Nakładki"
-            lines.append(f"{CONNECTION_NAMES[name]}: {label}")
+            line = f"{CONNECTION_NAMES[name]}: {label}"
+            lines.append(line)
+            state_name = str(state.state) if enabled and state else "stopped"
+            colour = "#43c982" if state_name == "connected" else "#e5b94f" if state_name in {"connecting", "retry_wait"} else "#e06c75" if state_name in {"auth_error", "configuration_error"} else "#899297"
+            rich_lines.append(f'<span style="color:{colour}; font-size:13pt;">●</span>&nbsp; {escape(line)}')
         text = "\n".join(lines)
-        self.connections.setText(text)
+        self.connections.setText("<br>".join(rich_lines))
+        self.connections.setAccessibleName(text)
         labels = {"running": "uruchomiona", "stopped": "zatrzymana", "starting": "uruchamianie",
                   "stopping": "zatrzymywanie", "error": "błąd"}
         services = [f"Usługa {CONNECTION_NAMES.get(item.name, 'Sensory')}: {labels.get(item.state, item.state)}"

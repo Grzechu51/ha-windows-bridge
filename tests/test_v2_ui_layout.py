@@ -53,7 +53,11 @@ def test_notification_grid_centers_icon_and_does_not_overlap_text(layout):
         qt.processEvents()
         assert not window.icon.pixmap().isNull()
         assert window.rect().contains(window.message.geometry())
-        assert not window.icon.geometry().intersects(window.message.geometry())
+        if layout == "media":
+            assert not window.icon.isVisible()
+            assert window.source.x() == window.title.x() == window.message.x()
+        else:
+            assert not window.icon.geometry().intersects(window.message.geometry())
         if layout != "badge":
             assert not window.title.geometry().intersects(window.message.geometry())
             assert window.lifetime.isVisible()

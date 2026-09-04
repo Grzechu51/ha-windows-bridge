@@ -49,11 +49,11 @@ class MotionSystem:
 
     @classmethod
     def animate(cls, parent: QObject, role: str, frame: Callable[[float], None],
-                finished: Callable[[], None]) -> QVariantAnimation:
+                finished: Callable[[], None], *, duration: int | None = None) -> QVariantAnimation:
         token = cls.TOKENS[role]
         animation = QVariantAnimation(parent)
         animation.setProperty("motionRole", role)
-        animation.setDuration(token.duration)
+        animation.setDuration(token.duration if duration is None else max(0, min(1000, duration)))
         animation.setEasingCurve(token.easing)
         animation.setStartValue(0.0)
         animation.setEndValue(1.0)

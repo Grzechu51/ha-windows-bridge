@@ -14,6 +14,7 @@ class Notification:
     deadline: float | None = None
     remaining: float | None = None
     presented_at: float = 0.0
+    media_updated_at: float = 0.0
 
     @property
     def id(self):
@@ -77,6 +78,7 @@ class NotificationEngine:
 
     def _activate(self, notification):
         notification.presented_at = self.clock()
+        notification.media_updated_at = notification.presented_at
         notification.remaining = None
         notification.deadline = None if notification.options["pinned"] else self.clock() + notification.options["duration"]
 
@@ -145,9 +147,23 @@ class NotificationEngine:
         item = self.visible[identifier]
         position = item.options["media_position"]
         if item.options["media_playing"]:
-            position += max(0, self.clock() - item.presented_at)
+            position += max(0, self.clock() - item.media_updated_at)
         return min(item.options["media_duration"], position)
 
     def media_advancing(self, identifier):
         item = self.visible[identifier]
         return item.options["media_playing"] and self.media_position(identifier) < item.options["media_duration"]
+
+    def refresh_media(self, payload):
+        """Refresh content in place: never extend lifetime or release hover pause."""
+        changed = False
+        keys = {"media_position", "media_duration", "media_playing", "media_source", "media_controls", "image"}
+        for item in (*self.visible.values(), *self.pending):
+            if not item.options.get("media_live"):
+                continue
+            content = {key: payload["data"].get(key, "" if key in {"image", "media_source"} else False if key in {"media_controls", "media_playing"} else 0) for key in keys}
+            content["progress"] = None
+            item.options = validated_request(payload["title"], payload["message"], {**item.options, **content})
+            item.media_updated_at = self.clock()
+            changed = True
+        return changed

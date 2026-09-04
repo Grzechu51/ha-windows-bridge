@@ -198,6 +198,10 @@ class AppConfig:
     overlay_enabled: bool = False
     overlay_allow_fullscreen: bool = False
     overlay_monitor: int = 0
+    overlay_animation: str = "slide"
+    overlay_animation_duration: int = 220
+    overlay_example_duration: int = 12
+    overlay_background_effect: str = "none"
 
     def __post_init__(self) -> None:
         self.language = self.language.strip().lower()
@@ -223,6 +227,12 @@ class AppConfig:
             )
         )
         self.overlay_monitor = max(0, min(15, int(self.overlay_monitor)))
+        if self.overlay_animation not in {"slide", "fade", "reveal", "none"}:
+            self.overlay_animation = "slide"
+        self.overlay_animation_duration = max(80, min(1000, int(self.overlay_animation_duration)))
+        self.overlay_example_duration = max(2, min(60, int(self.overlay_example_duration)))
+        if self.overlay_background_effect not in {"none", "blur", "liquid"}:
+            self.overlay_background_effect = "none"
 
     @classmethod
     def from_dict(cls, data: dict) -> AppConfig:
@@ -335,6 +345,10 @@ class AppConfig:
             overlay_enabled=bool(data.get("overlay_enabled", False)),
             overlay_allow_fullscreen=bool(data.get("overlay_allow_fullscreen", False)),
             overlay_monitor=int(data.get("overlay_monitor", 0)),
+            overlay_animation=str(data.get("overlay_animation", "slide")),
+            overlay_animation_duration=int(data.get("overlay_animation_duration", 220)),
+            overlay_example_duration=int(data.get("overlay_example_duration", 12)),
+            overlay_background_effect=str(data.get("overlay_background_effect", "none")),
         )
 
     def to_dict(self) -> dict:

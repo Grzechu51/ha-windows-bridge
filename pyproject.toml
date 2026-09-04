@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-windows-bridge"
-version = "2.0.0-alpha.4"
+version = "2.0.0-alpha.7"
 description = "Connect Windows audio, applications and media sessions to Home Assistant over MQTT"
 readme = "README.md"
 license = "AGPL-3.0-only"
@@ -23,11 +23,11 @@ dependencies = [
     "winrt-Windows.Media.Control>=3.2.1,<4",
     "winrt-Windows.Storage.Streams>=3.2.1,<4",
     "websocket-client>=1.9,<2",
+    "dxcam>=0.3,<0.4",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "dxcam>=0.3,<0.4", # GPU adapter tests only; not shipped in the alpha runtime.
     "PyInstaller>=6.11,<7",
     "pytest>=9.0.3,<10",
     "ruff>=0.16,<0.17",

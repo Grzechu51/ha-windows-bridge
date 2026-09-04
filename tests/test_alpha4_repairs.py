@@ -164,7 +164,7 @@ def test_media_example_reads_windows_off_gui_thread_and_hides_lifetime():
         qt.processEvents()
         window = overlays.windows["example-media"]
         assert window.title.text() == "Current song"
-        assert window.source.text() == "Spotify.exe"
+        assert window.source.text() == "Spotify"
         assert window.media_time.text() == "0:30 / 2:00"
         assert not window._media_image.isNull()
         assert window.lifetime.isHidden()

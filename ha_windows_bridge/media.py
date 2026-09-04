@@ -9,6 +9,8 @@ import time
 from collections.abc import Coroutine
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import PureWindowsPath
 from typing import Any
 
 MAX_ARTWORK_BYTES = 1024 * 1024
@@ -69,6 +71,45 @@ def _playback_state(status: Any) -> str:
     if name == "paused":
         return "paused"
     return "idle"
+
+
+def friendly_media_source(value: Any) -> str:
+    """Turn an executable or Windows AUMID into a short user-facing app name."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    lowered = raw.casefold()
+    known = (
+        ("spotify", "Spotify"),
+        ("chrome", "Chrome"),
+        ("msedge", "Microsoft Edge"),
+        ("microsoftedge", "Microsoft Edge"),
+        ("firefox", "Firefox"),
+        ("vlc", "VLC"),
+        ("tidal", "TIDAL"),
+        ("foobar2000", "foobar2000"),
+    )
+    for fragment, name in known:
+        if fragment in lowered:
+            return name
+    candidate = raw.rsplit("!", 1)[-1]
+    candidate = PureWindowsPath(candidate).name.removesuffix(".exe").removesuffix(".EXE")
+    if candidate.casefold() == "app" and "!" in raw:
+        package = raw.split("_", 1)[0].rsplit(".", 1)[-1]
+        candidate = package or candidate
+    return candidate or "Odtwarzacz Windows"
+
+
+def _timeline_position(timeline, state, duration, now=None):
+    position = _seconds(timeline.position)
+    updated = getattr(timeline, "last_updated_time", None)
+    if state == "playing" and isinstance(updated, datetime):
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=UTC)
+        elapsed = ((now or datetime.now(UTC)) - updated).total_seconds()
+        if 0 <= elapsed <= 86400:
+            position += elapsed
+    return min(position, duration) if duration else position
 
 
 def _image_content_type(data: bytes, reported: str = "") -> str:
@@ -223,19 +264,18 @@ class WindowsMediaService:
         except Exception:
             properties = None
 
-        source_app = str(session.source_app_user_model_id or "")
-        artwork = await self._artwork_async(properties, source_app)
+        source_identifier = str(session.source_app_user_model_id or "")
+        artwork = await self._artwork_async(properties, source_identifier)
         duration = max(_seconds(timeline.end_time), _seconds(timeline.max_seek_time))
-        position = (
-            min(_seconds(timeline.position), duration) if duration else _seconds(timeline.position)
-        )
+        state = _playback_state(playback.playback_status)
+        position = _timeline_position(timeline, state, duration)
         return MediaSnapshot(
-            state=_playback_state(playback.playback_status),
+            state=state,
             title=str(getattr(properties, "title", "") or ""),
             artist=str(getattr(properties, "artist", "") or ""),
             album_title=str(getattr(properties, "album_title", "") or ""),
             album_artist=str(getattr(properties, "album_artist", "") or ""),
-            source_app=source_app,
+            source_app=friendly_media_source(source_identifier),
             duration=round(duration, 3),
             position=round(position, 3),
             capabilities=MediaCapabilities(

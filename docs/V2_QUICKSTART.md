@@ -1,11 +1,11 @@
-# Uruchomienie 2.0.0-alpha.4
+# Uruchomienie 2.0.0-alpha.7
 
 To wydanie przedpremierowe. Przed aktualizacją integracji wykonaj kopię zapasową Home Assistant. Nie uruchamiaj dwóch wersji Bridge jednocześnie.
 
 ## Aplikacja Windows
 
-Pobierz [wydanie 2.0.0-alpha.4](https://github.com/Grzechu51/ha-windows-bridge/releases/tag/v2.0.0-alpha.4).
-Zamknij działającą wersję Bridge z zasobnika. Uruchom instalator `HA-Windows-Bridge-Setup-2.0.0-alpha.4.exe` albo rozpakuj **cały** ZIP `win64` do osobnego folderu i otwórz `HA Windows Bridge.exe`. Nie przenoś samego EXE bez folderu `_internal`.
+Alpha.6 jest przygotowana do lokalnych testów. Ostatnie opublikowane [wydanie na GitHubie to alpha.4](https://github.com/Grzechu51/ha-windows-bridge/releases/tag/v2.0.0-alpha.4).
+Zamknij działającą wersję Bridge z zasobnika. Uruchom otrzymany instalator `HA-Windows-Bridge-Setup-2.0.0-alpha.7.exe` albo rozpakuj **cały** ZIP `win64` do osobnego folderu i otwórz `HA Windows Bridge.exe`. Nie przenoś samego EXE bez folderu `_internal`.
 
 Dla uruchomienia z kodu, w PowerShell:
 
@@ -22,6 +22,16 @@ Nowa wersja zapisuje `%LOCALAPPDATA%\HAWindowsBridge\profile-v2.json`. Nie odczy
 4. Wybierz **Zapisz i zastosuj**, a następnie **Przegląd → Uruchom**. Opcjonalnie włącz automatyczne łączenie.
 
 Zapis zachowuje stan usług: uruchomione wznawia z nowymi ustawieniami, zatrzymanych nie uruchamia. Opcja **Łącz automatycznie** dotyczy startu aplikacji. Test **Odtwarzacz** pokazuje aktualną sesję Windows z okładką i postępem utworu, bez paska czasu do zamknięcia. Gdy sesji nie ma, uruchom odtwarzanie i ponów test.
+
+## Wygląd nakładek
+
+W **Nakładki** wybierz **Animacja**: Przesunięcie, Przenikanie, Rozwinięcie albo Brak. Ustaw **Czas animacji**, a dla lokalnych testów także **Tło przykładów** i **Czas przykładu**. Kliknij **Zapisz i zastosuj**, następnie pokaż przykład. Wyłączenie animacji w Windows lub opcja ograniczenia animacji mają pierwszeństwo.
+
+Odtwarzacz Windows aktualizuje pauzę, pozycję, tytuł i okładkę podczas wyświetlania nakładki. Sterowanie wymaga włączenia udostępniania multimediów. Pasek pod utworem pokazuje jego postęp, nie czas do zamknięcia. Nakładki innych odtwarzaczy z HA nie są nadpisywane sesją Windows.
+
+**Rozmycie** korzysta z przechwytywanego fragmentu pulpitu za nakładką. **Liquid Glass** używa tego samego rozmycia i dodaje delikatne powiększenie oraz refleks. Jeśli przechwytywanie jest niedostępne, aplikacja pokazuje jednolite tło. Przechwycone fragmenty nie są zapisywane ani wysyłane. Po zamknięciu nakładki odświeżanie i przechwytywanie zatrzymują się.
+
+## Aplikacje i diagnostyka
 
 Na stronie **Aplikacje** program automatycznie wykrywa aktywne sesje audio i ich ikony. Nowo wykryte programy nie są automatycznie udostępniane w HA: włącz wybrane przełączniki i zapisz. Jeśli programu nie ma, uruchom w nim dźwięk albo wybierz **Dodaj program…**.
 
