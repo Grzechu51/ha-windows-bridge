@@ -44,6 +44,8 @@ from ..windows_effects import NativeBackdrop
 from .media_style import artwork_rect, media_palette, transition_bounds
 
 ACCENTS = {"default": "#b5c6cd", "success": "#62d6a1", "warning": "#efc261", "error": "#fa8798"}
+MEDIA_CARD_WIDTH = 520
+MEDIA_CARD_HEIGHT = 214
 
 
 class NotificationWindow(QFrame):
@@ -123,7 +125,7 @@ class NotificationWindow(QFrame):
 
     def update_notification(self, options):
         transport = {"media_position", "media_duration", "media_playing", "progress"}
-        expected_width = min(self._width_limit, options["width"] if options["size_mode"] == "manual" else 520)
+        expected_width = min(self._width_limit, options["width"] if options["size_mode"] == "manual" else MEDIA_CARD_WIDTH)
         if self._options and options["layout"] == "media" and self.width() == expected_width and {k: v for k, v in self._options.items() if k not in transport} == {k: v for k, v in options.items() if k not in transport}:
             self._options = options.copy()
             self.set_media_position(options["media_position"], options["media_duration"])
@@ -142,6 +144,8 @@ class NotificationWindow(QFrame):
         accent = ACCENTS.get(options["preset"], ACCENTS["default"])
         badge = options["layout"] == "badge"
         media = options["layout"] == "media"
+        self.title.setWordWrap(not media)
+        self.message.setWordWrap(not media)
         self.setStyleSheet("NotificationWindow { background: transparent; border: none; }"
                            "QLabel { color: #f4f4f4; background: transparent; }"
                            f"QProgressBar {{ border: none; background: rgba(160,180,188,65); }} QProgressBar::chunk {{ background: {accent}; }}"
@@ -179,8 +183,8 @@ class NotificationWindow(QFrame):
             self.message.show()
             self.setFixedWidth(max(52, min(200, self.message.fontMetrics().horizontalAdvance(self.message.text()) + (54 if icon else 24))))
         else:
-            self.message.setWordWrap(True)
-            self.setFixedWidth(min(self._width_limit, options["width"] if options["size_mode"] == "manual" else 520 if media else 380))
+            self.message.setWordWrap(not media)
+            self.setFixedWidth(min(self._width_limit, options["width"] if options["size_mode"] == "manual" else MEDIA_CARD_WIDTH if media else 380))
             if media:
                 self.source.setText(options.get("media_source") or "Media Player")
                 self._grid.addWidget(self.source, 0, column, 1, 4 - column)
@@ -204,7 +208,7 @@ class NotificationWindow(QFrame):
                 size = reader.size()
                 supported = bytes(reader.format()).lower() in {b"png", b"jpeg", b"jpg", b"webp", b"gif"}
                 if supported and size.isValid() and size.width() * size.height() <= 16_000_000:
-                    bounds = QSize(round((self.width() - 32) * self.devicePixelRatioF()), round((214 if media else 180) * self.devicePixelRatioF()))
+                    bounds = QSize(round((self.width() - 32) * self.devicePixelRatioF()), round((MEDIA_CARD_HEIGHT if media else 180) * self.devicePixelRatioF()))
                     reader.setScaledSize(size.scaled(bounds, Qt.AspectRatioMode.KeepAspectRatio))
                     pixmap = QPixmap.fromImage(reader.read())
                     pixmap.setDevicePixelRatio(self.devicePixelRatioF())
@@ -238,16 +242,15 @@ class NotificationWindow(QFrame):
             self._update_media_buttons()
             for button in self._media_buttons:
                 button.setStyleSheet(f"QToolButton {{ background: transparent; border: none; border-radius: 24px; padding: 0; }} QToolButton:hover {{ background: rgba({primary.red()},{primary.green()},{primary.blue()},28); }} QToolButton:pressed {{ background: rgba({primary.red()},{primary.green()},{primary.blue()},48); }}")
-            if not self._media_image.isNull():
-                cover = artwork_rect(QSize(self.width(), 214), self._media_image.size())
-                start, end = transition_bounds(self.width(), cover)
-                text_width = max(120, round(start + (end - start) * .35) - 32)
-                self.title.setMaximumWidth(text_width)
-                self.message.setMaximumWidth(text_width)
-                self.source.setMaximumWidth(text_width)
-                timeline_width = min(280, text_width)
-                self.media_time.setMaximumWidth(timeline_width)
-                self.progress.setMaximumWidth(timeline_width)
+            text_width = max(120, min(280, round(self.width() * .54)))
+            for label, text in ((self.source, options.get("media_source") or "Media Player"),
+                                (self.title, options["title"]), (self.message, options["message"])):
+                label.setMaximumWidth(text_width)
+                elided = label.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, text_width)
+                label.setText(elided)
+                label.setToolTip(text if elided != text else "")
+            self.media_time.setMaximumWidth(text_width)
+            self.progress.setMaximumWidth(text_width)
         else:
             tone = QColor(accent)
             self.progress.setStyleSheet(f"QProgressBar {{ border: none; border-radius: 2px; background: rgba(127,127,127,38); }} QProgressBar::chunk {{ border-radius: 2px; background: {tone.name()}; }}")
@@ -284,12 +287,16 @@ class NotificationWindow(QFrame):
         if options["show_lifetime"] and not options["pinned"] and not badge:
             self._grid.addWidget(self.lifetime, row, 0, 1, 5)
             self.lifetime.show()
-        self.setMinimumHeight(214 if media else 0)
+        self.setMinimumHeight(0)
         self.setMaximumHeight(16777215)
         self._grid.activate()
-        self.adjustSize()
-        if options["size_mode"] == "manual" and not badge:
-            self.setMinimumHeight(max(self.height(), options["height"]))
+        if media:
+            height = options["height"] if options["size_mode"] == "manual" else MEDIA_CARD_HEIGHT
+            self.setFixedHeight(max(180, min(720, height)))
+        else:
+            self.adjustSize()
+            if options["size_mode"] == "manual" and not badge:
+                self.setMinimumHeight(max(self.height(), options["height"]))
         effect_key = (options["background_effect"], options["opacity"], badge)
         if effect_key != self._effect_key:
             self._backdrop.disable()
@@ -308,6 +315,7 @@ class NotificationWindow(QFrame):
     def _apply_surface_mask(self):
         if not self.rect().isEmpty():
             self.setMask(self._surface_region())
+            NativeBackdrop.apply_rounded_region(int(self.winId()), 14)
 
     def _reinforce_surface_mask(self, region=None):
         """Re-apply the native window region after the HWND becomes visible."""
@@ -315,6 +323,8 @@ class NotificationWindow(QFrame):
             return
         self.clearMask()
         self.setMask(region if region is not None else self._surface_region())
+        if region is None:
+            NativeBackdrop.apply_rounded_region(int(self.winId()), 14)
 
     def _visual_widgets(self):
         return (self.icon, self.title, self.message, self.artwork, self.source,
@@ -437,10 +447,6 @@ class NotificationWindow(QFrame):
             painter.setPen(QPen(accent, 1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
-            if self._options.get("background_effect") == "liquid":
-                highlight = QColor(255, 255, 255, 92)
-                painter.setPen(QPen(highlight, 1.2))
-                painter.drawArc(bounds.adjusted(1.5, 1.5, -1.5, -1.5), 22 * 16, 136 * 16)
         if not self._intro_snapshot.isNull():
             painter.drawPixmap(0, 0, self._intro_snapshot)
         painter.end()

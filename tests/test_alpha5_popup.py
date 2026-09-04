@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import base64
 import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QEvent, QPoint, QSize
+from PySide6.QtCore import QBuffer, QByteArray, QEvent, QIODevice, QPoint, QSize
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFrame, QLabel
@@ -25,6 +26,7 @@ from ha_windows_bridge.overlays.windows_media import windows_media_payload
 from ha_windows_bridge.ui.motion import MotionSystem
 from ha_windows_bridge.ui.shell import DesktopWindow, Page
 from ha_windows_bridge.ui.theme import PALETTES, style_for_theme
+from ha_windows_bridge.windows_effects import NativeBackdrop
 
 
 def test_live_refresh_changes_pause_seek_and_track_without_restarting_lifetime():
@@ -117,6 +119,42 @@ def test_media_controls_are_larger_aligned_and_refresh_does_not_decode_artwork(t
         QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
+def test_media_card_keeps_one_size_for_different_artwork_and_long_titles():
+    qt = qt_app()
+
+    def artwork(width, height, colour):
+        image = QImage(width, height, QImage.Format.Format_RGBA8888)
+        image.fill(QColor(colour))
+        data = QByteArray()
+        buffer = QBuffer(data)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        assert image.save(buffer, "PNG")
+        return "data:image/png;base64," + base64.b64encode(bytes(data)).decode("ascii")
+
+    example = media_example()
+    window = NotificationWindow(validated_request(example["title"], example["message"], example["data"]))
+    try:
+        expected = QSize(520, 214)
+        widths = set()
+        title_was_elided = False
+        for size, title in (((180, 180), "Krótki tytuł"),
+                            ((520, 160), "Bardzo długi tytuł utworu, który wcześniej powiększał całe okno odtwarzacza"),
+                            ((160, 520), "Inny utwór")):
+            options = validated_request(title, "Długi wykonawca i nazwa albumu, które również muszą pozostać w swoim sektorze", {
+                **example["data"], "image": artwork(*size, "#c86638"),
+            })
+            window.update_notification(options)
+            window.show()
+            qt.processEvents()
+            assert window.size() == expected
+            widths.add((window.title.maximumWidth(), window.message.maximumWidth(), window.progress.maximumWidth()))
+            title_was_elided = title_was_elided or bool(window.title.toolTip())
+        assert len(widths) == 1
+        assert title_was_elided
+    finally:
+        window.dispose()
+
+
 @pytest.mark.parametrize("animation", ["none", "slide", "fade", "reveal"])
 def test_animation_preferences_roundtrip_and_controls_fit(animation):
     qt = qt_app()
@@ -178,13 +216,15 @@ def test_shell_removes_development_labels_and_fluent_edge_marks(theme, tmp_path)
         assert app.shutdown()
 
 
-def test_blur_uses_one_rounded_composited_surface_without_native_layer():
+def test_blur_uses_one_rounded_composited_surface_without_native_layer(monkeypatch):
     qt = qt_app()
     qt.setProperty("bridgePopupAnimation", "slide")
     options = validated_request("Tytuł", "Treść", {"background_effect": "blur"})
     window = NotificationWindow(options)
     applied = []
+    rounded = []
     window._backdrop.apply_blur = lambda hwnd: applied.append(hwnd) or True
+    monkeypatch.setattr(NativeBackdrop, "apply_rounded_region", lambda hwnd, radius=14: rounded.append((hwnd, radius)) or True)
     try:
         assert not applied
         window.place(QPoint(0, 0), appearing=True)
@@ -195,6 +235,7 @@ def test_blur_uses_one_rounded_composited_surface_without_native_layer():
         qt.processEvents()
         assert not applied
         assert window._backdrop.backend == "none"
+        assert rounded and all(radius == 14 for _hwnd, radius in rounded)
     finally:
         window.dispose()
 

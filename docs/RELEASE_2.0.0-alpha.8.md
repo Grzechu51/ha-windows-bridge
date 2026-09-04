@@ -1,4 +1,8 @@
-# HA Windows Bridge 2.0.0-alpha.7
+# HA Windows Bridge 2.0.0-alpha.8
+
+- Odtwarzacz ma zawsze stały rozmiar 520 × 214 px, niezależnie od proporcji okładki i długości tytułu. Dłuższy tekst jest skracany w stałym sektorze.
+- Zaokrąglenie animowanego popupu jest wymuszane bezpośrednio regionem okna Windows, dzięki czemu pierwsze klatki nie zależą od opóźnionej maski Qt/DWM.
+- Usunięto dekoracyjny łuk z Liquid Glass.
 
 - Efekt rozmycia jest przygotowywany, zanim popup stanie się widoczny, dlatego nie pojawia się już prostokątna ani nierozmyta pierwsza klatka.
 - Zaokrąglony region okna jest ponownie wymuszany po utworzeniu natywnego okna Windows i przed startem animacji.
@@ -15,7 +19,7 @@
 
 ## Aktualizacja
 
-Zamknij Bridge z zasobnika i uruchom instalator alpha.7. Profil i istniejące encje pozostają zachowane. Poprawki wyglądu nie wymagają zmiany tokenu ani ponownego dodawania komputera. Do paczki dołączono integrację z ujednoliconym numerem alpha.7.
+Zamknij Bridge z zasobnika i uruchom instalator alpha.8. Profil i istniejące encje pozostają zachowane. Poprawki wyglądu nie wymagają zmiany tokenu ani ponownego dodawania komputera. Do paczki dołączono integrację z ujednoliconym numerem alpha.8.
 
 W **Nakładki** wybierz animację, czas i tło przykładów, kliknij **Zapisz i zastosuj**, następnie pokaż przykład. Test **Odtwarzacz** korzysta z bieżącej sesji Windows.
 

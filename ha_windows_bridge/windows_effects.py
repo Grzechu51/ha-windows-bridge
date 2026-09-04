@@ -156,6 +156,48 @@ class NativeBackdrop:
         except (AttributeError, OSError):
             return False
 
+    @staticmethod
+    def apply_rounded_region(hwnd: int, radius: int = 14) -> bool:
+        """Apply an HWND region immediately, independent of DWM's first frame."""
+        if sys.platform != "win32" or not hwnd:
+            return False
+        try:
+            rect = wintypes.RECT()
+            user32 = ctypes.windll.user32
+            gdi32 = ctypes.windll.gdi32
+            get_rect = user32.GetWindowRect
+            get_rect.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
+            get_rect.restype = wintypes.BOOL
+            if not get_rect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+                return False
+            width, height = rect.right - rect.left, rect.bottom - rect.top
+            get_dpi = getattr(user32, "GetDpiForWindow", None)
+            if get_dpi is not None:
+                get_dpi.argtypes = (wintypes.HWND,)
+                get_dpi.restype = ctypes.c_uint
+            dpi = get_dpi(wintypes.HWND(hwnd)) if get_dpi is not None else 96
+            dpi = dpi or 96
+            diameter = max(2, round(radius * 2 * dpi / 96))
+            create_region = gdi32.CreateRoundRectRgn
+            create_region.argtypes = (ctypes.c_int,) * 6
+            create_region.restype = wintypes.HANDLE
+            region = create_region(0, 0, width + 1, height + 1, diameter, diameter)
+            if not region:
+                return False
+            set_region = user32.SetWindowRgn
+            set_region.argtypes = (wintypes.HWND, wintypes.HANDLE, wintypes.BOOL)
+            set_region.restype = ctypes.c_int
+            if set_region(wintypes.HWND(hwnd), region, True):
+                # Windows owns the region after a successful SetWindowRgn.
+                return True
+            delete_object = gdi32.DeleteObject
+            delete_object.argtypes = (wintypes.HANDLE,)
+            delete_object.restype = wintypes.BOOL
+            delete_object(region)
+        except (AttributeError, OSError):
+            pass
+        return False
+
     def apply_blur(self, hwnd):
         self.prepare_window(hwnd)
         try:

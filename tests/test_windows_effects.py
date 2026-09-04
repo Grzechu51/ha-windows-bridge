@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,6 +9,15 @@ from PySide6.QtWidgets import QApplication
 
 from ha_windows_bridge.windows.capture import DesktopDuplicationCapture
 from ha_windows_bridge.windows_effects import NativeBackdrop
+
+
+class _WinCall:
+    def __init__(self, callback):
+        self.callback = callback
+        self.restype = None
+
+    def __call__(self, *args):
+        return self.callback(*args)
 
 
 def test_native_backdrop_prefers_layered_window_acrylic(monkeypatch) -> None:
@@ -59,6 +69,35 @@ def test_prepare_window_removes_dwm_border_and_outer_rounding(monkeypatch) -> No
         NativeBackdrop.DWMWA_WINDOW_CORNER_PREFERENCE,
         NativeBackdrop.DWMWCP_DONOTROUND,
     ) in dwm_calls
+
+
+def test_rounded_region_uses_real_window_pixels_and_transfers_ownership(monkeypatch) -> None:
+    calls = []
+
+    def get_rect(_hwnd, target):
+        target._obj.left, target._obj.top = 100, 200
+        target._obj.right, target._obj.bottom = 620, 414
+        return 1
+
+    create = _WinCall(lambda left, top, right, bottom, width, height: calls.append(
+        ("create", left, top, right, bottom, width, height)
+    ) or 4321)
+    user32 = SimpleNamespace(
+        GetWindowRect=get_rect,
+        GetDpiForWindow=lambda _hwnd: 96,
+        SetWindowRgn=lambda hwnd, region, redraw: calls.append(("set", int(hwnd.value), region, redraw)) or 1,
+    )
+    gdi32 = SimpleNamespace(
+        CreateRoundRectRgn=create,
+        DeleteObject=lambda region: calls.append(("delete", region)) or 1,
+    )
+    monkeypatch.setattr("ha_windows_bridge.windows_effects.sys.platform", "win32")
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=user32, gdi32=gdi32))
+
+    assert NativeBackdrop.apply_rounded_region(1234, 14)
+    assert ("create", 0, 0, 521, 215, 28, 28) in calls
+    assert any(call[0] == "set" for call in calls)
+    assert not any(call[0] == "delete" for call in calls)
 
 
 def test_desktop_duplication_returns_logical_sized_pixmap(monkeypatch) -> None:

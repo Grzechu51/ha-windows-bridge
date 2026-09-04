@@ -59,7 +59,10 @@ class GlassRenderer(QObject):
                 self.timer.start()
                 self.request()
             if any(window._awaiting_glass for window in self.targets().values()):
-                QTimer.singleShot(350, self._release_staged)
+                # DXGI initialization can take longer on the first capture.
+                # The fallback is only for a genuinely stalled backend; showing
+                # earlier would animate a solid frame and add blur afterwards.
+                QTimer.singleShot(1500, self._release_staged)
         elif self.timer.isActive():
             self.timer.stop()
             self._generation += 1

@@ -4,7 +4,7 @@
 
 <h1 align="center">HA Windows Bridge</h1>
 
-> Ta gałąź zawiera przygotowywaną **2.0.0-alpha.7**: zaokrąglona i rozmyta pierwsza klatka animacji, wyraźniejszy Liquid Glass oraz dopracowana oś czasu multimediów.
+> Ta gałąź zawiera przygotowywaną **2.0.0-alpha.8**: natywnie zaokrąglona i rozmyta pierwsza klatka animacji, wyraźniejszy Liquid Glass oraz odtwarzacz o stałym rozmiarze.
 > Ostatnie opublikowane wydanie: [2.0.0-alpha.4](https://github.com/Grzechu51/ha-windows-bridge/releases/tag/v2.0.0-alpha.4).
 > Zacznij od [instrukcji 2.0](docs/V2_QUICKSTART.md) i [raportu przebudowy](docs/V2_REBUILD.md).
 > Instrukcje instalacji opublikowanych wydań poniżej dotyczą wcześniejszej linii 0.x.

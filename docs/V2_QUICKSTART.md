@@ -1,11 +1,11 @@
-# Uruchomienie 2.0.0-alpha.7
+# Uruchomienie 2.0.0-alpha.8
 
 To wydanie przedpremierowe. Przed aktualizacją integracji wykonaj kopię zapasową Home Assistant. Nie uruchamiaj dwóch wersji Bridge jednocześnie.
 
 ## Aplikacja Windows
 
 Alpha.6 jest przygotowana do lokalnych testów. Ostatnie opublikowane [wydanie na GitHubie to alpha.4](https://github.com/Grzechu51/ha-windows-bridge/releases/tag/v2.0.0-alpha.4).
-Zamknij działającą wersję Bridge z zasobnika. Uruchom otrzymany instalator `HA-Windows-Bridge-Setup-2.0.0-alpha.7.exe` albo rozpakuj **cały** ZIP `win64` do osobnego folderu i otwórz `HA Windows Bridge.exe`. Nie przenoś samego EXE bez folderu `_internal`.
+Zamknij działającą wersję Bridge z zasobnika. Uruchom otrzymany instalator `HA-Windows-Bridge-Setup-2.0.0-alpha.8.exe` albo rozpakuj **cały** ZIP `win64` do osobnego folderu i otwórz `HA Windows Bridge.exe`. Nie przenoś samego EXE bez folderu `_internal`.
 
 Dla uruchomienia z kodu, w PowerShell:
 
