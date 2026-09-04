@@ -57,6 +57,7 @@ class BridgeRuntime:
     available: bool = False
     listeners: set = field(default_factory=set)
     pending: dict = field(default_factory=dict)
+    _direct_pending: set = field(default_factory=set)
     _unsubscribe: list = field(default_factory=list)
     _deadline_cancel: Any = None
     _closed: bool = False
@@ -95,8 +96,9 @@ class BridgeRuntime:
         self.available = False
         self.owner, self._direct_sender = None, None
         self._deadline_cancel = None
-        for future in self.pending.values():
-            if not future.done():
+        for identifier in tuple(self._direct_pending):
+            future = self.pending.get(identifier)
+            if future is not None and not future.done():
                 future.set_exception(HomeAssistantError("Windows Bridge disconnected"))
         self._notify()
 
@@ -127,6 +129,10 @@ class BridgeRuntime:
     async def send(self, topic: str, payload: str, *, direct=False):
         if self._closed:
             raise HomeAssistantError("Bridge integration is unloading")
+        # Only popup commands may use the live Direct session. Audio, sensors
+        # and every other route remain MQTT, including after a Direct reconnect.
+        if topic and topic == self.overlay_topic and self.owner is not None:
+            direct = True
         if not self.protocol and not direct:
             await mqtt.async_publish(self.hass, topic, payload, qos=1, retain=False)
             return
@@ -153,6 +159,8 @@ class BridgeRuntime:
             raise HomeAssistantError("Too many pending Windows commands")
         future = self.hass.loop.create_future()
         self.pending[identifier] = future
+        if direct:
+            self._direct_pending.add(identifier)
         try:
             if direct:
                 self._direct_sender(command)
@@ -167,6 +175,7 @@ class BridgeRuntime:
             raise HomeAssistantError("Windows Bridge did not acknowledge the command in time") from None
         finally:
             self.pending.pop(identifier, None)
+            self._direct_pending.discard(identifier)
 
     @callback
     def close(self):
@@ -181,6 +190,7 @@ class BridgeRuntime:
             if not future.done():
                 future.set_exception(HomeAssistantError("Bridge integration unloaded"))
         self.pending.clear()
+        self._direct_pending.clear()
         self.listeners.clear()
         self.available = False
         self.owner, self._direct_sender = None, None

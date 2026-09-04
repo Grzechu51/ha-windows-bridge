@@ -8,7 +8,6 @@ from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 
 from .engine import NotificationEngine
-from .examples import media_example
 from .positioning import CardSize, PlacementEngine, Rect
 from .presentation import NotificationWindow
 
@@ -25,6 +24,8 @@ class OverlayService(QObject):
         self._retiring = set()
         self._connections = []
         self._screens = []
+        self._media_request = 0
+        self._closed = False
         self._unsubscribe = application.events.subscribe("*", self.received.emit)
         self.received.connect(self._event, Qt.ConnectionType.QueuedConnection)
         self.timer = QTimer(self)
@@ -36,32 +37,41 @@ class OverlayService(QObject):
         self._screens_changed()
 
     def _event(self, event):
+        if self._closed:
+            return
         if event.topic == "overlay.show":
             self.engine.submit(event.data)
             self._sync()
         elif event.topic == "overlay.example":
             self.example(event.data)
+        elif event.topic == "overlay.media_example":
+            if event.data["request_id"] == self._media_request:
+                self.engine.submit(event.data["payload"])
+                self._sync()
         elif event.topic == "overlay.clear" or event.topic == "windows.locked" and event.data:
+            self._media_request += 1
             self.engine.submit({"data": {"action": "clear"}})
             self._sync()
         elif event.topic == "configuration.changed":
             QGuiApplication.instance().setProperty("bridgeReducedMotion", event.data.reduced_motion)
 
     def example(self, pattern):
+        request_id = self._media_request + 1
         if pattern == "badges":
             for identifier, icon, value in (("battery", "mdi:battery", "88%"), ("light", "mdi:lightbulb", ""), ("clock", "", "14:01")):
                 self.engine.submit({"title": "", "message": value, "data": {
                     "id": "example-" + identifier, "icon": icon, "layout": "badge", "display_mode": "parallel",
                     "duration": 8, "edge_offset": 16}})
         elif pattern == "media":
-            self.engine.submit(media_example())
+            if self.application.request_media_example(request_id):
+                self._media_request = request_id
+            return
         else:
             self.engine.submit({"title": "HA Windows Bridge 2.0",
                                 "message": "Twoje powiadomienia. Na Twoim komputerze.",
                                 "data": {"id": "example-message", "layout": pattern, "icon": "mdi:home-assistant",
                                          "show_lifetime": True, "pause_on_hover": True, "show_close_button": True,
-                                         "edge_offset": 16, "duration": 8,
-                                         "progress": 42 if pattern == "media" else None}})
+                                         "edge_offset": 16, "duration": 8}})
         self._sync()
 
     def _screens_changed(self, *_args):
@@ -156,6 +166,8 @@ class OverlayService(QObject):
         self._clock_state()
 
     def close(self):
+        self._closed = True
+        self._media_request += 1
         self._unsubscribe()
         self.timer.stop()
         for connection in self._connections:

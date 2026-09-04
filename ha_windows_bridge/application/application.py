@@ -12,6 +12,7 @@ from dataclasses import asdict
 from importlib.metadata import version
 
 from .. import __version__
+from ..communication.status import CONNECTION_NAMES, connection_text
 from ..config import AppConfig
 from ..core.commands import Command
 from ..core.events import EventBus
@@ -55,6 +56,7 @@ class Application:
         self._connection_unsubscribe = self.events.subscribe("connection.changed", self._connection_changed)
         self._protect_secrets(config)
         self._build_services()
+        self.log.info("HA Windows Bridge %s — aplikacja gotowa", __version__)
 
     def _protect_secrets(self, config):
         self.diagnostics.protect(config.mqtt.password, config.home_assistant.token)
@@ -62,6 +64,12 @@ class Application:
     def _connection_changed(self, event):
         with self._guard:
             self._connections[event.data.transport] = asdict(event.data)
+        level = logging.WARNING if event.data.error else logging.INFO
+        self.log.log(level, "%s: %s", CONNECTION_NAMES.get(event.data.transport, event.data.transport), connection_text(event.data))
+
+    def connection_snapshot(self):
+        with self._guard:
+            return copy.deepcopy(tuple(self._connections.values()))
 
     def check_updates(self):
         from ..updater import GitHubUpdateChecker
@@ -73,6 +81,9 @@ class Application:
         from ..communication.gateway import MqttGateway
         from .telemetry import TelemetryService
         self._generation += 1
+        self.states.clear()
+        with self._guard:
+            self._connections.clear()
         self.supervisor = ServiceSupervisor(self.states, self.log)
         self.router = CommandRouter(logger=self.log)
         WindowsCommands(self.config, self.audio, self.system, self.media, self.power,
@@ -84,7 +95,7 @@ class Application:
             self._telemetry = TelemetryService(self.config, self.audio, self.system, self.media,
                                               gateway.publisher, self.events, self.monitors)
             self.supervisor.register("sensors", self._telemetry, "mqtt")
-        if self.config.home_assistant.enabled:
+        if self.config.home_assistant.enabled and self.config.overlay_enabled:
             if self._direct_factory is None:
                 from ..communication.home_assistant import HomeAssistantGateway
                 self._direct_factory = HomeAssistantGateway
@@ -114,6 +125,7 @@ class Application:
             self._build_services()
         errors = self.config.validation_errors()
         if errors:
+            self.log.warning("Nie uruchomiono usług: %s", "; ".join(errors))
             self.events.emit("application.error", "\n".join(errors))
             return
         self.media.reopen()
@@ -146,18 +158,25 @@ class Application:
         if not candidate.mqtt.host and not candidate.home_assistant.enabled:
             errors = [error for error in errors if error != "Skonfiguruj MQTT lub bezpośrednie połączenie z Home Assistant."]
         if errors:
+            self.log.warning("Nie zapisano ustawień: %s", "; ".join(errors))
             self.events.emit("application.error", "\n".join(errors))
             return False
         self._protect_secrets(candidate)
         def apply():
             self._stop()
             # Saving occurs only after old services have relinquished their resources.
-            self.store.save(candidate)
+            try:
+                self.store.save(candidate)
+            except Exception:
+                # A failed write must not leave a running installation stopped.
+                self._start()
+                raise
             self.startup.set_enabled(candidate.start_with_windows)
             self.config = candidate
             self._build_services()
             self.events.emit("configuration.changed", copy.deepcopy(candidate))
-            self._desired_running = candidate.auto_connect
+            self.log.info("Zapisano i zastosowano ustawienia")
+            # auto_connect controls application startup, not the current run state.
             self._start()
         return self._schedule(apply)
 
@@ -180,7 +199,7 @@ class Application:
                 self.events.emit("application.error", "Nie można odczytać urządzeń. Spróbuj ponownie.")
         return self._query_once(kind, query)
 
-    def _query_once(self, key, callback):
+    def _query_once(self, key, callback, *, worker=None):
         with self._guard:
             if self._closed or key in self._pending_queries:
                 return False
@@ -191,7 +210,7 @@ class Application:
             finally:
                 with self._guard:
                     self._pending_queries.discard(key)
-        accepted = self._queries.submit(run)
+        accepted = (worker or self._queries).submit(run)
         if not accepted:
             with self._guard:
                 self._pending_queries.discard(key)
@@ -199,6 +218,30 @@ class Application:
 
     def request_resources(self):
         return self._query_once("resources", lambda: self.events.emit("resources.updated", self.resources.sample()))
+
+    def request_media_example(self, request_id):
+        def query():
+            try:
+                self.media.reopen()
+                snapshot = self.media.snapshot()
+                if not snapshot.supported:
+                    raise RuntimeError("Windows Media unavailable")
+                if not snapshot.source_app and not snapshot.title:
+                    self.log.info("Podgląd odtwarzacza: brak aktywnej sesji Windows")
+                    self.events.emit("application.error", "Uruchom odtwarzanie w Windows i ponów podgląd.")
+                    return
+                from ..overlays.windows_media import windows_media_payload
+                payload = windows_media_payload(snapshot, device_name=self.config.device_name,
+                                                controls=self.config.media_player_enabled and not self.router.closed)
+                payload["data"].update(id="example-media", show_close_button=True, pause_on_hover=True,
+                                       duration=12, edge_offset=16, monitor=self.config.overlay_monitor)
+                self.events.emit("overlay.media_example", {"request_id": request_id, "payload": payload})
+                self.log.info("Wyświetlono podgląd odtwarzacza Windows")
+            except Exception:
+                self.log.exception("Nie można odczytać odtwarzacza Windows")
+                self.events.emit("application.error", "Nie można odczytać odtwarzacza Windows. Sprawdź diagnostykę.")
+        # Serialize media open/read against configuration changes and shutdown.
+        return self._query_once("media_example", query, worker=self._operations)
 
     def suspend(self):
         self._suspended = True

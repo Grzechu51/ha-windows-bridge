@@ -1,11 +1,11 @@
-# Uruchomienie 2.0.0-alpha.3
+# Uruchomienie 2.0.0-alpha.4
 
 To wydanie przedpremierowe. Przed aktualizacją integracji wykonaj kopię zapasową Home Assistant. Nie uruchamiaj dwóch wersji Bridge jednocześnie.
 
 ## Aplikacja Windows
 
-Pobierz [wydanie 2.0.0-alpha.3](https://github.com/Grzechu51/ha-windows-bridge/releases/tag/v2.0.0-alpha.3).
-Zamknij działającą wersję Bridge z zasobnika. Uruchom instalator `HA-Windows-Bridge-Setup-2.0.0-alpha.3.exe` albo rozpakuj **cały** ZIP `win64` do osobnego folderu i otwórz `HA Windows Bridge.exe`. Nie przenoś samego EXE bez folderu `_internal`.
+Pobierz [wydanie 2.0.0-alpha.4](https://github.com/Grzechu51/ha-windows-bridge/releases/tag/v2.0.0-alpha.4).
+Zamknij działającą wersję Bridge z zasobnika. Uruchom instalator `HA-Windows-Bridge-Setup-2.0.0-alpha.4.exe` albo rozpakuj **cały** ZIP `win64` do osobnego folderu i otwórz `HA Windows Bridge.exe`. Nie przenoś samego EXE bez folderu `_internal`.
 
 Dla uruchomienia z kodu, w PowerShell:
 
@@ -16,10 +16,12 @@ cd "F:\Codex\HA MQTT PC"
 
 Nowa wersja zapisuje `%LOCALAPPDATA%\HAWindowsBridge\profile-v2.json`. Nie odczytuje automatycznie starego profilu. Sekrety są szyfrowane DPAPI dla bieżącego użytkownika Windows.
 
-1. W **Połączenia** podaj broker MQTT albo włącz połączenie bezpośrednie.
+1. W **Przeglądzie** podaj broker MQTT albo włącz połączenie bezpośrednie. Statusy i ustawienia są na jednej stronie.
 2. W **Sensory i funkcje** włącz potrzebne opcje; dla dysków i urządzeń użyj przycisku wyboru.
 3. W **Nakładki** możesz wyświetlić lokalne przykłady bez HA.
 4. Wybierz **Zapisz i zastosuj**, a następnie **Przegląd → Uruchom**. Opcjonalnie włącz automatyczne łączenie.
+
+Zapis zachowuje stan usług: uruchomione wznawia z nowymi ustawieniami, zatrzymanych nie uruchamia. Opcja **Łącz automatycznie** dotyczy startu aplikacji. Test **Odtwarzacz** pokazuje aktualną sesję Windows z okładką i postępem utworu, bez paska czasu do zamknięcia. Gdy sesji nie ma, uruchom odtwarzanie i ponów test.
 
 Na stronie **Aplikacje** program automatycznie wykrywa aktywne sesje audio i ich ikony. Nowo wykryte programy nie są automatycznie udostępniane w HA: włącz wybrane przełączniki i zapisz. Jeśli programu nie ma, uruchom w nim dźwięk albo wybierz **Dodaj program…**.
 
@@ -27,7 +29,7 @@ W **Diagnostyce** znajdziesz aktualne CPU, RAM i liczbę wątków Bridge. CPU je
 
 ## Aktualizacja integracji przez HACS
 
-W HACS przy HA Windows Bridge wybierz **⋮ → Pobierz ponownie (Redownload) → Potrzebujesz innej wersji? (Need a different version?)** i wskaż `v2.0.0-alpha.3`. Po pobraniu uruchom HA ponownie. Jeśli wersji nie widać, użyj **⋮ → Aktualizuj informacje (Update information)**. W HACS 2 dostęp do aktualizacji beta kontroluje też encja przełącznika wersji przedpremierowych dla danego repozytorium. W razie potrzeby dodaj `Grzechu51/ha-windows-bridge` jako repozytorium niestandardowe typu **Integracja**.
+W HACS przy HA Windows Bridge wybierz **⋮ → Pobierz ponownie (Redownload) → Potrzebujesz innej wersji? (Need a different version?)** i wskaż `v2.0.0-alpha.4`. Po pobraniu uruchom HA ponownie. Jeśli wersji nie widać, użyj **⋮ → Aktualizuj informacje (Update information)**. W HACS 2 dostęp do aktualizacji beta kontroluje też encja przełącznika wersji przedpremierowych dla danego repozytorium. W razie potrzeby dodaj `Grzechu51/ha-windows-bridge` jako repozytorium niestandardowe typu **Integracja**.
 
 Opis opcji: [wybór wersji w HACS](https://hacs.xyz/docs/use/repositories/dashboard/#downloading-a-specific-version-of-a-repository), [przełącznik wersji przedpremierowych](https://hacs.xyz/docs/use/entities/switch/).
 
@@ -42,13 +44,15 @@ Nie instaluj alpha nad produkcyjną integracją bez kopii zapasowej HA. Stare wy
 ## Bezpośrednie połączenie WebSocket
 
 1. W HA zainstaluj **integrację 2.0** i uruchom HA ponownie.
-2. W aplikacji skopiuj **ID urządzenia** ze strony Połączenia.
-3. W HA: **Ustawienia → Urządzenia i usługi → Dodaj integrację → HA Windows Bridge**, wpisz nazwę komputera i to ID.
+2. Jeśli komputer jest już dodany przez MQTT i ma włączoną encję popupu, od alpha.4 nie dodawaj drugiego wpisu Direct. Aktualizacja integracji i **Połącz ponownie** wystarczą.
+3. Gdy nie używasz MQTT: w aplikacji skopiuj **ID urządzenia** z Przeglądu. W HA: **Ustawienia → Urządzenia i usługi → Dodaj integrację → HA Windows Bridge**, wpisz nazwę komputera i to ID.
 4. Utwórz w profilu użytkownika HA długoterminowy token. Użytkownik tokenu musi mieć prawo sterowania encją popupu tego komputera.
 5. W aplikacji wpisz adres, np. `http://192.168.0.60:8123`, oraz token. Nie wpisuj końcówki `/api/websocket` — aplikacja dodaje ją sama.
-6. Włącz połączenie bezpośrednie, zapisz i uruchom usługi.
+6. W **Nakładki** włącz **Wiadomości na ekranie**, a w Przeglądzie połączenie bezpośrednie. Zapisz i uruchom usługi. Gdy nakładki są wyłączone, połączenie Direct pozostaje nieaktywne i aplikacja pokazuje tę przyczynę.
 
 Kanał Direct 2.0 służy nakładkom. Audio i sensory korzystają z MQTT. Nie wpisuj tokenu do automatyzacji ani w adresie URL. Po zmianie danych logowania użyj **Połącz ponownie**.
+
+Jeśli używasz obu połączeń, istniejący popup MQTT korzysta z dostępnej sesji Direct, a po jej rozłączeniu wraca do MQTT. Oddzielne wpisy Direct nadal działają. Status odróżnia błędny token, brak uprawnień, niewłączoną encję i brak konfiguracji. **Poprawka połączenia wymaga również aktualizacji integracji HA do alpha.4**, nie tylko aplikacji Windows.
 
 ## Automatyzacja HA
 

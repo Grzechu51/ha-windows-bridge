@@ -83,6 +83,7 @@ class ServiceSupervisor:
                     self._active.append(name)
                     self._ready.add(name)
                     self.states.set(name, ServiceState.RUNNING)
+                    self.log.info("Uruchomiono usługę: %s", name)
 
     def stop(self) -> bool:
         with self._lock:
@@ -102,6 +103,7 @@ class ServiceSupervisor:
                 self._active.remove(name)
                 self._ready.discard(name)
                 self.states.set(name, ServiceState.STOPPED)
+                self.log.info("Zatrzymano usługę: %s", name)
             return not self._active
 
     @property

@@ -39,5 +39,5 @@ def media_example():
     return {"title": "Midnight Drive", "message": "Neon Avenue · City Lights", "data": {
         "id": "example-media", "layout": "media", "media_source": "PC Media Player",
         "image": media_artwork(), "icon": "mdi:music-note", "media_duration": 222,
-        "media_position": 65, "media_playing": True, "show_lifetime": True,
+        "media_position": 65, "media_playing": True, "show_lifetime": False,
         "show_close_button": True, "pause_on_hover": True, "duration": 12, "edge_offset": 16}}

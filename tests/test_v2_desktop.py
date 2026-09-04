@@ -13,13 +13,13 @@ from test_v2_application import runtime
 from ha_windows_bridge.config import AppConfig
 from ha_windows_bridge.overlays.service import OverlayService
 from ha_windows_bridge.ui.control_style import BridgeProxyStyle
-from ha_windows_bridge.ui.shell import DesktopWindow
+from ha_windows_bridge.ui.shell import PAGES, DesktopWindow
 from ha_windows_bridge.ui.theme import style_for_theme
 
 
 def qt_app():
     app = QApplication.instance() or QApplication([])
-    for filename in ("segoeui.ttf", "segoeuib.ttf"):
+    for filename in ("segoeui.ttf", "segoeuib.ttf", "consola.ttf"):
         QFontDatabase.addApplicationFont(str(Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / filename))
     app.setFont(QFont("Segoe UI", 10))
     if not app.property("testFontsLoaded"):
@@ -37,10 +37,10 @@ def test_new_shell_uses_application_and_has_independent_status_pages(tmp_path):
         window.resize(1000, 760)
         window.show()
         qt.processEvents()
-        assert window.pages.count() == 7
+        assert window.pages.count() == 6
         assert not hasattr(window, "bridge")
         assert not hasattr(window, "direct_bridge")
-        for page in range(7):
+        for page in range(len(PAGES)):
             window.navigation.setCurrentRow(page)
             qt.processEvents()
             assert window.pages.currentIndex() == page

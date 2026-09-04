@@ -10,7 +10,7 @@ from test_v2_desktop import qt_app
 from ha_windows_bridge.config import AppConfig
 from ha_windows_bridge.overlays.models import validated_request
 from ha_windows_bridge.overlays.presentation import NotificationWindow
-from ha_windows_bridge.ui.shell import DesktopWindow
+from ha_windows_bridge.ui.shell import PAGES, DesktopWindow, Page
 from ha_windows_bridge.ui.theme import style_for_theme
 
 
@@ -24,12 +24,12 @@ def test_all_pages_fit_minimum_width_and_port_ignores_wheel(theme):
     try:
         window.resize(820, 620)
         window.show()
-        for index in range(7):
+        for index in range(len(PAGES)):
             window.navigation.setCurrentRow(index)
             qt.processEvents()
             page = window.pages.widget(index)
             assert page.horizontalScrollBar().maximum() == 0, (theme, index)
-        window.navigation.setCurrentRow(1)
+        window.navigation.setCurrentRow(Page.OVERVIEW)
         port = window._fields["mqtt.port"]
         before = port.value()
         wheel = QWheelEvent(QPointF(10, 10), QPointF(10, 10), QPoint(), QPoint(0, 120), Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)

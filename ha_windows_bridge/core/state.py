@@ -41,3 +41,7 @@ class StateStore:
     def snapshot(self) -> tuple[ServiceStatus, ...]:
         with self._lock:
             return tuple(self._services.values())
+
+    def clear(self) -> None:
+        with self._lock:
+            self._services.clear()

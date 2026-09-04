@@ -5,7 +5,7 @@ from typing import Any
 
 from homeassistant.components.notify import NotifyEntity, NotifyEntityFeature
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -66,6 +66,17 @@ class BridgeWindowsNotify(BridgeMqttEntity, NotifyEntity):
     def __init__(self, entry: ConfigEntry, definition: dict[str, Any]) -> None:
         BridgeMqttEntity.__init__(self, entry, definition)
         self._command_topic = str(definition["command_topic"])
+
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        runtime = self._entry.runtime_data
+        runtime.listeners.add(self._update_availability)
+        self.async_on_remove(lambda: runtime.listeners.discard(self._update_availability))
+
+    @callback
+    def _update_availability(self):
+        self._attr_available = (self._mqtt_connected and self._bridge_online) or self._entry.runtime_data.available
+        self.async_write_ha_state()
 
     async def async_send_message(
         self,

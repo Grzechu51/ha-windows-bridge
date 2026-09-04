@@ -61,7 +61,7 @@ def test_ha_authenticates_with_scoped_api_and_acks_without_event_bus():
 def test_ha_failed_handshake_closes_socket(messages):
     socket = Socket(messages)
     transport = ha_transport(socket)
-    with pytest.raises((StopIteration, PermissionError)):
+    with pytest.raises((StopIteration, ConnectionError)):
         transport._connect()
     assert socket.closed and transport._socket is None
 

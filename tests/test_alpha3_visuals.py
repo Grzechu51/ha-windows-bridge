@@ -22,7 +22,7 @@ from ha_windows_bridge.overlays.media_style import (
 )
 from ha_windows_bridge.overlays.models import validated_request
 from ha_windows_bridge.overlays.presentation import NotificationWindow
-from ha_windows_bridge.ui.shell import DesktopWindow
+from ha_windows_bridge.ui.shell import DesktopWindow, Page
 from ha_windows_bridge.ui.theme import style_for_theme
 from ha_windows_bridge.ui_components import AppCard, SettingRow
 
@@ -94,7 +94,7 @@ def test_setting_text_and_switch_centres_match_and_theme_uses_same_row(theme, tm
     try:
         window.resize(820, 740)
         window.show()
-        for page in (1, 2, 4, 5):
+        for page in (Page.OVERVIEW, Page.FEATURES, Page.OVERLAYS, Page.SETTINGS):
             window.navigation.setCurrentRow(page)
             qt.processEvents()
             for row in window.pages.widget(page).findChildren(SettingRow):

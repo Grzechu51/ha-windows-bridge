@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from enum import IntEnum
 from pathlib import Path
 
 import qtawesome as qta
@@ -31,6 +32,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
+from ..communication.state import ConnectionStatus
+from ..communication.status import CONNECTION_NAMES, connection_text
 from ..config import AppConfig, AudioAppConfig, TrackedDeviceConfig, slugify
 from ..core.configuration import ConfigurationStore
 from ..ui_components import AppCard, SettingControlRow, SettingRow
@@ -49,7 +53,16 @@ FEATURES = (
     ("publish_audio_sessions", "Liczba sesji audio"), ("allow_power_actions", "Zdalne zasilanie komputera"),
     ("enable_windows_notifications", "Powiadomienia Windows"),
 )
-PAGES = ("Przegląd", "Połączenia", "Sensory i funkcje", "Aplikacje", "Nakładki", "Ustawienia", "Diagnostyka")
+PAGES = ("Przegląd", "Sensory i funkcje", "Aplikacje", "Nakładki", "Ustawienia", "Diagnostyka")
+
+
+class Page(IntEnum):
+    OVERVIEW = 0
+    FEATURES = 1
+    APPLICATIONS = 2
+    OVERLAYS = 3
+    SETTINGS = 4
+    DIAGNOSTICS = 5
 
 
 class UiEvents(QObject):
@@ -74,7 +87,7 @@ class DesktopWindow(QMainWindow):
         self._fields = {}
         self._cards = []
         self._dismissed_apps = set()
-        self._connection_states = {}
+        self._connection_states = {item["transport"]: ConnectionStatus(**item) for item in application.connection_snapshot()}
         self._force_close = False
         self._disposed = False
         self._build()
@@ -83,6 +96,7 @@ class DesktopWindow(QMainWindow):
         self._page_timer.timeout.connect(self._refresh_visible_page)
         self.navigation.currentRowChanged.connect(self._activate_page)
         self.logs.setPlainText("\n".join(application.diagnostics.snapshot()))
+        self._refresh_status()
 
     def _build(self):
         root = QFrame()
@@ -95,7 +109,7 @@ class DesktopWindow(QMainWindow):
         self.navigation.addItems(PAGES)
         self.navigation.setFixedWidth(205)
         self.navigation.setIconSize(QSize(20, 20))
-        for index, icon in enumerate(("view-dashboard-outline", "lan-connect", "tune", "apps", "message-badge-outline", "cog-outline", "text-box-search-outline")):
+        for index, icon in enumerate(("view-dashboard-outline", "tune", "apps", "message-badge-outline", "cog-outline", "text-box-search-outline")):
             self.navigation.item(index).setIcon(qta.icon("mdi6." + icon, color="#a5bdb2"))
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
@@ -141,11 +155,11 @@ class DesktopWindow(QMainWindow):
         self._dashboard()
         self._connections()
         for key, title in FEATURES:
-            self._toggle(2, key, title)
+            self._toggle(Page.FEATURES, key, title)
             if key in {"publish_disk_stats", "publish_devices"}:
                 kind = "disks" if key == "publish_disk_stats" else "devices"
-                self._content(2).addWidget(self._button("Wybierz dyski…" if kind == "disks" else "Wybierz urządzenia…", lambda _checked=False, selected=kind: self.application.request_inventory(selected)))
-        self._content(2).addStretch()
+                self._content(Page.FEATURES).addWidget(self._button("Wybierz dyski…" if kind == "disks" else "Wybierz urządzenia…", lambda _checked=False, selected=kind: self.application.request_inventory(selected)))
+        self._content(Page.FEATURES).addStretch()
         self._applications()
         self._overlays()
         self._settings()
@@ -154,13 +168,21 @@ class DesktopWindow(QMainWindow):
         self.resource_usage.setWordWrap(True)
         self.resource_usage.setObjectName("metricValue")
         resource_layout.addWidget(self.resource_usage)
-        self._content(6).addWidget(resources)
+        self._content(Page.DIAGNOSTICS).addWidget(resources)
+        diagnostics, diagnostic_layout = self._card("Stan aplikacji", f"Wersja {__version__}")
+        self.diagnostic_status = QLabel()
+        self.diagnostic_status.setWordWrap(True)
+        self.diagnostic_status.setTextFormat(Qt.TextFormat.PlainText)
+        diagnostic_layout.addWidget(self.diagnostic_status)
+        self._content(Page.DIAGNOSTICS).addWidget(diagnostics)
         self.logs = QPlainTextEdit()
         self.logs.setObjectName("logViewer")
         self.logs.setReadOnly(True)
         self.logs.document().setMaximumBlockCount(500)
-        self._content(6).addWidget(self.logs, 1)
-        self._content(6).addWidget(self._button("Eksportuj raport", self._diagnostics))
+        self.logs.setMinimumHeight(180)
+        self.logs.setPlaceholderText("Brak zdarzeń. Uruchom usługi, aby sprawdzić połączenia.")
+        self._content(Page.DIAGNOSTICS).addWidget(self.logs, 1)
+        self._content(Page.DIAGNOSTICS).addWidget(self._button("Eksportuj raport", self._diagnostics))
 
     def _content(self, index):
         return self.pages.widget(index).widget().layout()
@@ -189,9 +211,11 @@ class DesktopWindow(QMainWindow):
         return card, layout
 
     def _dashboard(self):
-        layout = self._content(0)
+        layout = self._content(Page.OVERVIEW)
         hero, hero_layout = self._card(self.draft.device_name, "Twój komputer w Home Assistant")
-        self.summary = QLabel("Usługi są zatrzymane.")
+        self.summary = QLabel()
+        self.summary.setWordWrap(True)
+        self.summary.setTextFormat(Qt.TextFormat.PlainText)
         hero_layout.addWidget(self.summary)
         actions = QHBoxLayout()
         actions.addWidget(self._button("Uruchom", self.application.start))
@@ -199,14 +223,10 @@ class DesktopWindow(QMainWindow):
         actions.addWidget(self._button("Połącz ponownie", self.application.reconnect))
         hero_layout.addLayout(actions)
         layout.addWidget(hero)
-        self.connections = QLabel("MQTT: zatrzymane\nHome Assistant: zatrzymane")
-        connection_card, content = self._card("Połączenia", "Stan każdego połączenia jest raportowany niezależnie.")
-        content.addWidget(self.connections)
-        layout.addWidget(connection_card)
-        layout.addStretch()
+        self.connections = self.summary
 
     def _connections(self):
-        layout = self._content(1)
+        layout = self._content(Page.OVERVIEW)
         card, inner = self._card("MQTT", "Sensory, audio i sterowanie komputerem")
         form = QFormLayout()
         form.setSpacing(12)
@@ -230,7 +250,7 @@ class DesktopWindow(QMainWindow):
         field("mqtt.base_topic", "Topic urządzenia", self.draft.mqtt.base_topic)
         inner.addLayout(form)
         layout.addWidget(card)
-        self._toggle(1, "mqtt.tls", "Szyfrowanie MQTT (TLS)")
+        self._toggle(Page.OVERVIEW, "mqtt.tls", "Szyfrowanie MQTT (TLS)")
         card, inner = self._card("Bezpośrednio z Home Assistant", "Nakładki przez lokalne połączenie WebSocket")
         form = QFormLayout()
         form.setSpacing(12)
@@ -244,8 +264,8 @@ class DesktopWindow(QMainWindow):
         identity.addWidget(self._button("Kopiuj ID", lambda: QApplication.clipboard().setText(self.draft.device_id)))
         inner.addLayout(identity)
         layout.addWidget(card)
-        self._toggle(1, "home_assistant.enabled", "Włącz bezpośrednie połączenie")
-        self._toggle(1, "home_assistant.verify_tls", "Weryfikuj certyfikat HA")
+        self._toggle(Page.OVERVIEW, "home_assistant.enabled", "Włącz bezpośrednie połączenie")
+        self._toggle(Page.OVERVIEW, "home_assistant.verify_tls", "Weryfikuj certyfikat HA")
         layout.addStretch()
 
     def _get(self, key):
@@ -269,7 +289,7 @@ class DesktopWindow(QMainWindow):
         return row
 
     def _applications(self):
-        content = self._content(3)
+        content = self._content(Page.APPLICATIONS)
         actions = QHBoxLayout()
         actions.addWidget(self._button("Dodaj program…", self._add_app))
         actions.addWidget(self._button("Wykryj aktywne", lambda: self.application.request_inventory("applications")))
@@ -306,16 +326,17 @@ class DesktopWindow(QMainWindow):
 
     def _activate_page(self, _index=None):
         self._page_timer.stop()
-        if self.isVisible() and self.navigation.currentRow() in {3, 6}:
+        if self.isVisible() and self.navigation.currentRow() in {Page.APPLICATIONS, Page.DIAGNOSTICS}:
             self._refresh_visible_page()
-            self._page_timer.start(6000 if self.navigation.currentRow() == 3 else 2000)
+            self._page_timer.start(6000 if self.navigation.currentRow() == Page.APPLICATIONS else 2000)
 
     def _refresh_visible_page(self):
         if self._disposed or not self.isVisible():
             return
-        if self.navigation.currentRow() == 3:
+        if self.navigation.currentRow() == Page.APPLICATIONS:
             self.application.request_inventory("applications")
-        elif self.navigation.currentRow() == 6:
+        elif self.navigation.currentRow() == Page.DIAGNOSTICS:
+            self._refresh_status()
             self.application.request_resources()
 
     def _update_applications(self, items):
@@ -353,9 +374,9 @@ class DesktopWindow(QMainWindow):
                 card.set_muted(None)
 
     def _overlays(self):
-        self._toggle(4, "overlay_enabled", "Wiadomości na ekranie")
-        self._toggle(4, "overlay_allow_fullscreen", "Wyświetlaj także nad pełnym ekranem")
-        content = self._content(4)
+        self._toggle(Page.OVERLAYS, "overlay_enabled", "Wiadomości na ekranie")
+        self._toggle(Page.OVERLAYS, "overlay_allow_fullscreen", "Wyświetlaj także nad pełnym ekranem")
+        content = self._content(Page.OVERLAYS)
         card, inner = self._card("Sprawdź nakładki", "Przykłady wyświetlają się tylko na tym komputerze.")
         for title, pattern in (("Krótka wiadomość", "compact"), ("Zestaw wskaźników", "badges"),
                                ("Odtwarzacz", "media"), ("Duża wiadomość", "standard")):
@@ -365,11 +386,11 @@ class DesktopWindow(QMainWindow):
         content.addStretch()
 
     def _settings(self):
-        content = self._content(5)
+        content = self._content(Page.SETTINGS)
         for key, label in (("auto_connect", "Łącz automatycznie"), ("start_with_windows", "Uruchamiaj z Windows"),
                            ("start_minimized", "Uruchamiaj w zasobniku"),
                            ("reduced_motion", "Ogranicz animacje"), ("auto_check_updates", "Sprawdzaj aktualizacje")):
-            self._toggle(5, key, label)
+            self._toggle(Page.SETTINGS, key, label)
         self.theme = QComboBox()
         for label, value in (("Ciemny", "dark"), ("Jasny", "light"), ("Systemowy", "system")):
             self.theme.addItem(label, value)
@@ -482,7 +503,37 @@ class DesktopWindow(QMainWindow):
     def _diagnostics(self):
         filename, _ = QFileDialog.getSaveFileName(self, "Raport diagnostyczny", "bridge-diagnostics.json", "JSON (*.json)")
         if filename:
-            self.application.export_diagnostics(Path(filename))
+            try:
+                self.application.export_diagnostics(Path(filename))
+            except (OSError, ValueError):
+                self.status.setText("Nie można zapisać raportu w wybranym miejscu.")
+            else:
+                self.status.setText("Zapisano raport diagnostyczny.")
+
+    def _refresh_status(self):
+        config = self.application.config
+        lines = []
+        for name, enabled in (("mqtt", bool(config.mqtt.host)), ("home_assistant", config.home_assistant.enabled)):
+            state = self._connection_states.get(name)
+            label = connection_text(state) if enabled and state else "Zatrzymane" if enabled else "Wyłączone"
+            if name == "home_assistant" and enabled and not config.overlay_enabled:
+                label = "Nakładki wyłączone — włącz „Wiadomości na ekranie” na stronie Nakładki"
+            lines.append(f"{CONNECTION_NAMES[name]}: {label}")
+        text = "\n".join(lines)
+        self.connections.setText(text)
+        labels = {"running": "uruchomiona", "stopped": "zatrzymana", "starting": "uruchamianie",
+                  "stopping": "zatrzymywanie", "error": "błąd"}
+        services = [f"Usługa {CONNECTION_NAMES.get(item.name, 'Sensory')}: {labels.get(item.state, item.state)}"
+                    for item in self.application.states.snapshot()]
+        self.diagnostic_status.setText(text + "\n\n" + ("\n".join(services) or "Brak skonfigurowanych usług."))
+        self.tray.setToolTip("HA Windows Bridge 2.0\n" + text)
+        self.tray_status.setText(text.replace("\n", " · "))
+        active_transports = {"mqtt"} if config.mqtt.host else set()
+        if config.home_assistant.enabled and config.overlay_enabled:
+            active_transports.add("home_assistant")
+        values = {item.state for name, item in self._connection_states.items() if name in active_transports}
+        color = "#ef8794" if values & {"auth_error", "configuration_error"} else "#efc261" if values & {"connecting", "retry_wait"} else "#69d7a0" if "connected" in values else "#a4adb2"
+        self.tray.setIcon(qta.icon("mdi6.lan-connect", color=color))
 
     def _event(self, event):
         if self._disposed:
@@ -507,37 +558,28 @@ class DesktopWindow(QMainWindow):
         elif event.topic == "windows.explorer_restarted":
             self.tray.show()
         elif event.topic == "audio.snapshot":
-            if self.isVisible() and self.navigation.currentRow() == 3:
+            if self.isVisible() and self.navigation.currentRow() == Page.APPLICATIONS:
                 return  # This page uses its local inventory, independently of MQTT.
             for card in self._cards:
                 state = event.data.get(card.config.process_name.lower())
                 card.set_volume(state.volume if state else None)
                 card.set_muted(state.muted if state else None)
         elif event.topic == "connection.changed":
-            self._connection_states[event.data.transport] = event.data.state
-            states = {"stopped": "Zatrzymane", "connecting": "Łączenie", "connected": "Połączono", "retry_wait": "Ponawianie połączenia", "auth_error": "Sprawdź dane logowania", "suspended": "Wstrzymane"}
-            names = {"mqtt": "MQTT", "home_assistant": "Home Assistant"}
-            text = "\n".join(f"{names.get(name, name)}: {states.get(state, state)}" for name, state in self._connection_states.items())
-            self.connections.setText(text)
-            self.tray.setToolTip("HA Windows Bridge 2.0\n" + text)
-            self.tray_status.setText(text.replace("\n", " · "))
-            values = set(self._connection_states.values())
-            color = "#ef8794" if "auth_error" in values else "#69d7a0" if "connected" in values else "#efc261" if values & {"connecting", "retry_wait"} else "#a4adb2"
-            self.tray.setIcon(qta.icon("mdi6.lan-connect", color=color))
+            self._connection_states[event.data.transport] = event.data
+            self._refresh_status()
         elif event.topic == "services.changed":
-            states = self.application.states.snapshot()
-            names = {"mqtt": "MQTT", "home_assistant": "Home Assistant", "sensors": "Sensory"}
-            labels = {"stopped": "zatrzymane", "starting": "uruchamianie", "running": "działa", "stopping": "zatrzymywanie", "error": "błąd"}
-            self.summary.setText("\n".join(f"{names.get(state.name, state.name)}: {labels.get(state.state, state.state)}" for state in states))
+            self._refresh_status()
         elif event.topic == "inventory.published":
             self.tray_sensors.setText(f"Sensory: {event.data['sensors']}")
         elif event.topic == "sensors.paused":
             self.tray_sensors.setText("Sensory: wstrzymane" if event.data else "Sensory: działają")
         elif event.topic == "application.running":
-            self.status.setText("Usługi działają" if event.data else "Zatrzymano")
+            self.status.setText("Uruchomiono usługi" if event.data else "Zatrzymano usługi")
         elif event.topic == "configuration.changed":
             self.status.setText("Zapisano ustawienia")
             self.draft = copy.deepcopy(event.data)
+            self._connection_states = {item["transport"]: ConnectionStatus(**item) for item in self.application.connection_snapshot()}
+            self._refresh_status()
         elif event.topic == "application.error":
             self.status.setText(str(event.data))
         elif event.topic == "command.result" and event.data.status in {"failed", "rejected"}:
@@ -557,7 +599,7 @@ class DesktopWindow(QMainWindow):
         pause = menu.addAction("Wstrzymaj sensory")
         pause.setCheckable(True)
         pause.toggled.connect(self.application.pause_sensors)
-        menu.addAction("Ustawienia", lambda: (self.navigation.setCurrentRow(5), self.showNormal()))
+        menu.addAction("Ustawienia", lambda: (self.navigation.setCurrentRow(Page.SETTINGS), self.showNormal()))
         menu.addSeparator()
         menu.addAction("Zakończ", QApplication.instance().quit)
         self.tray.setContextMenu(menu)

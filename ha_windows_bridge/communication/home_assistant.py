@@ -25,6 +25,36 @@ def websocket_url(url: str) -> str:
                       parsed.path.rstrip("/") + "/api/websocket", "", "", ""))
 
 
+class HomeAssistantConnectionError(ConnectionError):
+    def __init__(self, code, *, authentication=False, configuration=False):
+        super().__init__(code)
+        self.code = code
+        self.authentication = authentication
+        self.configuration = configuration
+
+
+def response_error(response):
+    """Keep actionable codes, never mistake a configured-device error for a bad token."""
+    error = response.get("error")
+    error = error if isinstance(error, dict) else {}
+    code = error.get("code")
+    if code == "unauthorized":
+        return HomeAssistantConnectionError("unauthorized", authentication=True)
+    if code == "unknown_command":
+        return HomeAssistantConnectionError("integration_missing", configuration=True)
+    if code in ("bridge_not_configured", "popup_unavailable", "protocol_mismatch"):
+        return HomeAssistantConnectionError(code, configuration=True)
+    if code in ("bridge_busy", "bridge_not_ready"):
+        return HomeAssistantConnectionError(code)
+    # Recognise the explicit errors sent by alpha.1–3 without logging remote text.
+    if code == "home_assistant_error":
+        if error.get("message") == "Configure this Direct Windows Bridge in Home Assistant first":
+            return HomeAssistantConnectionError("bridge_not_configured", configuration=True)
+        if error.get("message") == "Windows Bridge is already connected or unloading":
+            return HomeAssistantConnectionError("bridge_busy")
+    return HomeAssistantConnectionError("server_error")
+
+
 class HomeAssistantTransport:
     def __init__(self, config, events, receive, *, socket_factory=None):
         self.config, self.receive = config, receive
@@ -97,12 +127,20 @@ class HomeAssistantTransport:
             if self._read(connection).get("type") != "auth_required":
                 raise ConnectionError("HA authentication handshake")
             self._send({"type": "auth", "access_token": settings.token}, numbered=False)
-            if self._read(connection).get("type") != "auth_ok":
-                raise PermissionError("HA authentication rejected")
+            auth = self._read(connection).get("type")
+            if auth == "auth_invalid":
+                raise HomeAssistantConnectionError("authentication", authentication=True)
+            if auth != "auth_ok":
+                raise ConnectionError("HA authentication handshake")
             subscription = self._send({"type": "ha_windows_bridge/connect", "device_id": self.config.device_id})
             response = self._read(connection)
-            if response.get("id") != subscription or not response.get("success"):
-                raise PermissionError("Configure the Direct integration and grant control of its popup entity")
+            if response.get("type") != "result" or response.get("id") != subscription:
+                raise ConnectionError("Invalid HA subscription response")
+            if not response.get("success"):
+                raise response_error(response)
+            result = response.get("result")
+            if isinstance(result, dict) and result.get("protocol") != 2:
+                raise HomeAssistantConnectionError("protocol_mismatch", configuration=True)
             connection.settimeout(1)
             return connection, subscription
         except BaseException:
@@ -116,15 +154,16 @@ class HomeAssistantTransport:
                 if not self.machine.connected(self._epoch):
                     break
                 self._read_events(connection, subscription)
-            except PermissionError:
-                self.machine.failed(self._epoch, "authentication", authentication=True)
+            except HomeAssistantConnectionError as exc:
+                self.machine.failed(self._epoch, exc.code, authentication=exc.authentication,
+                                    configuration=exc.configuration)
             except Exception:
                 if not self._stop.is_set():
                     self.machine.failed(self._epoch, "network")
                     self.log.warning("Home Assistant connection unavailable")
             finally:
                 self._close_socket()
-            if self.machine.status.state == ConnectionState.AUTH_ERROR:
+            if self.machine.status.state in {ConnectionState.AUTH_ERROR, ConnectionState.CONFIGURATION_ERROR}:
                 break
             if self._stop.wait(Backoff().delay(self.machine.status.attempt)):
                 break
@@ -148,7 +187,12 @@ class HomeAssistantTransport:
                 continue
             if message.get("type") == "result" and message.get("id") == pending:
                 if not message.get("success"):
-                    raise PermissionError("HA bridge access revoked")
+                    error = response_error(message)
+                    # Reloading an HA entry replaces its runtime/lease. Reconnect
+                    # and re-check permissions instead of getting stuck forever.
+                    if error.code == "unauthorized":
+                        raise HomeAssistantConnectionError("session_expired")
+                    raise error
                 pending = None
                 last_heartbeat = time.monotonic()
             if message.get("type") == "event" and message.get("id") == subscription:

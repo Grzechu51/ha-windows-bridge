@@ -20,7 +20,7 @@ from ha_windows_bridge.core.events import Event
 from ha_windows_bridge.overlays.examples import media_example
 from ha_windows_bridge.overlays.models import validated_request
 from ha_windows_bridge.overlays.presentation import NotificationWindow
-from ha_windows_bridge.ui.shell import DesktopWindow
+from ha_windows_bridge.ui.shell import DesktopWindow, Page
 from ha_windows_bridge.ui_components import ToggleSwitch
 from ha_windows_bridge.windows.resources import ProcessResources
 
@@ -86,7 +86,7 @@ def test_application_discovery_preserves_permissions_icons_and_alignment(tmp_pat
     try:
         window.resize(820, 620)
         window.show()
-        window.navigation.setCurrentRow(3)
+        window.navigation.setCurrentRow(Page.APPLICATIONS)
         qt.processEvents()
         window._update_applications([AudioApplication("chrome.exe", "Chrome", sys.executable, .42, False),
                                      AudioApplication("player.exe", "Player", "", .6, True)])
@@ -104,12 +104,12 @@ def test_application_discovery_preserves_permissions_icons_and_alignment(tmp_pat
         centers = [widget.geometry().center().y() for widget in
                    (card.slider, card.percent_label, card.mute_button, card.enabled_switch, card.more_button)]
         assert max(centers) - min(centers) <= 1
-        assert window.pages.widget(3).horizontalScrollBar().maximum() == 0
+        assert window.pages.widget(Page.APPLICATIONS).horizontalScrollBar().maximum() == 0
         assert window.grab().save(str(tmp_path / "applications.png"))
         window._update_applications([AudioApplication("PLAYER.EXE", "Player", "", .7, False)])
         assert len(window._cards) == 2
         assert not card.slider.isEnabled()  # its audio session disappeared
-        window.navigation.setCurrentRow(6)
+        window.navigation.setCurrentRow(Page.DIAGNOSTICS)
         qt.processEvents()
         window._event(Event("resources.updated", {"cpu_percent": 1.2, "memory_mib": 85.3, "threads": 8}))
         assert "CPU: 1.2%" in window.resource_usage.text()

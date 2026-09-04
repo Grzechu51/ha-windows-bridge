@@ -16,6 +16,7 @@ class ConnectionState(StrEnum):
     RETRY_WAIT = "retry_wait"
     SUSPENDED = "suspended"
     AUTH_ERROR = "auth_error"
+    CONFIGURATION_ERROR = "configuration_error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,11 +52,12 @@ class ConnectionMachine:
             self._set(ConnectionState.CONNECTED)
             return True
 
-    def failed(self, epoch: int, code: str, *, authentication: bool = False) -> bool:
+    def failed(self, epoch: int, code: str, *, authentication: bool = False, configuration: bool = False) -> bool:
         with self._lock:
             if epoch != self._epoch or self._status.state not in {ConnectionState.CONNECTING, ConnectionState.CONNECTED}:
                 return False
-            self._set(ConnectionState.AUTH_ERROR if authentication else ConnectionState.RETRY_WAIT,
+            state = ConnectionState.AUTH_ERROR if authentication else ConnectionState.CONFIGURATION_ERROR if configuration else ConnectionState.RETRY_WAIT
+            self._set(state,
                       self._status.attempt + 1, code)
             return True
 

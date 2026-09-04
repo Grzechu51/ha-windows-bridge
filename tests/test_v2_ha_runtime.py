@@ -105,3 +105,39 @@ def test_mqtt_creates_envelope_before_publish_and_ignores_retained_ack(runtime_m
 def test_wire_arguments_reject_malformed_values(runtime_module, parser, payload):
     with pytest.raises(RuntimeError):
         runtime_module.command_arguments(parser, payload)
+
+
+def test_mqtt_computer_uses_direct_for_popup_but_keeps_audio_and_acks_independent(runtime_module):
+    async def exercise():
+        runtime = make_runtime(runtime_module, protocol={"command_topic": "v2/command", "result_topic": "v2/result",
+            "routes": {"volume": {"kind": "audio.master.volume", "parser": "volume"},
+                       "pc/overlay": {"kind": "overlay.show", "parser": "json"}}})
+        runtime.overlay_event_type = ""
+        owner, direct_sent = object(), []
+        runtime.attach(owner, direct_sent.append)
+        audio = asyncio.create_task(runtime.send("volume", "42"))
+        popup = asyncio.create_task(runtime.send("pc/overlay", '{"message":"Direct from MQTT entry"}'))
+        await asyncio.sleep(0)
+        assert direct_sent[0]["kind"] == "overlay.show"
+        assert direct_sent[0]["arguments"]["message"] == "Direct from MQTT entry"
+        published = runtime_module.mqtt.async_publish.call_args.args
+        audio_command = json.loads(published[2])
+        assert audio_command["kind"] == "audio.master.volume"
+        assert runtime_module.mqtt.async_publish.call_count == 1
+        runtime.detach(owner)
+        with pytest.raises(RuntimeError, match="disconnected"):
+            await popup
+        assert not audio.done()  # Direct must never fail an independent MQTT ACK.
+        runtime._result({"version": 2, "id": audio_command["id"], "status": "succeeded"})
+        await audio
+        assert not runtime.pending and not runtime._direct_pending
+        # With Direct gone, future popup commands use MQTT again.
+        fallback = asyncio.create_task(runtime.send("pc/overlay", '{"message":"MQTT fallback"}'))
+        await asyncio.sleep(0)
+        command = json.loads(runtime_module.mqtt.async_publish.call_args.args[2])
+        assert command["kind"] == "overlay.show"
+        assert len(direct_sent) == 1
+        runtime._result({"version": 2, "id": command["id"], "status": "succeeded"})
+        await fallback
+        runtime.close()
+    asyncio.run(exercise())

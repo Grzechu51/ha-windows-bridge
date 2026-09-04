@@ -128,7 +128,7 @@ QLabel#metricValue { font-weight: 600; }
 QLabel#statusBadge { color: $accent; background: $selection; border: none; border-radius: 4px; padding: 4px 8px; }
 QLabel#emptyState { color: $muted; border: 1px dashed $border; border-radius: 8px; padding: 24px; }
 QLabel#infoBanner { color: $muted; background: $selection; border: none; border-radius: 6px; padding: 12px; }
-QPlainTextEdit#logViewer { background: $field; border: 1px solid $border; border-radius: 6px; padding: 10px; font-family: "Cascadia Mono", "Consolas"; font-size: 9pt; selection-background-color: $selection; }
+QPlainTextEdit#logViewer { background: $field; border: 1px solid $border; border-radius: 6px; padding: 10px; font-family: "Consolas", "Segoe UI"; font-size: 9pt; selection-background-color: $selection; }
 QMenu { background: $surface; color: $text; border: 1px solid $border; border-radius: 6px; padding: 5px; }
 QMenu::item { padding: 8px 20px; border-radius: 4px; }
 QMenu::item:selected { background: $selection; }
