@@ -19,6 +19,7 @@ from ..core.observability import DiagnosticBuffer
 from ..core.state import StateStore
 from ..runtime.worker import SerialWorker
 from ..security import redact_data
+from ..windows.resources import ProcessResources
 from .commands import CommandRouter
 from .lifecycle import ServiceSupervisor
 from .windows_commands import WindowsCommands
@@ -49,6 +50,8 @@ class Application:
         self._telemetry = None
         self._generation = 0
         self._connections = {}
+        self._pending_queries = set()
+        self.resources = ProcessResources()
         self._connection_unsubscribe = self.events.subscribe("connection.changed", self._connection_changed)
         self._protect_secrets(config)
         self._build_services()
@@ -163,16 +166,39 @@ class Application:
             self._telemetry.pause(paused)
 
     def request_inventory(self, kind):
-        if kind not in {"disks", "devices"} or self._closed:
+        if kind not in {"disks", "devices", "applications"} or self._closed:
             return False
         def query():
             try:
-                items = self.system.list_disk_volumes() if kind == "disks" else self.system.list_pnp_devices()
+                if kind == "applications":
+                    items = self.audio.list_audio_applications()
+                else:
+                    items = self.system.list_disk_volumes() if kind == "disks" else self.system.list_pnp_devices()
                 self.events.emit("inventory." + kind, items)
             except Exception:
                 self.log.exception("Device inventory unavailable")
                 self.events.emit("application.error", "Nie można odczytać urządzeń. Spróbuj ponownie.")
-        return self._queries.submit(query)
+        return self._query_once(kind, query)
+
+    def _query_once(self, key, callback):
+        with self._guard:
+            if self._closed or key in self._pending_queries:
+                return False
+            self._pending_queries.add(key)
+        def run():
+            try:
+                callback()
+            finally:
+                with self._guard:
+                    self._pending_queries.discard(key)
+        accepted = self._queries.submit(run)
+        if not accepted:
+            with self._guard:
+                self._pending_queries.discard(key)
+        return accepted
+
+    def request_resources(self):
+        return self._query_once("resources", lambda: self.events.emit("resources.updated", self.resources.sample()))
 
     def suspend(self):
         self._suspended = True
@@ -203,6 +229,7 @@ class Application:
                 "python": platform.python_version(), "services": [asdict(status) for status in self.states.snapshot()],
                 "connections": list(self._connections.values()),
                 "configuration": self.config.to_dict(), "recent_logs": self.diagnostics.snapshot(),
+                "process_resources": self.resources.sample(),
             }
         return redact_data(report, (self.config.mqtt.password, self.config.home_assistant.token))
 

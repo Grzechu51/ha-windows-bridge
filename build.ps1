@@ -152,6 +152,7 @@ Invoke-CodeSigning -Path $BuiltExe
 
 $AppDist = Join-Path $ProjectRoot "dist\HA Windows Bridge"
 Copy-Item -LiteralPath (Join-Path $ProjectRoot "LICENSE") -Destination (Join-Path $AppDist "LICENSE") -Force
+Copy-Item -LiteralPath (Join-Path $ProjectRoot "docs\V2_QUICKSTART.md") -Destination (Join-Path $AppDist "START.md") -Force
 $PortableZip = Join-Path $ProjectRoot "dist\HA-Windows-Bridge-$AppVersion-win64.zip"
 Compress-Archive -Path (Join-Path $AppDist "*") -DestinationPath $PortableZip -CompressionLevel Optimal -Force
 

@@ -5,7 +5,7 @@ import copy
 from pathlib import Path
 
 import qtawesome as qta
-from PySide6.QtCore import QObject, QSize, Qt, Signal
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -73,11 +73,15 @@ class DesktopWindow(QMainWindow):
         self._toggles = {}
         self._fields = {}
         self._cards = []
+        self._dismissed_apps = set()
         self._connection_states = {}
         self._force_close = False
         self._disposed = False
         self._build()
         self._tray()
+        self._page_timer = QTimer(self)
+        self._page_timer.timeout.connect(self._refresh_visible_page)
+        self.navigation.currentRowChanged.connect(self._activate_page)
         self.logs.setPlainText("\n".join(application.diagnostics.snapshot()))
 
     def _build(self):
@@ -145,6 +149,12 @@ class DesktopWindow(QMainWindow):
         self._applications()
         self._overlays()
         self._settings()
+        resources, resource_layout = self._card("Zużycie zasobów aplikacji")
+        self.resource_usage = QLabel("CPU: —   ·   RAM: —   ·   Wątki: —")
+        self.resource_usage.setWordWrap(True)
+        self.resource_usage.setObjectName("metricValue")
+        resource_layout.addWidget(self.resource_usage)
+        self._content(6).addWidget(resources)
         self.logs = QPlainTextEdit()
         self.logs.setObjectName("logViewer")
         self.logs.setReadOnly(True)
@@ -172,7 +182,10 @@ class DesktopWindow(QMainWindow):
         description.setObjectName("settingDescription")
         description.setWordWrap(True)
         layout.addWidget(name)
-        layout.addWidget(description)
+        if detail:
+            layout.addWidget(description)
+        else:
+            description.deleteLater()
         return card, layout
 
     def _dashboard(self):
@@ -190,9 +203,6 @@ class DesktopWindow(QMainWindow):
         connection_card, content = self._card("Połączenia", "Stan każdego połączenia jest raportowany niezależnie.")
         content.addWidget(self.connections)
         layout.addWidget(connection_card)
-        privacy, _ = self._card("Ty decydujesz, co udostępniasz",
-                               "Włącz potrzebne sensory i uprawnienia. Zdalne akcje są ograniczone do wybranych funkcji.")
-        layout.addWidget(privacy)
         layout.addStretch()
 
     def _connections(self):
@@ -260,7 +270,10 @@ class DesktopWindow(QMainWindow):
 
     def _applications(self):
         content = self._content(3)
-        content.addWidget(self._button("Dodaj program…", self._add_app))
+        actions = QHBoxLayout()
+        actions.addWidget(self._button("Dodaj program…", self._add_app))
+        actions.addWidget(self._button("Wykryj aktywne", lambda: self.application.request_inventory("applications")))
+        content.addLayout(actions)
         self._apps_container = QVBoxLayout()
         content.addLayout(self._apps_container)
         for config in self.draft.apps:
@@ -286,9 +299,56 @@ class DesktopWindow(QMainWindow):
             self._add_card(config)
 
     def _remove_card(self, card):
+        self._dismissed_apps.add(card.config.process_name.casefold())
         self._cards.remove(card)
         self._apps_container.removeWidget(card)
         card.deleteLater()
+
+    def _activate_page(self, _index=None):
+        self._page_timer.stop()
+        if self.isVisible() and self.navigation.currentRow() in {3, 6}:
+            self._refresh_visible_page()
+            self._page_timer.start(6000 if self.navigation.currentRow() == 3 else 2000)
+
+    def _refresh_visible_page(self):
+        if self._disposed or not self.isVisible():
+            return
+        if self.navigation.currentRow() == 3:
+            self.application.request_inventory("applications")
+        elif self.navigation.currentRow() == 6:
+            self.application.request_resources()
+
+    def _update_applications(self, items):
+        existing = {card.config.process_name.casefold(): card for card in self._cards}
+        slugs = {card.config.slug for card in self._cards}
+        present = set()
+        for item in items[:128]:
+            key = item.process_name.casefold()
+            if key in self._dismissed_apps:
+                continue
+            present.add(key)
+            card = existing.get(key)
+            if card is None:
+                if len(self._cards) >= 128:
+                    break
+                slug = base = slugify(item.display_name)
+                suffix = 2
+                while slug in slugs:
+                    slug = f"{base}_{suffix}"
+                    suffix += 1
+                slugs.add(slug)
+                # Discovery never grants remote access without the user's switch/save.
+                self._add_card(AudioAppConfig(item.process_name, item.display_name, slug, False, executable_path=item.executable_path))
+                card = self._cards[-1]
+                existing[key] = card
+            elif not card.config.executable_path and item.executable_path:
+                card.set_executable_icon(item.executable_path)
+            card.set_volume(item.volume)
+            card.set_muted(item.muted)
+        for key, card in existing.items():
+            if key not in present:
+                card.set_volume(None)
+                card.set_muted(None)
 
     def _overlays(self):
         self._toggle(4, "overlay_enabled", "Wiadomości na ekranie")
@@ -305,14 +365,17 @@ class DesktopWindow(QMainWindow):
     def _settings(self):
         content = self._content(5)
         for key, label in (("auto_connect", "Łącz automatycznie"), ("start_with_windows", "Uruchamiaj z Windows"),
-                           ("start_minimized", "Uruchamiaj w zasobniku"), ("minimize_to_tray", "Zamknięcie okna chowa do zasobnika"),
+                           ("start_minimized", "Uruchamiaj w zasobniku"),
                            ("reduced_motion", "Ogranicz animacje"), ("auto_check_updates", "Sprawdzaj aktualizacje")):
             self._toggle(5, key, label)
         self.theme = QComboBox()
         for label, value in (("Ciemny", "dark"), ("Jasny", "light"), ("Systemowy", "system")):
             self.theme.addItem(label, value)
         self.theme.setCurrentIndex(max(0, self.theme.findData(self.draft.theme)))
-        content.addWidget(self.theme)
+        theme_form = QFormLayout()
+        theme_form.addRow("Motyw", self.theme)
+        self.theme.setAccessibleName("Motyw")
+        content.addLayout(theme_form)
         card, inner = self._card("Konfiguracja", "Eksport nie zawiera haseł ani tokenów.")
         inner.addWidget(self._button("Eksportuj ustawienia…", self._export_settings))
         inner.addWidget(self._button("Importuj ustawienia…", self._import_settings))
@@ -424,6 +487,15 @@ class DesktopWindow(QMainWindow):
             return
         if event.topic in {"inventory.disks", "inventory.devices"}:
             self._select_inventory(event.topic.split(".")[1], event.data)
+        elif event.topic == "inventory.applications":
+            self._update_applications(event.data)
+        elif event.topic == "resources.updated":
+            usage = event.data
+            if usage:
+                cpu = "—" if usage["cpu_percent"] is None else f"{usage['cpu_percent']:.1f}%"
+                self.resource_usage.setText(f"CPU: {cpu}   ·   RAM: {usage['memory_mib']:.1f} MiB   ·   Wątki: {usage['threads']}")
+            else:
+                self.resource_usage.setText("Zużycie zasobów jest chwilowo niedostępne.")
         elif event.topic == "notification.show":
             self.tray.showMessage(event.data["title"], event.data["message"], QSystemTrayIcon.MessageIcon.Information, 10000)
         elif event.topic == "updates.checked":
@@ -433,15 +505,13 @@ class DesktopWindow(QMainWindow):
         elif event.topic == "windows.explorer_restarted":
             self.tray.show()
         elif event.topic == "audio.snapshot":
+            if self.isVisible() and self.navigation.currentRow() == 3:
+                return  # This page uses its local inventory, independently of MQTT.
             for card in self._cards:
                 state = event.data.get(card.config.process_name.lower())
                 card.set_volume(state.volume if state else None)
                 card.set_muted(state.muted if state else None)
         elif event.topic == "connection.changed":
-            if event.data.transport == "mqtt" and event.data.state != "connected":
-                for card in self._cards:
-                    card.set_volume(None)
-                    card.set_muted(None)
             self._connection_states[event.data.transport] = event.data.state
             states = {"stopped": "Zatrzymane", "connecting": "Łączenie", "connected": "Połączono", "retry_wait": "Ponawianie połączenia", "auth_error": "Sprawdź dane logowania", "suspended": "Wstrzymane"}
             names = {"mqtt": "MQTT", "home_assistant": "Home Assistant"}
@@ -496,9 +566,20 @@ class DesktopWindow(QMainWindow):
         if self._disposed:
             return
         self._disposed = True
+        self._page_timer.stop()
         self._unsubscribe()
         self.tray.hide()
         QApplication.instance().removeEventFilter(self._wheel_guard)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_page_timer"):
+            self._activate_page()
+
+    def hideEvent(self, event):
+        if hasattr(self, "_page_timer"):
+            self._page_timer.stop()
+        super().hideEvent(event)
 
     def closeEvent(self, event):
         if self.application.config.minimize_to_tray and not self._force_close:

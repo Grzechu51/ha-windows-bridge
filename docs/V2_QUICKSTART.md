@@ -1,10 +1,13 @@
-# Uruchomienie 2.0 alpha lokalnie
+# Uruchomienie 2.0.0-alpha.2
 
-Ta wersja nie jest jeszcze opublikowana w GitHub Releases. Nie trzeba jej instalować ani kopiować nad działający program.
+To wydanie przedpremierowe. Przed aktualizacją integracji wykonaj kopię zapasową Home Assistant. Nie uruchamiaj dwóch wersji Bridge jednocześnie.
 
 ## Aplikacja Windows
 
-Zamknij działającą wersję Bridge z zasobnika. W PowerShell:
+Pobierz [wydanie 2.0.0-alpha.2](https://github.com/Grzechu51/ha-windows-bridge/releases/tag/v2.0.0-alpha.2).
+Zamknij działającą wersję Bridge z zasobnika. Uruchom instalator `HA-Windows-Bridge-Setup-2.0.0-alpha.2.exe` albo rozpakuj **cały** ZIP `win64` do osobnego folderu i otwórz `HA Windows Bridge.exe`. Nie przenoś samego EXE bez folderu `_internal`.
+
+Dla uruchomienia z kodu, w PowerShell:
 
 ```powershell
 cd "F:\Codex\HA MQTT PC"
@@ -17,6 +20,18 @@ Nowa wersja zapisuje `%LOCALAPPDATA%\HAWindowsBridge\profile-v2.json`. Nie odczy
 2. W **Sensory i funkcje** włącz potrzebne opcje; dla dysków i urządzeń użyj przycisku wyboru.
 3. W **Nakładki** możesz wyświetlić lokalne przykłady bez HA.
 4. Wybierz **Zapisz i zastosuj**, a następnie **Przegląd → Uruchom**. Opcjonalnie włącz automatyczne łączenie.
+
+Na stronie **Aplikacje** program automatycznie wykrywa aktywne sesje audio i ich ikony. Nowo wykryte programy nie są automatycznie udostępniane w HA: włącz wybrane przełączniki i zapisz. Jeśli programu nie ma, uruchom w nim dźwięk albo wybierz **Dodaj program…**.
+
+W **Diagnostyce** znajdziesz aktualne CPU, RAM i liczbę wątków Bridge. CPU jest liczone względem całego procesora; pierwsza próbka pojawia się po około 2 sekundach. Odczyty zatrzymują się po ukryciu okna.
+
+## Aktualizacja integracji przez HACS
+
+W HACS przy HA Windows Bridge wybierz **⋮ → Pobierz ponownie (Redownload) → Potrzebujesz innej wersji? (Need a different version?)** i wskaż `v2.0.0-alpha.2`. Po pobraniu uruchom HA ponownie. Jeśli wersji nie widać, użyj **⋮ → Aktualizuj informacje (Update information)**. W HACS 2 dostęp do aktualizacji beta kontroluje też encja przełącznika wersji przedpremierowych dla danego repozytorium. W razie potrzeby dodaj `Grzechu51/ha-windows-bridge` jako repozytorium niestandardowe typu **Integracja**.
+
+Opis opcji: [wybór wersji w HACS](https://hacs.xyz/docs/use/repositories/dashboard/#downloading-a-specific-version-of-a-repository), [przełącznik wersji przedpremierowych](https://hacs.xyz/docs/use/entities/switch/).
+
+Pakiet `HA-Integration` w wydaniu służy instalacji ręcznej; przy HACS nie trzeba go rozpakowywać ani kopiować folderów.
 
 ## MQTT
 

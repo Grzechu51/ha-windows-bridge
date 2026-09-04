@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 
 from .engine import NotificationEngine
+from .examples import media_example
 from .positioning import CardSize, PlacementEngine, Rect
 from .presentation import NotificationWindow
 
@@ -52,6 +53,8 @@ class OverlayService(QObject):
                 self.engine.submit({"title": "", "message": value, "data": {
                     "id": "example-" + identifier, "icon": icon, "layout": "badge", "display_mode": "parallel",
                     "duration": 8, "edge_offset": 16}})
+        elif pattern == "media":
+            self.engine.submit(media_example())
         else:
             self.engine.submit({"title": "HA Windows Bridge 2.0",
                                 "message": "Twoje powiadomienia. Na Twoim komputerze.",
@@ -149,7 +152,7 @@ class OverlayService(QObject):
             window.lifetime.setValue(round(self.engine.lifetime(identifier) * 1000))
             duration = self.engine.visible[identifier].options["media_duration"]
             if duration:
-                window.progress.setValue(round(self.engine.media_position(identifier) / duration * 100))
+                window.set_media_position(self.engine.media_position(identifier), duration)
         self._clock_state()
 
     def close(self):

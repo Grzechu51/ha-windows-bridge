@@ -86,6 +86,7 @@ class ToggleSwitch(QAbstractButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedSize(46, 25)
         self._position = 0.0
+        self._focus_visible = False
         self._animation = QPropertyAnimation(self, b"knobPosition", self)
         self._animation.setDuration(MotionSystem.TOKENS["toggle"].duration)
         self._animation.setEasingCurve(MotionSystem.TOKENS["toggle"].easing)
@@ -115,7 +116,7 @@ class ToggleSwitch(QAbstractButton):
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        track = self.rect().adjusted(1, 2, -1, -2)
+        track = QRectF(2.5, 3.5, self.width() - 5.0, self.height() - 7.0)
         palette = PALETTES["light" if QApplication.instance().property("bridgeTheme") == "light" else "dark"]
         if self.isChecked():
             track_color = QColor(palette.accent)
@@ -134,16 +135,26 @@ class ToggleSwitch(QAbstractButton):
         painter.drawRoundedRect(track, track.height() / 2, track.height() / 2)
         diameter = track.height() - 4
         start_x = track.left() + 2
-        end_x = track.right() - diameter - 1
+        end_x = track.right() - diameter - 2
         x = start_x + (end_x - start_x) * self._position
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(knob_color)
-        painter.drawEllipse(int(x), int(track.top() + 2), int(diameter), int(diameter))
-        if self.hasFocus():
+        painter.drawEllipse(QRectF(x, track.top() + 2, diameter, diameter))
+        if self.hasFocus() and self._focus_visible:
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(QColor(palette.accent), 1))
-            painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 12, 12)
+            painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12, 12)
         painter.end()
+
+    def focusInEvent(self, event):
+        self._focus_visible = event.reason() in {Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason, Qt.FocusReason.ShortcutFocusReason}
+        super().focusInEvent(event)
+        self.update()
+
+    def mousePressEvent(self, event):
+        self._focus_visible = False
+        super().mousePressEvent(event)
+        self.update()
 
 
 
@@ -288,7 +299,8 @@ class AppCard(QFrame):
 
         layout = QGridLayout(self)
         layout.setContentsMargins(14, 10, 12, 10)
-        layout.setSpacing(13)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(4)
 
         self.avatar = QLabel(self._initials(config.display_name))
         self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -309,13 +321,14 @@ class AppCard(QFrame):
         self.process_label.setObjectName("appProcess")
         self.process_label.setWordWrap(True)
         self.process_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        layout.addWidget(self.name_label, 0, 1, 1, 3)
-        layout.addWidget(self.process_label, 1, 1, 1, 3)
+        layout.addWidget(self.name_label, 0, 1, 1, 5)
+        layout.addWidget(self.process_label, 1, 1, 1, 5)
         layout.setColumnStretch(1, 1)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(0, 100)
         self.slider.setMinimumWidth(90)
+        self.slider.setFixedHeight(36)
         self.slider.setEnabled(False)
         self.slider.sliderPressed.connect(self._slider_pressed)
         self.slider.sliderReleased.connect(self._slider_released)
@@ -330,7 +343,7 @@ class AppCard(QFrame):
 
         self.mute_button = QToolButton()
         self.mute_button.setObjectName("muteButton")
-        self.mute_button.setText("🔊")
+        self.mute_button.setIcon(qta.icon("mdi6.volume-high", color="#aab8b2"))
         self.mute_button.setToolTip("Wycisz aplikację")
         self.mute_button.setCheckable(True)
         self.mute_button.setEnabled(False)
@@ -342,7 +355,7 @@ class AppCard(QFrame):
         self.enabled_switch.setChecked(config.enabled)
         self.enabled_switch.setToolTip("Włącz encje Home Assistant dla tej aplikacji")
         self.enabled_switch.toggled.connect(self._apply_enabled_state)
-        layout.addWidget(self.enabled_switch, 0, 4, 3, 1)
+        layout.addWidget(self.enabled_switch, 2, 4, Qt.AlignmentFlag.AlignVCenter)
 
         self.more_button = QToolButton()
         self.more_button.setObjectName("moreButton")
@@ -368,7 +381,7 @@ class AppCard(QFrame):
         self.options_menu.addSeparator()
         self.options_menu.addAction("Usuń", lambda: self.remove_requested.emit(self))
         self.more_button.clicked.connect(self._show_options_menu)
-        layout.addWidget(self.more_button, 0, 5, 3, 1)
+        layout.addWidget(self.more_button, 2, 5, Qt.AlignmentFlag.AlignVCenter)
         self.set_executable_icon(config.executable_path)
         self._apply_enabled_state(config.enabled)
 
@@ -396,7 +409,7 @@ class AppCard(QFrame):
         self.config.executable_path = executable_path.strip()
         file_info = QFileInfo(self.config.executable_path)
         if self.config.executable_path and file_info.exists():
-            pixmap = QFileIconProvider().icon(file_info).pixmap(256, 256)
+            pixmap = QFileIconProvider().icon(file_info).pixmap(64, 64)
             if pixmap.isNull():
                 pixmap = self._extract_windows_icon(self.config.executable_path)
             if not pixmap.isNull():
@@ -535,7 +548,7 @@ class AppCard(QFrame):
             return
         self.mute_button.blockSignals(True)
         self.mute_button.setChecked(muted)
-        self.mute_button.setText("🔇" if muted else "🔊")
+        self.mute_button.setIcon(qta.icon("mdi6.volume-off" if muted else "mdi6.volume-high", color="#ef8794" if muted else "#aab8b2"))
         self.mute_button.setToolTip("Włącz dźwięk aplikacji" if muted else "Wycisz aplikację")
         self.mute_button.blockSignals(False)
         self._apply_enabled_state(self.enabled_switch.isChecked())
@@ -551,7 +564,7 @@ class AppCard(QFrame):
         self.style().polish(self)
 
     def _mute_toggled(self, muted: bool) -> None:
-        self.mute_button.setText("🔇" if muted else "🔊")
+        self.mute_button.setIcon(qta.icon("mdi6.volume-off" if muted else "mdi6.volume-high", color="#ef8794" if muted else "#aab8b2"))
         self.mute_requested.emit(self.config.process_name, muted)
 
 

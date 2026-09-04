@@ -4,8 +4,8 @@
 
 <h1 align="center">HA Windows Bridge</h1>
 
-> Ta gałąź zawiera **2.0.0-alpha.1**: nowy rdzeń, GUI i protokół integracji.
-> To wersja do lokalnych testów, nie wydanie produkcyjne. Nie została jeszcze opublikowana w GitHub Releases.
+> Ta gałąź zawiera **2.0.0-alpha.2**: nowy rdzeń, GUI i protokół integracji.
+> Wersja przedpremierowa do testów: [pobierz 2.0 alpha](https://github.com/Grzechu51/ha-windows-bridge/releases/tag/v2.0.0-alpha.2).
 > Zacznij od [instrukcji 2.0](docs/V2_QUICKSTART.md) i [raportu przebudowy](docs/V2_REBUILD.md).
 > Instrukcje instalacji opublikowanych wydań poniżej dotyczą wcześniejszej linii 0.x.
 
