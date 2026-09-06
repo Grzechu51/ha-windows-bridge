@@ -458,15 +458,13 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             )
         default_title = "" if options.get("layout") == "badge" else "Home Assistant"
         payload_title = title or (default_title if action == "show" else "")
-        payload = json.dumps(
-            {
-                "title": payload_title,
-                "message": message,
-                "data": options,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
+        content = {"data": options}
+        # An update is a patch: absent text must not erase existing content.
+        if action != "update" or "title" in call.data or title:
+            content["title"] = payload_title
+        if action != "update" or "message" in call.data or message:
+            content["message"] = message
+        payload = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
         if len(payload.encode("utf-8")) > 768 * 1024:
             raise HomeAssistantError("Overlay payload is too large")
         results = await asyncio.gather(*(

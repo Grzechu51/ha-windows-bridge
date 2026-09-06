@@ -31,7 +31,7 @@ class MqttGateway:
 
     def _connection_changed(self, event):
         if event.data.transport == "mqtt" and event.data.state == "connected":
-            self.publisher.replay()
+            self.publisher.request_replay()
 
     def receive(self, topic, payload, retained=False):
         if topic == self.protocol.birth_topic:

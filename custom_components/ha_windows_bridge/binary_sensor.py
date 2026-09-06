@@ -39,10 +39,15 @@ class BridgeBinarySensor(BridgeMqttEntity, BinarySensorEntity):
     @callback
     def _state_received(self, message: ReceiveMessage) -> None:
         payload = message_text(message).strip()
+        if payload == "unavailable":
+            self._sample_available = False
+            self._update_availability()
+            return
         if payload == self._payload_on:
             self._attr_is_on = True
         elif payload == self._payload_off:
             self._attr_is_on = False
         else:
             return
-        self.async_write_ha_state()
+        self._sample_available = True
+        self._update_availability()

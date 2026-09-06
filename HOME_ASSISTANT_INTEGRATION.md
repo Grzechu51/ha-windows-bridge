@@ -1,3 +1,9 @@
+> Minimum Home Assistant: **2026.9.0**. Current supported version: **2026.9.1**.
+> Phase 0 adds real runtime tests for both versions in `.github/workflows/validate.yml`
+> (`ha-runtime`, Ubuntu, Python 3.14). These tests require Linux CI; Windows tests
+> alone do not verify compatibility. The previous 2025.1.0 declaration was invalid
+> because the integration imports `homeassistant.helpers.target`.
+
 # Integracja HA Windows Bridge
 
 Integracja dodaje do Home Assistant funkcje włączone w aplikacji Windows. Korzysta z

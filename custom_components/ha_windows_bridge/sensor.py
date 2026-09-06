@@ -41,6 +41,10 @@ class BridgeSensor(BridgeMqttEntity, SensorEntity):
     @callback
     def _state_received(self, message: ReceiveMessage) -> None:
         payload = message_text(message).strip()
+        if payload == "unavailable":
+            self._sample_available = False
+            self._update_availability()
+            return
         if self._numeric:
             try:
                 value = float(payload)
@@ -51,4 +55,5 @@ class BridgeSensor(BridgeMqttEntity, SensorEntity):
             self._attr_native_value = int(value) if value.is_integer() else value
         else:
             self._attr_native_value = payload[:1024]
-        self.async_write_ha_state()
+        self._sample_available = True
+        self._update_availability()

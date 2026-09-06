@@ -46,6 +46,7 @@ from ..media_protocol import (
 )
 from ..runtime.polling import PollScheduler
 from ..system_monitor import PcContext
+from ..windows.com import ProviderUnavailable
 
 
 class TelemetryService:
@@ -110,16 +111,13 @@ class TelemetryService:
             self._inventory_requested.set()
 
     def _publish_number_state(self, topic: str, value: float) -> None:
-        if self.publisher.connected:
-            self.publisher.publish(topic, str(round(value * 100)), qos=1, retain=True)
+        self.publisher.publish(topic, str(round(value * 100)), qos=1, retain=True)
 
     def _publish_switch_state(self, topic: str, enabled: bool) -> None:
-        if self.publisher.connected:
-            self.publisher.publish(topic, "ON" if enabled else "OFF", qos=1, retain=True)
+        self.publisher.publish(topic, "ON" if enabled else "OFF", qos=1, retain=True)
 
     def _publish_text_state(self, topic: str, value: str | float) -> None:
-        if self.publisher.connected:
-            self.publisher.publish(topic, str(value), qos=1, retain=True)
+        self.publisher.publish(topic, str(value), qos=1, retain=True)
 
     def _publish_volume_state(self, app: AudioAppConfig | None, volume: float) -> None:
         if app is None:
@@ -234,7 +232,8 @@ class TelemetryService:
         names = [app.process_name for app in enabled]
         scheduler = PollScheduler(self.log)
         while not self._stop_event.wait(self.config.poll_interval):
-            if not self.publisher.connected or self._paused.is_set():
+            self.publisher.flush()
+            if self._paused.is_set():
                 continue
             if self._inventory_requested.is_set() and scheduler.run("inventory", 5, self.publish_discovery, 0):
                 self._inventory_requested.clear()
@@ -443,6 +442,7 @@ class TelemetryService:
             include_gpu=self.config.publish_gpu_stats,
             include_ram=self.config.publish_ram_stats,
         )
+        self.events.emit("provider.health", {"source": "system", "errors": metrics.provider_errors})
         values: dict[str, float | int | str | None] = {}
         if self.config.publish_cpu_stats:
             values["cpu"] = round(metrics.cpu_percent, 1)
@@ -489,8 +489,7 @@ class TelemetryService:
                 }
             )
         for metric, value in values.items():
-            if value not in (None, ""):
-                self._publish_text_state(system_metric_topic(self.config, metric), value)
+            self._publish_text_state(system_metric_topic(self.config, metric), value if value not in (None, "") else "unavailable")
 
     def _monitor_windows_health(self) -> None:
         health = self.system.windows_health()
@@ -532,6 +531,7 @@ class TelemetryService:
                 round(volume.free_gb, 1),
             )
         metrics = self.system.disk_metrics(self.config.disk_mounts)
+        self.events.emit("provider.health", {"source": "disks", "errors": metrics.provider_errors})
         values = {
             "disk_read": round(metrics.read_mb_s, 2),
             "disk_write": round(metrics.write_mb_s, 2),
@@ -539,11 +539,19 @@ class TelemetryService:
             "disk_temperature": metrics.temperature,
         }
         for metric, value in values.items():
-            if value not in (None, ""):
-                self._publish_text_state(system_metric_topic(self.config, metric), value)
+            self._publish_text_state(system_metric_topic(self.config, metric), value if value not in (None, "") else "unavailable")
 
     def _monitor_devices(self) -> None:
-        present = self.system.present_device_ids()
+        try:
+            present = self.system.present_device_ids()
+        except ProviderUnavailable:
+            self.events.emit("provider.health", {"source": "devices", "errors": ("unavailable",)})
+            for device in self.config.tracked_devices:
+                if device.enabled:
+                    self._publish_text_state(tracked_device_topic(self.config, device.slug), "unavailable")
+            self._last_device_states.clear()
+            return
+        self.events.emit("provider.health", {"source": "devices", "errors": ()})
         for device in self.config.tracked_devices:
             if not device.enabled:
                 continue
@@ -560,7 +568,7 @@ class TelemetryService:
         new_names = [device.name for device in outputs]
         self._audio_outputs = outputs
         if old_names != new_names:
-            self._publish_discovery()
+            self._inventory_requested.set()
         current = next((device.name for device in outputs if device.is_default), "")
         if current and current != self._last_audio_output:
             self._last_audio_output = current
@@ -573,18 +581,17 @@ class TelemetryService:
         artwork_hash = snapshot.artwork.digest or ""
         if artwork_hash != self._last_media_artwork_hash:
             self._last_media_artwork_hash = artwork_hash
-            if self.publisher.connected:
-                serialized_artwork = (
-                    json.dumps(artwork_payload, separators=(",", ":"))
-                    if artwork_payload is not None
-                    else ""
-                )
-                self.publisher.publish(
-                    media_thumbnail_topic(self.config),
-                    serialized_artwork,
-                    qos=1,
-                    retain=True,
-                )
+            serialized_artwork = (
+                json.dumps(artwork_payload, separators=(",", ":"))
+                if artwork_payload is not None
+                else ""
+            )
+            self.publisher.publish(
+                media_thumbnail_topic(self.config),
+                serialized_artwork,
+                qos=1,
+                retain=True,
+            )
         payload = json.dumps(
             media_state_payload(snapshot, self.audio.get_master_snapshot()),
             ensure_ascii=False,
@@ -594,9 +601,8 @@ class TelemetryService:
         if payload == self._last_media_payload:
             return
         self._last_media_payload = payload
-        if self.publisher.connected:
-            _, state_topic = media_topics(self.config)
-            self.publisher.publish(state_topic, payload, qos=1, retain=True)
+        _, state_topic = media_topics(self.config)
+        self.publisher.publish(state_topic, payload, qos=1, retain=True)
 
     def _publish_running(self, app: AudioAppConfig, running: bool) -> None:
         self._publish_switch_state(app_running_topic(self.config, app), running)

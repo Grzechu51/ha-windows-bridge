@@ -105,7 +105,7 @@ def _entity(raw: Any, topic_prefix: str, bridge_status_topic: str) -> dict[str, 
         return None
     platform = raw.get("platform")
     unique_id = raw.get("unique_id")
-    if platform not in _PLATFORMS:
+    if not isinstance(platform, str) or platform not in _PLATFORMS:
         return None
     if not isinstance(unique_id, str) or _UNIQUE_ID.fullmatch(unique_id) is None:
         return None

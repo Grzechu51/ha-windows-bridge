@@ -1,0 +1,78 @@
+{
+  "device_name": "Phase 0 PC",
+  "device_id": "phase0_pc",
+  "mqtt": {
+    "host": "broker",
+    "port": 1883,
+    "username": "",
+    "keepalive": 10,
+    "tls": false,
+    "base_topic": "phase0/pc",
+    "discovery_prefix": "homeassistant"
+  },
+  "home_assistant": {
+    "enabled": false,
+    "url": "",
+    "verify_tls": true
+  },
+  "apps": [
+    {
+      "process_name": "app.exe",
+      "display_name": "Test app",
+      "slug": "app",
+      "enabled": true,
+      "executable_path": "",
+      "allow_remote_start": false,
+      "allow_remote_close": false
+    }
+  ],
+  "start_with_windows": true,
+  "start_minimized": true,
+  "minimize_to_tray": true,
+  "auto_connect": true,
+  "language": "pl",
+  "control_master_volume": true,
+  "theme": "dark",
+  "reduced_motion": false,
+  "control_active_app": true,
+  "publish_initial_state": true,
+  "poll_interval": 0.5,
+  "publish_activity": true,
+  "publish_idle": true,
+  "idle_threshold": 300,
+  "publish_session_lock": true,
+  "publish_ram_stats": true,
+  "publish_cpu_stats": true,
+  "publish_gpu_stats": true,
+  "control_microphone": true,
+  "control_audio_output": true,
+  "media_player_enabled": true,
+  "allow_power_actions": true,
+  "enable_windows_notifications": true,
+  "auto_check_updates": true,
+  "publish_windows_health": true,
+  "publish_disk_stats": true,
+  "disk_mounts": [
+    "C:\\"
+  ],
+  "audio_enhancements_enabled": true,
+  "control_channel_balance": true,
+  "publish_audio_sessions": true,
+  "publish_devices": true,
+  "tracked_devices": [
+    {
+      "instance_id": "USB-1",
+      "display_name": "Device",
+      "category": "device",
+      "slug": "device",
+      "enabled": true
+    }
+  ],
+  "overlay_enabled": true,
+  "overlay_allow_fullscreen": false,
+  "overlay_monitor": 0,
+  "overlay_animation": "slide",
+  "overlay_animation_duration": 220,
+  "overlay_example_duration": 12,
+  "overlay_background_effect": "none"
+}

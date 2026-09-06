@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import logging
 import math
 import os
 import subprocess  # nosec B404
@@ -15,6 +16,8 @@ import psutil
 import win32con
 import win32gui
 import win32process
+
+from .windows.com import ProviderUnavailable, com_apartment, query_wmi
 
 # Security note: subprocess is used only for fixed, trusted executable paths with shell=False.
 
@@ -48,6 +51,7 @@ class SystemMetrics:
     ram_used_gb: float | None = None
     ram_available_gb: float | None = None
     ram_total_gb: float | None = None
+    provider_errors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +72,7 @@ class DiskMetrics:
     write_mb_s: float
     health: str = ""
     temperature: float | None = None
+    provider_errors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +122,7 @@ class WindowsSystemMonitor:
         self._last_disk_io: tuple[float, int, int] | None = None
         self._disk_health_cache: tuple[str, float | None] = ("", None)
         self._disk_health_cache_time = 0.0
+        self._update_error = False
         self._pending_updates: int | None = None
         self._update_check_time = 0.0
         self._update_thread: threading.Thread | None = None
@@ -188,14 +194,23 @@ class WindowsSystemMonitor:
         include_gpu: bool = True,
         include_ram: bool = True,
     ) -> SystemMetrics:
+        errors = []
+        def optional_read(name, read, default):
+            try:
+                return read()
+            except ProviderUnavailable:
+                errors.append(name)
+                return default
+
         gpu: dict[str, float] = {}
         if include_gpu:
             now = time.monotonic()
             if now - self._gpu_cache_time >= 10.0:
-                self._gpu_cache = self._gpu_metrics()
-                self._gpu_cache_time = now
-            gpu = self._gpu_cache
-        optional = self._hardware_monitor_metrics() if include_cpu or include_gpu else {}
+                self._gpu_cache = optional_read("gpu", self._gpu_metrics, {})
+                if "gpu" not in errors:
+                    self._gpu_cache_time = now
+            gpu = dict(self._gpu_cache)
+        optional = optional_read("hardware_monitor", self._hardware_monitor_metrics, {}) if include_cpu or include_gpu else {}
         if include_gpu:
             gpu.update(
                 {
@@ -205,12 +220,13 @@ class WindowsSystemMonitor:
                 }
             )
         cpu_vendor, gpu_vendor = (
-            self._hardware_identity() if include_cpu or include_gpu else ("", "")
+            optional_read("hardware_identity", self._hardware_identity, ("", "")) if include_cpu or include_gpu else ("", "")
         )
         frequency = psutil.cpu_freq() if include_cpu else None
         memory = psutil.virtual_memory() if include_ram else None
         gibibyte = 1024**3
         return SystemMetrics(
+            provider_errors=tuple(errors),
             cpu_percent=float(psutil.cpu_percent(interval=None)) if include_cpu else 0.0,
             ram_percent=float(memory.percent) if memory is not None else 0.0,
             uptime_seconds=max(0, int(time.time() - psutil.boot_time())),
@@ -255,6 +271,8 @@ class WindowsSystemMonitor:
         pending_restart = self._pending_restart()
         if pending_restart:
             update_status = "Restart required"
+        elif self._update_error:
+            update_status = "Unavailable"
         elif self._pending_updates is None:
             update_status = "Checking"
         elif self._pending_updates:
@@ -286,22 +304,23 @@ class WindowsSystemMonitor:
         self._update_thread.start()
 
     def _read_pending_windows_updates(self) -> None:
-        initialized = False
-        try:
-            import pythoncom
-            import win32com.client
+        import win32com.client
 
-            pythoncom.CoInitialize()
-            initialized = True
-            session = win32com.client.Dispatch("Microsoft.Update.Session")
-            searcher = session.CreateUpdateSearcher()
-            result = searcher.Search("IsInstalled=0 and IsHidden=0 and Type='Software'")
-            self._pending_updates = max(0, int(result.Updates.Count))
+        try:
+            with com_apartment():
+                session = searcher = result = None
+                try:
+                    session = win32com.client.Dispatch("Microsoft.Update.Session")
+                    searcher = session.CreateUpdateSearcher()
+                    result = searcher.Search("IsInstalled=0 and IsHidden=0 and Type='Software'")
+                    self._pending_updates = max(0, int(result.Updates.Count))
+                    self._update_error = False
+                finally:
+                    result = searcher = session = None
         except Exception:
             self._pending_updates = None
-        finally:
-            if initialized:
-                pythoncom.CoUninitialize()
+            self._update_error = True
+            logging.getLogger("bridge.providers").exception("Windows Update unavailable")
 
     @staticmethod
     def list_disk_volumes() -> list[DiskVolume]:
@@ -355,10 +374,16 @@ class WindowsSystemMonitor:
             write_rate = max(0, io.write_bytes - previous_write) / elapsed / 1_048_576
         if io is not None:
             self._last_disk_io = (now, io.read_bytes, io.write_bytes)
+        errors = []
         if now - self._disk_health_cache_time >= 60.0:
-            self._disk_health_cache = self._physical_disk_health()
-            self._disk_health_cache_time = now
+            try:
+                self._disk_health_cache = self._physical_disk_health()
+                self._disk_health_cache_time = now
+            except ProviderUnavailable:
+                self._disk_health_cache = ("", None)
+                errors.append("disk_health")
         return DiskMetrics(
+            provider_errors=tuple(errors),
             used_percent=(used / total * 100.0) if total else 0.0,
             free_gb=free,
             read_mb_s=read_rate,
@@ -372,34 +397,32 @@ class WindowsSystemMonitor:
         health = ""
         temperature: float | None = None
         try:
-            import win32com.client
-
-            storage = win32com.client.GetObject(r"winmgmts:\\.\root\Microsoft\Windows\Storage")
+            storage = r"winmgmts:\\.\root\Microsoft\Windows\Storage"
             statuses: list[int] = []
             temperatures: list[float] = []
-            for disk in storage.ExecQuery("SELECT HealthStatus,Temperature FROM MSFT_PhysicalDisk"):
+            for disk in query_wmi(storage, "SELECT HealthStatus FROM MSFT_PhysicalDisk"):
                 raw_status = getattr(disk, "HealthStatus", None)
                 statuses.append(int(raw_status) if raw_status is not None else 5)
-                raw_temperature = getattr(disk, "Temperature", None)
-                if raw_temperature is not None:
-                    value = float(raw_temperature)
-                    if 0 < value < 150:
-                        temperatures.append(value)
             if statuses:
                 worst = max(statuses)
                 health = {0: "Healthy", 1: "Warning", 2: "Unhealthy"}.get(worst, "Unknown")
-            if temperatures:
-                temperature = max(temperatures)
+            try:
+                for counter in query_wmi(storage, "SELECT Temperature FROM MSFT_StorageReliabilityCounter"):
+                    value = getattr(counter, "Temperature", None)
+                    if value is not None and 0 < float(value) < 150:
+                        temperatures.append(float(value))
+                if temperatures:
+                    temperature = max(temperatures)
+            except ProviderUnavailable:
+                logging.getLogger("bridge.providers").warning("Disk temperature unavailable")
         # The optional Storage WMI provider is not present on every supported PC.
         except Exception:  # nosec B110
             pass
         if not health:
             try:
-                import win32com.client
-
-                wmi = win32com.client.GetObject(r"winmgmts:\\.\root\wmi")
+                wmi = r"winmgmts:\\.\root\wmi"
                 predictions = list(
-                    wmi.ExecQuery("SELECT PredictFailure FROM MSStorageDriver_FailurePredictStatus")
+                    query_wmi(wmi, "SELECT PredictFailure FROM MSStorageDriver_FailurePredictStatus")
                 )
                 if predictions:
                     health = (
@@ -410,6 +433,8 @@ class WindowsSystemMonitor:
             # Legacy SMART WMI is also optional and driver-dependent.
             except Exception:  # nosec B110
                 pass
+        if not health:
+            raise ProviderUnavailable("Physical disk health unavailable")
         return health, temperature
 
     @classmethod
@@ -422,14 +447,12 @@ class WindowsSystemMonitor:
 
         devices: dict[str, PnpDevice] = {}
         try:
-            import win32com.client
-
-            service = win32com.client.GetObject(r"winmgmts:\\.\root\cimv2")
+            service = r"winmgmts:\\.\root\cimv2"
             query = (
                 "SELECT PNPDeviceID,Name,PNPClass,Present,ConfigManagerErrorCode "
                 "FROM Win32_PnPEntity"
             )
-            for item in service.ExecQuery(query):
+            for item in query_wmi(service, query):
                 instance_id = str(getattr(item, "PNPDeviceID", "") or "").strip()
                 name = str(getattr(item, "Name", "") or "").strip()
                 category = str(getattr(item, "PNPClass", "") or "Device").strip()
@@ -442,8 +465,8 @@ class WindowsSystemMonitor:
                     else int(getattr(item, "ConfigManagerErrorCode", 0) or 0) == 0
                 )
                 devices[instance_id.casefold()] = PnpDevice(instance_id, name, category, present)
-        except Exception:
-            return []
+        except Exception as exc:
+            raise ProviderUnavailable("PnP enumeration unavailable") from exc
         return cls._sorted_pnp_devices(devices)
 
     @classmethod
@@ -684,11 +707,9 @@ class WindowsSystemMonitor:
             return self._hardware_identity_cache
         cpu_vendor = gpu_vendor = ""
         try:
-            import win32com.client
-
-            service = win32com.client.GetObject(r"winmgmts:\\.\root\cimv2")
-            processors = list(service.ExecQuery("SELECT Manufacturer FROM Win32_Processor"))
-            adapters = list(service.ExecQuery("SELECT Name FROM Win32_VideoController"))
+            service = r"winmgmts:\\.\root\cimv2"
+            processors = list(query_wmi(service, "SELECT Manufacturer FROM Win32_Processor"))
+            adapters = list(query_wmi(service, "SELECT Name FROM Win32_VideoController"))
             cpu_vendor = str(getattr(processors[0], "Manufacturer", "") or "") if processors else ""
             names = " ".join(str(getattr(item, "Name", "") or "") for item in adapters).casefold()
             if "nvidia" in names:
@@ -697,9 +718,8 @@ class WindowsSystemMonitor:
                 gpu_vendor = "AMD"
             elif "intel" in names:
                 gpu_vendor = "Intel"
-        # Hardware identity is a best-effort diagnostic only.
-        except Exception:  # nosec B110
-            pass
+        except Exception as exc:
+            raise ProviderUnavailable("Hardware identity unavailable") from exc
         self._hardware_identity_cache = (cpu_vendor[:80], gpu_vendor)
         return self._hardware_identity_cache
 
@@ -861,7 +881,7 @@ class WindowsSystemMonitor:
                 "gpu_fan_rpm",
             )
             if len(raw_values) != len(keys):
-                return {}
+                raise ProviderUnavailable("NVIDIA returned an invalid metrics row")
             metrics: dict[str, float] = {}
             for key, raw_value in zip(keys, raw_values, strict=True):
                 try:
@@ -871,8 +891,8 @@ class WindowsSystemMonitor:
                 if math.isfinite(value):
                     metrics[key] = value
             return metrics
-        except (OSError, subprocess.SubprocessError, IndexError):
-            return {}
+        except (OSError, subprocess.SubprocessError, IndexError) as exc:
+            raise ProviderUnavailable("NVIDIA metrics unavailable") from exc
 
     def _windows_gpu_metrics(self) -> dict[str, float]:
         """Read AMD GPU data from vendor-neutral Windows performance counters."""
@@ -881,10 +901,8 @@ class WindowsSystemMonitor:
             return {}
         metrics: dict[str, float] = {}
         try:
-            import win32com.client
-
-            service = win32com.client.GetObject(r"winmgmts:\\.\root\cimv2")
-            engines: Any = service.ExecQuery(
+            service = r"winmgmts:\\.\root\cimv2"
+            engines: Any = query_wmi(service,
                 "SELECT Name,UtilizationPercentage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine"
             )
             loads = [
@@ -894,14 +912,14 @@ class WindowsSystemMonitor:
             ]
             if loads:
                 metrics["gpu_percent"] = min(100.0, max(loads))
-            memories: Any = service.ExecQuery(
+            memories: Any = query_wmi(service,
                 "SELECT DedicatedUsage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory"
             )
             used = sum(float(getattr(item, "DedicatedUsage", 0) or 0) for item in memories)
             if used > 0:
                 metrics["gpu_memory_used_mb"] = used / 1_048_576
-        except Exception:
-            return {}
+        except Exception as exc:
+            raise ProviderUnavailable("GPU counters unavailable") from exc
         return metrics
 
     @staticmethod
@@ -909,17 +927,15 @@ class WindowsSystemMonitor:
         """Read an optional Libre/OpenHardwareMonitor WMI provider when present."""
         for namespace in ("LibreHardwareMonitor", "OpenHardwareMonitor"):
             try:
-                import win32com.client
-
-                service = win32com.client.GetObject(rf"winmgmts:\\.\root\{namespace}")
+                service = rf"winmgmts:\\.\root\{namespace}"
                 hardware = {
                     str(getattr(item, "Identifier", "")): str(
                         getattr(item, "HardwareType", "")
                     ).casefold()
-                    for item in service.ExecQuery("SELECT Identifier,HardwareType FROM Hardware")
+                    for item in query_wmi(service, "SELECT Identifier,HardwareType FROM Hardware")
                 }
                 metrics: dict[str, float] = {}
-                for sensor in service.ExecQuery("SELECT Name,SensorType,Value,Parent FROM Sensor"):
+                for sensor in query_wmi(service, "SELECT Name,SensorType,Value,Parent FROM Sensor"):
                     parent = str(getattr(sensor, "Parent", ""))
                     kind = hardware.get(parent, "")
                     sensor_type = str(getattr(sensor, "SensorType", "")).casefold()
@@ -967,4 +983,4 @@ class WindowsSystemMonitor:
             # Try the next optional sensor provider when this namespace is unavailable.
             except Exception:  # nosec B112
                 continue
-        return {}
+        raise ProviderUnavailable("Hardware monitor namespaces unavailable")

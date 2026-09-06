@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import json
+from dataclasses import asdict
 from typing import Any
 
 from . import __version__
@@ -58,3 +60,28 @@ def integration_announcement_payload(
             "availability_topic": status_topic(config),
         },
     }
+
+
+# Keep these v2 wire limits aligned with the HA decoder (contract-tested).
+MAX_ENTITIES = 256
+MAX_ANNOUNCEMENT_PAYLOAD = 256 * 1024
+MAX_ROUTES = 512
+
+
+def inventory_budget_errors(config: AppConfig) -> list[str]:
+    """Reserve all configured optional entities, without reading any hardware."""
+    from .communication.protocol import TopicProtocol
+
+    payload = integration_announcement_payload(config)
+    protocol = TopicProtocol(config)
+    routes = {topic: asdict(route) for topic, route in protocol.routes.items()}
+    payload.update(schema=3, protocol={"version": 2, "command_topic": protocol.command_topic,
+                                      "result_topic": protocol.result_topic, "routes": routes})
+    errors = []
+    if len(payload["entities"]) > MAX_ENTITIES:
+        errors.append(f"Inventory exceeds the Home Assistant limit of {MAX_ENTITIES} entities.")
+    if len(routes) > MAX_ROUTES:
+        errors.append(f"Inventory exceeds the Home Assistant limit of {MAX_ROUTES} command routes.")
+    if len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_ANNOUNCEMENT_PAYLOAD:
+        errors.append("Inventory exceeds the Home Assistant payload limit of 256 KiB.")
+    return errors

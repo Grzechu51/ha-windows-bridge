@@ -12,7 +12,7 @@ class FakeGateway:
     instances = []
     def __init__(self, config, router, events):
         self.router, self.events = router, events
-        self.publisher = SimpleNamespace(connected=False)
+        self.publisher = SimpleNamespace(connected=False, flush=lambda: None, publish=lambda *args, **kwargs: False)
         self.running = False
         self.instances.append(self)
     def start(self):
@@ -25,7 +25,7 @@ class FakeGateway:
 def runtime(config=None):
     return Application(config or AppConfig(mqtt=MqttConfig(host="broker"), control_master_volume=False),
                        SimpleNamespace(save=lambda config: None),
-                       SimpleNamespace(set_enabled=lambda enabled: None),
+                       SimpleNamespace(is_enabled=lambda: False, set_enabled=lambda enabled: None),
                        SimpleNamespace(list_audio_applications=lambda **_: []), object(), SimpleNamespace(reopen=lambda: None, close=lambda: None), object(),
                        mqtt_factory=FakeGateway, events=EventBus())
 

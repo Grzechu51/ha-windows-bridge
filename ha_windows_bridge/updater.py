@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import json
-import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from packaging.version import InvalidVersion, Version
+
 LATEST_RELEASE_API = "https://api.github.com/repos/Grzechu51/ha-windows-bridge/releases/latest"
 MAX_RELEASE_RESPONSE = 256 * 1024
-_VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,9 +21,12 @@ class UpdateInfo:
     error: str = ""
 
 
-def _version_tuple(value: str) -> tuple[int, int, int] | None:
-    match = _VERSION.fullmatch(value.strip())
-    return tuple(int(part) for part in match.groups()) if match else None
+def _version_tuple(value: str) -> Version | None:
+    try:
+        parsed = Version(value.strip())
+    except InvalidVersion:
+        return None
+    return parsed if len(parsed.release) == 3 else None
 
 
 def parse_release(payload: Any, current_version: str) -> UpdateInfo:
@@ -37,7 +40,7 @@ def parse_release(payload: Any, current_version: str) -> UpdateInfo:
         return UpdateInfo(current_version, error="The release version could not be read")
     return UpdateInfo(
         current_version=current_version,
-        latest_version=".".join(str(part) for part in latest),
+        latest_version=str(latest),
         release_url=url if url.startswith("https://github.com/") else "",
         available=latest > current,
     )

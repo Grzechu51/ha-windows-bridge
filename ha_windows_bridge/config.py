@@ -405,6 +405,9 @@ class AppConfig:
         for device in devices:
             if not device.instance_id:
                 errors.append(f"Urządzenie „{device.display_name}” nie ma identyfikatora Windows.")
+        if self.mqtt.host:
+            from .integration_protocol import inventory_budget_errors
+            errors.extend(inventory_budget_errors(self))
         return errors
 
 

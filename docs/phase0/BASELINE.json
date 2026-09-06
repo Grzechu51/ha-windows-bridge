@@ -1,0 +1,226 @@
+{
+  "started_utc": "2026-09-06T12:55:42Z",
+  "duration_s": 1830.0848838999998,
+  "requested_measurement_s": 1800,
+  "warmup_s": 30,
+  "os": "Windows-11-10.0.26200-SP0",
+  "python": "3.13.5",
+  "cpu": "AMD64 Family 25 Model 33 Stepping 2, AuthenticAMD",
+  "logical_cpus": 12,
+  "physical_cpus": 6,
+  "ram_gib": 31.90636444091797,
+  "battery": "None",
+  "configuration": {
+    "schema_version": 15,
+    "device_name": "Phase 0 reference",
+    "device_id": "phase0_reference",
+    "mqtt": {
+      "host": "127.0.0.1",
+      "port": 13286,
+      "username": "",
+      "keepalive": 10,
+      "tls": false,
+      "base_topic": "phase0_reference",
+      "discovery_prefix": "homeassistant"
+    },
+    "home_assistant": {
+      "enabled": false,
+      "url": "",
+      "verify_tls": true
+    },
+    "apps": [],
+    "start_with_windows": false,
+    "start_minimized": true,
+    "minimize_to_tray": true,
+    "auto_connect": true,
+    "language": "pl",
+    "control_master_volume": true,
+    "theme": "dark",
+    "reduced_motion": false,
+    "control_active_app": false,
+    "publish_initial_state": true,
+    "poll_interval": 0.5,
+    "publish_activity": false,
+    "publish_idle": false,
+    "idle_threshold": 300,
+    "publish_session_lock": false,
+    "publish_ram_stats": true,
+    "publish_cpu_stats": true,
+    "publish_gpu_stats": false,
+    "control_microphone": false,
+    "control_audio_output": false,
+    "media_player_enabled": true,
+    "allow_power_actions": false,
+    "enable_windows_notifications": false,
+    "auto_check_updates": false,
+    "publish_windows_health": false,
+    "publish_disk_stats": false,
+    "disk_mounts": [],
+    "audio_enhancements_enabled": false,
+    "control_channel_balance": false,
+    "publish_audio_sessions": false,
+    "publish_devices": false,
+    "tracked_devices": [],
+    "overlay_enabled": false,
+    "overlay_allow_fullscreen": false,
+    "overlay_monitor": 0,
+    "overlay_animation": "slide",
+    "overlay_animation_duration": 220,
+    "overlay_example_duration": 12,
+    "overlay_background_effect": "none"
+  },
+  "phases": {
+    "hidden": {
+      "cpu_percent_total": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.13100463188781228,
+        "max": 0.3900903811326549,
+        "samples": 900
+      },
+      "working_set_mib": {
+        "min": 131.33984375,
+        "median": 133.69921875,
+        "p95": 134.8359375,
+        "max": 134.8671875,
+        "samples": 900
+      },
+      "private_mib": {
+        "min": 140.8515625,
+        "median": 142.3671875,
+        "p95": 144.09765625,
+        "max": 144.09765625,
+        "samples": 900
+      },
+      "handles": {
+        "min": 444,
+        "median": 455.0,
+        "p95": 472,
+        "max": 472,
+        "samples": 900
+      },
+      "threads": {
+        "min": 13,
+        "median": 14.0,
+        "p95": 18,
+        "max": 18,
+        "samples": 900
+      },
+      "first": {
+        "elapsed_s": 30.010363600000005,
+        "phase": "hidden",
+        "cpu_percent_total": 0.0,
+        "working_set_mib": 131.33984375,
+        "private_mib": 140.8515625,
+        "handles": 453,
+        "threads": 17
+      },
+      "last": {
+        "elapsed_s": 929.0672485,
+        "phase": "hidden",
+        "cpu_percent_total": 0.13150568956313013,
+        "working_set_mib": 134.42578125,
+        "private_mib": 143.9453125,
+        "handles": 462,
+        "threads": 15
+      }
+    },
+    "visible_offscreen": {
+      "cpu_percent_total": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.25953541416782755,
+        "max": 0.5250117972251396,
+        "samples": 901
+      },
+      "working_set_mib": {
+        "min": 135.02734375,
+        "median": 139.5546875,
+        "p95": 139.75,
+        "max": 139.78125,
+        "samples": 901
+      },
+      "private_mib": {
+        "min": 143.9609375,
+        "median": 147.30859375,
+        "p95": 147.41796875,
+        "max": 147.4296875,
+        "samples": 901
+      },
+      "handles": {
+        "min": 445,
+        "median": 461,
+        "p95": 468,
+        "max": 468,
+        "samples": 901
+      },
+      "threads": {
+        "min": 13,
+        "median": 15,
+        "p95": 18,
+        "max": 18,
+        "samples": 901
+      },
+      "first": {
+        "elapsed_s": 930.0770966999999,
+        "phase": "visible_offscreen",
+        "cpu_percent_total": 0.12893852099092964,
+        "working_set_mib": 135.02734375,
+        "private_mib": 143.9609375,
+        "handles": 462,
+        "threads": 15
+      },
+      "last": {
+        "elapsed_s": 1830.0765844,
+        "phase": "visible_offscreen",
+        "cpu_percent_total": 0.12915062843166616,
+        "working_set_mib": 139.78125,
+        "private_mib": 147.31640625,
+        "handles": 461,
+        "threads": 15
+      }
+    }
+  },
+  "provider_duration_ms": {
+    "inventory": {
+      "min": 0.0020999998469051206,
+      "median": 0.002900000026784255,
+      "p95": 0.004100000012385863,
+      "max": 0.029300000051080133,
+      "samples": 359
+    },
+    "master_audio": {
+      "min": 0.04269999999451102,
+      "median": 0.06299999995462713,
+      "p95": 0.07890000006227638,
+      "max": 17.740400000036516,
+      "samples": 3586
+    },
+    "system_metrics": {
+      "min": 3.6220000000071195,
+      "median": 4.104199999972025,
+      "p95": 5.831199999647652,
+      "max": 47.52040000005309,
+      "samples": 359
+    },
+    "media": {
+      "min": 0.7120999998733168,
+      "median": 1.4066999999613472,
+      "p95": 1.7654999999194843,
+      "max": 49.44030000001476,
+      "samples": 1793
+    }
+  },
+  "provider_errors": {
+    "hardware_monitor": 359
+  },
+  "publications": {},
+  "shutdown_completed": true,
+  "shutdown_s": 0.002010200000313489,
+  "limits": [
+    "Broker offline on loopback; no real broker delivery measured",
+    "Qt offscreen; native GUI latency/physical displays not measured",
+    "No capture, notifications, WUA or GPU polling in reference profile",
+    "Wakeups and queue depths not instrumented; not a soak test"
+  ]
+}

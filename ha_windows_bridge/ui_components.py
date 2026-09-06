@@ -550,6 +550,8 @@ class AppCard(QFrame):
 
     def _slider_value_changed(self, value: int) -> None:
         self.percent_label.setText(f"{value}%")
+        if not self._user_adjusting:
+            self._slider_released()
 
     def set_muted(self, muted: bool | None) -> None:
         self._mute_available = muted is not None
@@ -669,6 +671,8 @@ class MasterVolumeCard(QFrame):
 
     def _slider_value_changed(self, value: int) -> None:
         self.percent_label.setText(f"{value}%")
+        if not self._user_adjusting:
+            self._slider_released()
 
     def set_muted(self, muted: bool | None) -> None:
         self._mute_available = muted is not None

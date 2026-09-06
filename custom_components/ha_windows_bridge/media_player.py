@@ -75,17 +75,16 @@ class HAWindowsAppVolumePlayer(BridgeMqttEntity, MediaPlayerEntity):
         self._attr_is_volume_muted = None
 
     async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        self._unsubscribers.extend(
-            (
-                await mqtt.async_subscribe(
-                    self.hass, self._volume_state_topic, self._volume_received, qos=1
-                ),
-                await mqtt.async_subscribe(
-                    self.hass, self._mute_state_topic, self._mute_received, qos=1
-                ),
-            )
-        )
+        try:
+            await super().async_added_to_hass()
+            self.async_on_remove(await mqtt.async_subscribe(
+                self.hass, self._volume_state_topic, self._volume_received, qos=1))
+            self.async_on_remove(await mqtt.async_subscribe(
+                self.hass, self._mute_state_topic, self._mute_received, qos=1))
+        except BaseException:
+            # HA logs add failures but does not automatically abort this entity.
+            self.add_to_platform_abort()
+            raise
 
     @callback
     def _state_received(self, message: ReceiveMessage) -> None:
@@ -159,7 +158,6 @@ class HAWindowsMediaPlayer(MediaPlayerEntity):
         self._media_image_content_type: str | None = None
         self._attr_media_image_hash = None
         self._capabilities: set[str] = set()
-        self._unsubscribers: list[Any] = []
 
     @property
     def supported_features(self) -> MediaPlayerEntityFeature:
@@ -169,37 +167,23 @@ class HAWindowsMediaPlayer(MediaPlayerEntity):
         return features
 
     async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        self._mqtt_connected = mqtt.is_connected(self.hass)
-        self._unsubscribers.append(
-            mqtt.async_subscribe_connection_status(
-                self.hass,
-                self._mqtt_connection_received,
-            )
-        )
-        self._unsubscribers.extend(
-            (
-                await mqtt.async_subscribe(
-                    self.hass, self._state_topic, self._state_received, qos=1
-                ),
-                await mqtt.async_subscribe(
-                    self.hass, self._availability_topic, self._availability_received, qos=1
-                ),
-            )
-        )
-        if self._thumbnail_topic:
-            self._unsubscribers.append(
-                await mqtt.async_subscribe(
-                    self.hass, self._thumbnail_topic, self._thumbnail_received, qos=1
-                )
-            )
-        self._update_availability()
-
-    async def async_will_remove_from_hass(self) -> None:
-        for unsubscribe in self._unsubscribers:
-            unsubscribe()
-        self._unsubscribers.clear()
-        await super().async_will_remove_from_hass()
+        try:
+            await super().async_added_to_hass()
+            self._mqtt_connected = mqtt.is_connected(self.hass)
+            self.async_on_remove(mqtt.async_subscribe_connection_status(
+                self.hass, self._mqtt_connection_received))
+            self.async_on_remove(await mqtt.async_subscribe(
+                self.hass, self._state_topic, self._state_received, qos=1))
+            self.async_on_remove(await mqtt.async_subscribe(
+                self.hass, self._availability_topic, self._availability_received, qos=1))
+            if self._thumbnail_topic:
+                self.async_on_remove(await mqtt.async_subscribe(
+                    self.hass, self._thumbnail_topic, self._thumbnail_received, qos=1))
+            self._update_availability()
+        except BaseException:
+            # HA logs add failures but does not automatically abort this entity.
+            self.add_to_platform_abort()
+            raise
 
     @callback
     def _availability_received(self, message: ReceiveMessage) -> None:

@@ -58,6 +58,7 @@ class BridgeMqttEntity:
         self._payload_available = str(definition.get("payload_available", "online"))
         self._payload_not_available = str(definition.get("payload_not_available", "offline"))
         self._bridge_online = not bool(self._availability_topic)
+        self._sample_available = True
         self._mqtt_connected = False
         self._attr_available = False
 
@@ -107,7 +108,7 @@ class BridgeMqttEntity:
 
     @callback
     def _update_availability(self) -> None:
-        self._attr_available = self._mqtt_connected and self._bridge_online
+        self._attr_available = self._mqtt_connected and self._bridge_online and self._sample_available
         self.async_write_ha_state()
 
     @callback

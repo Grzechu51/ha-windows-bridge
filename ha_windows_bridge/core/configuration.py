@@ -106,6 +106,10 @@ class ConfigurationStore:
         return config
 
     def save(self, config):
+        from ..integration_protocol import inventory_budget_errors
+        errors = inventory_budget_errors(config) if config.mqtt.host else []
+        if errors:
+            raise ValueError("; ".join(errors))
         # Round-trip validation rejects ambiguous containers before any write.
         settings = public_settings(config)
         parse_settings(settings)

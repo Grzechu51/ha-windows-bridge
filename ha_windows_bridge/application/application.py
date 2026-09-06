@@ -163,21 +163,42 @@ class Application:
             return False
         self._protect_secrets(candidate)
         def apply():
+            previous = self.config
+            # Read before stopping anything; a read failure leaves runtime intact.
+            previous_startup = self.startup.is_enabled()
+            saved = startup_attempted = False
             self._stop()
-            # Saving occurs only after old services have relinquished their resources.
             try:
                 self.store.save(candidate)
-            except Exception:
-                # A failed write must not leave a running installation stopped.
+                saved = True
+                startup_attempted = True
+                self.startup.set_enabled(candidate.start_with_windows)
+                self.config = candidate
+                self._build_services()
                 self._start()
+                if any(status.state.value == "error" for status in self.states.snapshot()):
+                    raise RuntimeError("Configuration service startup failed")
+            except Exception:
+                # Cover every stage after stop, including registry, build and start.
+                # A rollback failure is explicit and never reported as applied.
+                try:
+                    self._stop()
+                    if saved:
+                        self.store.save(previous)
+                    if startup_attempted:
+                        self.startup.set_enabled(previous_startup)
+                    self.config = previous
+                    self._build_services()
+                    self._start()
+                    if any(status.state.value == "error" for status in self.states.snapshot()):
+                        raise RuntimeError("Previous configuration service startup failed")
+                except Exception:
+                    self.log.exception("Configuration rollback failed; recovery required")
+                    self.events.emit("application.error", "configuration_rollback_failed")
+                    raise
                 raise
-            self.startup.set_enabled(candidate.start_with_windows)
-            self.config = candidate
-            self._build_services()
             self.events.emit("configuration.changed", copy.deepcopy(candidate))
             self.log.info("Zapisano i zastosowano ustawienia")
-            # auto_connect controls application startup, not the current run state.
-            self._start()
         return self._schedule(apply)
 
     def pause_sensors(self, paused: bool):
