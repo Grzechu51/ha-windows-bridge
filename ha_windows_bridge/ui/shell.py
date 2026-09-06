@@ -38,7 +38,7 @@ from ..communication.state import ConnectionStatus
 from ..communication.status import CONNECTION_NAMES, connection_text
 from ..config import AppConfig, AudioAppConfig, TrackedDeviceConfig, slugify
 from ..core.configuration import ConfigurationStore
-from ..ui_components import AppCard, SettingControlRow, SettingRow
+from ..ui_components import AppCard, MasterVolumeCard, SettingControlRow, SettingRow
 from .inputs import SettingsWheelGuard
 from .navigation import PageStack
 
@@ -95,8 +95,12 @@ class DesktopWindow(QMainWindow):
         self._tray()
         self._page_timer = QTimer(self)
         self._page_timer.timeout.connect(self._refresh_visible_page)
+        self._state_timer = QTimer(self)
+        self._state_timer.timeout.connect(self._refresh_master_audio)
+        self._state_timer.start(1000)
         self.navigation.currentRowChanged.connect(self._activate_page)
         self.logs.setPlainText("\n".join(application.diagnostics.snapshot()))
+        self._refresh_master_audio()
         self._refresh_status()
 
     def _build(self):
@@ -148,8 +152,26 @@ class DesktopWindow(QMainWindow):
         self.setCentralWidget(root)
         self._dashboard()
         self._connections()
+        self.master_audio = MasterVolumeCard()
+        self.master_audio.volume_requested.connect(
+            lambda value: self.application.command(
+                "audio.master.volume",
+                {"value": value / 100},
+            )
+        )
+        self.master_audio.mute_requested.connect(
+            lambda muted: self.application.command(
+                "audio.master.mute",
+                {"value": muted},
+            )
+        )
+        self._content(Page.FEATURES).addWidget(self.master_audio)
         for key, title in FEATURES:
-            self._toggle(Page.FEATURES, key, title)
+            row = self._toggle(Page.FEATURES, key, title)
+            if key == "control_master_volume":
+                row.switch.toggled.connect(self.master_audio.set_feature_enabled)
+                self.master_audio.feature_toggled.connect(row.switch.setChecked)
+                self.master_audio.set_feature_enabled(row.switch.isChecked())
             if key in {"publish_disk_stats", "publish_devices"}:
                 kind = "disks" if key == "publish_disk_stats" else "devices"
                 self._content(Page.FEATURES).addWidget(self._button("Wybierz dyski…" if kind == "disks" else "Wybierz urządzenia…", lambda _checked=False, selected=kind: self.application.request_inventory(selected)))
@@ -565,6 +587,22 @@ class DesktopWindow(QMainWindow):
         color = "#ef8794" if values & {"auth_error", "configuration_error"} else "#efc261" if values & {"connecting", "retry_wait"} else "#69d7a0" if "connected" in values else "#a4adb2"
         self.tray.setIcon(qta.icon("mdi6.lan-connect", color=color))
 
+    def _refresh_master_audio(self):
+        state = self.application.computer_snapshot()
+        master = state.master_audio
+        if master is None:
+            self.master_audio.set_volume(None)
+            self.master_audio.set_muted(None)
+            health = state.health_for("master_audio")
+            quality = health.quality.value if health is not None else "unavailable"
+            detail = health.detail if health is not None else ""
+        else:
+            self.master_audio.set_volume(master.volume)
+            self.master_audio.set_muted(master.muted)
+            quality = master.quality.value
+            detail = master.detail
+        self.master_audio.set_quality(quality, detail)
+
     def _event(self, event):
         if self._disposed:
             return
@@ -594,6 +632,8 @@ class DesktopWindow(QMainWindow):
                 state = event.data.get(card.config.process_name.lower())
                 card.set_volume(state.volume if state else None)
                 card.set_muted(state.muted if state else None)
+        elif event.topic == "computer_state.changed":
+            self._refresh_master_audio()
         elif event.topic == "connection.changed":
             self._connection_states[event.data.transport] = event.data
             self._refresh_status()
@@ -608,6 +648,7 @@ class DesktopWindow(QMainWindow):
         elif event.topic == "configuration.changed":
             self.status.setText("Zapisano ustawienia")
             self.draft = copy.deepcopy(event.data)
+            self.master_audio.set_feature_enabled(self.draft.control_master_volume)
             self._connection_states = {item["transport"]: ConnectionStatus(**item) for item in self.application.connection_snapshot()}
             self._refresh_status()
         elif event.topic == "application.error":
@@ -641,6 +682,7 @@ class DesktopWindow(QMainWindow):
             return
         self._disposed = True
         self._page_timer.stop()
+        self._state_timer.stop()
         self._unsubscribe()
         self.tray.hide()
         QApplication.instance().removeEventFilter(self._wheel_guard)

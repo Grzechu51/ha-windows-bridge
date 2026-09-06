@@ -17,12 +17,19 @@ from ..config import AppConfig
 from ..core.commands import Command
 from ..core.events import EventBus
 from ..core.observability import DiagnosticBuffer
-from ..core.state import StateStore
+from ..core.state import ComputerStateStore, StateStore
 from ..runtime.worker import SerialWorker
 from ..security import redact_data
 from ..windows.resources import ProcessResources
 from .commands import CommandRouter
-from .lifecycle import ServiceSupervisor
+from .lifecycle import (
+    LifecycleOutcome,
+    LifecycleReport,
+    LifecycleResult,
+    ServiceSupervisor,
+)
+from .master_audio import MasterAudioProvider
+from .state_projection import MasterAudioProjection
 from .windows_commands import WindowsCommands
 
 
@@ -31,6 +38,7 @@ class Application:
                  mqtt_factory=None, direct_factory=None, monitors=None):
         self.events = events or EventBus()
         self.states = StateStore(self.events)
+        self.computer_state = ComputerStateStore(self.events)
         self.log = logging.getLogger("bridge")
         self.log.setLevel(logging.INFO)
         self.diagnostics = DiagnosticBuffer(self.events)
@@ -49,9 +57,17 @@ class Application:
         self._desired_running = False
         self._suspended = False
         self._telemetry = None
+        self._master_audio = None
+        self._state_projection = None
         self._generation = 0
+        self._services_generation = None
+        self._restart_blocked = False
         self._connections = {}
         self._pending_queries = set()
+        self.last_start_report = LifecycleReport("start")
+        self.last_stop_report = LifecycleReport("stop")
+        self.last_shutdown_report = LifecycleReport("shutdown")
+        self._shutdown_finalized = False
         self.resources = ProcessResources()
         self._connection_unsubscribe = self.events.subscribe("connection.changed", self._connection_changed)
         self._protect_secrets(config)
@@ -80,20 +96,56 @@ class Application:
     def _build_services(self):
         from ..communication.gateway import MqttGateway
         from .telemetry import TelemetryService
+        if self.supervisor.active:
+            raise RuntimeError("Cannot replace services with active owners")
         self._generation += 1
+        self._services_generation = self._generation
+        self.computer_state.begin_generation(self._generation)
         self.states.clear()
         with self._guard:
             self._connections.clear()
         self.supervisor = ServiceSupervisor(self.states, self.log)
         self.router = CommandRouter(logger=self.log)
+        self._master_audio = (
+            MasterAudioProvider(
+                self.audio,
+                self.computer_state,
+                self._generation,
+                poll_interval=self.config.poll_interval,
+                logger=self.log,
+            )
+            if self.config.control_master_volume
+            else None
+        )
         WindowsCommands(self.config, self.audio, self.system, self.media, self.power,
-                        self.events, self.monitors).install(self.router)
+                        self.events, self.monitors,
+                        master_audio=self._master_audio).install(self.router)
         self._telemetry = None
+        self._state_projection = None
+        if self._master_audio is not None:
+            self.supervisor.register("master_audio", self._master_audio)
         if self.config.mqtt.host:
             gateway = (self._mqtt_factory or MqttGateway)(self.config, self.router, self.events)
+            if hasattr(gateway.publisher, "begin_generation"):
+                gateway.publisher.begin_generation(self._generation)
             self.supervisor.register("mqtt", gateway)
+            if self._master_audio is not None:
+                self._state_projection = MasterAudioProjection(
+                    self.config,
+                    self.computer_state,
+                    gateway.publisher,
+                    self.events,
+                    self._generation,
+                )
+                self.supervisor.register(
+                    "master_audio_projection",
+                    self._state_projection,
+                    "master_audio",
+                    "mqtt",
+                )
             self._telemetry = TelemetryService(self.config, self.audio, self.system, self.media,
-                                              gateway.publisher, self.events, self.monitors)
+                                              gateway.publisher, self.events, self.monitors,
+                                              self.computer_state, self._master_audio)
             self.supervisor.register("sensors", self._telemetry, "mqtt")
         if self.config.home_assistant.enabled and self.config.overlay_enabled:
             if self._direct_factory is None:
@@ -115,37 +167,117 @@ class Application:
             self.events.emit("application.error", "operation_failed")
 
     def start(self):
-        self._desired_running = True
+        with self._guard:
+            self._desired_running = True
         return self._schedule(self._start)
 
     def _start(self):
-        if self._suspended or not self._desired_running:
-            return
-        if self.router.closed:
-            self._build_services()
-        errors = self.config.validation_errors()
-        if errors:
-            self.log.warning("Nie uruchomiono usług: %s", "; ".join(errors))
-            self.events.emit("application.error", "\n".join(errors))
-            return
-        self.media.reopen()
-        self.supervisor.start()
-        self.events.emit("application.running", bool(self.supervisor.active))
+        # Serialize the short startup transition with synchronous stop intent.
+        # Service start methods only create their owned workers and return.
+        with self._guard:
+            if self._suspended or not self._desired_running:
+                return
+            if self._restart_blocked:
+                raise RuntimeError("Restart refused until every previous owner stops")
+            if self.router.closed:
+                self._build_services()
+            errors = self.config.validation_errors()
+            if errors:
+                self.log.warning("Nie uruchomiono usług: %s", "; ".join(errors))
+                self.events.emit("application.error", "\n".join(errors))
+                return
+            self.media.reopen()
+            self.last_start_report = self.supervisor.start()
+            self.events.emit("application.start_report", self.last_start_report)
+            self.events.emit("application.running", bool(self.supervisor.active))
 
     def stop(self):
-        self._desired_running = False
+        with self._guard:
+            self._desired_running = False
+        self._begin_stop("stopping")
         return self._schedule(self._stop)
 
+    def _begin_stop(self, detail: str) -> None:
+        self.router.reject_new_work()
+        with self._guard:
+            if self._services_generation is None:
+                return
+            self._services_generation = None
+            self._generation += 1
+            generation = self._generation
+        self.computer_state.begin_generation(generation, detail=detail)
+
+    @staticmethod
+    def _stop_result(owner: str, stopped, detail: str) -> LifecycleResult:
+        return LifecycleResult(
+            owner,
+            LifecycleOutcome.STOPPED if stopped is not False else LifecycleOutcome.TIMEOUT,
+            "" if stopped is not False else detail,
+        )
+
     def _stop(self):
-        if not self.supervisor.stop():
-            raise RuntimeError("Service shutdown is incomplete; restart refused")
-        if not self.router.stop():
-            raise RuntimeError("Command execution is still stopping")
-        self.media.close()
+        self._begin_stop("stopping")
+        results = []
+        try:
+            results.append(
+                self._stop_result(
+                    "commands",
+                    self.router.stop(),
+                    "command_worker_timeout",
+                )
+            )
+        except Exception:
+            self.log.exception("Command shutdown failed")
+            results.append(
+                LifecycleResult(
+                    "commands",
+                    LifecycleOutcome.FAILED,
+                    "command_shutdown_failed",
+                )
+            )
+        try:
+            results.extend(self.supervisor.stop().results)
+        except Exception:
+            self.log.exception("Service supervisor shutdown failed")
+            results.append(
+                LifecycleResult(
+                    "services",
+                    LifecycleOutcome.FAILED,
+                    "supervisor_shutdown_failed",
+                )
+            )
+        try:
+            results.append(
+                self._stop_result(
+                    "media",
+                    self.media.close(),
+                    "media_shutdown_timeout",
+                )
+            )
+        except Exception:
+            self.log.exception("Media shutdown failed")
+            results.append(
+                LifecycleResult(
+                    "media",
+                    LifecycleOutcome.FAILED,
+                    "media_shutdown_failed",
+                )
+            )
         self.events.emit("application.running", False)
+        report = LifecycleReport("stop", tuple(results))
+        self.last_stop_report = report
+        self._restart_blocked = not report.ok
+        self.events.emit("application.stop_report", report)
+        if not report:
+            raise RuntimeError(
+                "Application shutdown incomplete: " + ", ".join(report.unfinished)
+            )
+        return report
 
     def reconnect(self):
-        self._desired_running = True
+        with self._guard:
+            self._desired_running = True
+        self._begin_stop("reconnecting")
         def reconnect():
             self._stop()
             self._build_services()
@@ -163,7 +295,7 @@ class Application:
             return False
         self._protect_secrets(candidate)
         def apply():
-            previous = self.config
+            previous = copy.deepcopy(self.config)
             # Read before stopping anything; a read failure leaves runtime intact.
             previous_startup = self.startup.is_enabled()
             saved = startup_attempted = False
@@ -204,6 +336,8 @@ class Application:
     def pause_sensors(self, paused: bool):
         if self._telemetry:
             self._telemetry.pause(paused)
+        if self._master_audio:
+            self._master_audio.pause(paused)
 
     def request_inventory(self, kind):
         if kind not in {"disks", "devices", "applications"} or self._closed:
@@ -279,7 +413,9 @@ class Application:
         return self._query_once("media_refresh", query, worker=self._operations)
 
     def suspend(self):
-        self._suspended = True
+        with self._guard:
+            self._suspended = True
+        self._begin_stop("suspended")
         return self._schedule(self._stop)
 
     def resume(self):
@@ -300,6 +436,11 @@ class Application:
             self.events.emit("command.result", result)
         return result
 
+    def computer_snapshot(self):
+        return self.computer_state.snapshot(
+            stale_after=max(2.0, self.config.poll_interval * 3)
+        )
+
     def diagnostic_report(self):
         with self._guard:
             report = {
@@ -308,6 +449,9 @@ class Application:
                 "connections": list(self._connections.values()),
                 "configuration": self.config.to_dict(), "recent_logs": self.diagnostics.snapshot(),
                 "process_resources": self.resources.sample(),
+                "computer_state": asdict(self.computer_snapshot()),
+                "last_start": asdict(self.last_start_report),
+                "last_stop": asdict(self.last_stop_report),
             }
         return redact_data(report, (self.config.mqtt.password, self.config.home_assistant.token))
 
@@ -317,18 +461,40 @@ class Application:
 
     def shutdown(self) -> bool:
         with self._guard:
+            if self._shutdown_finalized:
+                return bool(self.last_shutdown_report)
             self._closed = True
             self._desired_running = False
+        self._begin_stop("shutdown")
         self._operations.close(timeout=4)
         self._queries.close(timeout=4)
-        if self._operations.is_alive or self._queries.is_alive:
-            return False
+        results = [
+            self._stop_result(
+                "application-lifecycle-worker",
+                not self._operations.is_alive,
+                "lifecycle_worker_timeout",
+            ),
+            self._stop_result(
+                "application-query-worker",
+                not self._queries.is_alive,
+                "query_worker_timeout",
+            ),
+        ]
         try:
             self._stop()
         except Exception:
             self.log.exception("Shutdown has unfinished resources")
-            return False
+        results.extend(self.last_stop_report.results)
+        self.last_shutdown_report = LifecycleReport("shutdown", tuple(results))
+        if not self.last_shutdown_report:
+            self.log.error(
+                "Shutdown incomplete; unfinished owners: %s",
+                ", ".join(self.last_shutdown_report.unfinished),
+            )
+        self.events.emit("application.shutdown_report", self.last_shutdown_report)
+        self._connection_unsubscribe()
         self.log.removeHandler(self.diagnostics)
         self.diagnostics.close()
         self.events.clear()
-        return True
+        self._shutdown_finalized = True
+        return bool(self.last_shutdown_report)

@@ -108,9 +108,14 @@ class CommandRouter:
         with self._lock:
             return self._closed
 
-    def stop(self) -> bool:
+    def reject_new_work(self) -> None:
+        """Close ingress synchronously before lifecycle teardown is queued."""
+
         with self._lock:
             self._closed = True
+
+    def stop(self) -> bool:
+        self.reject_new_work()
         self._worker.close()
         cancelled = []
         with self._lock:

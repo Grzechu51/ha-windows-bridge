@@ -24,8 +24,6 @@ from ..discovery import (
     fullscreen_topic,
     idle_topic,
     master_balance_topics,
-    master_mute_topics,
-    master_volume_topics,
     microphone_active_topic,
     microphone_mute_topics,
     microphone_volume_topics,
@@ -52,9 +50,22 @@ from ..windows.com import ProviderUnavailable
 class TelemetryService:
     """Owns sensor scheduling and protocol publication, never network lifecycle."""
 
-    def __init__(self, config, audio, system, media, publisher, events, monitors):
+    def __init__(
+        self,
+        config,
+        audio,
+        system,
+        media,
+        publisher,
+        events,
+        monitors,
+        computer_state=None,
+        master_audio=None,
+    ):
         self.config, self.audio, self.system, self.media = config, audio, system, media
         self.publisher, self.events = publisher, events
+        self.computer_state = computer_state
+        self.master_audio = master_audio
         self.log = logging.getLogger("bridge.sensors")
         self.overlay_monitors = monitors or ["1: Monitor"]
         _, self._overlay_monitor_state = overlay_monitor_topics(config)
@@ -68,8 +79,6 @@ class TelemetryService:
         self._last_mutes: dict[str, bool] = {}
         self._last_running: dict[str, bool] = {}
         self._last_active: tuple[str, float] | None = None
-        self._last_master_volume: float | None = None
-        self._last_master_mute: bool | None = None
         self._last_master_balance: float | None = None
         self._last_session_counts: dict[str, int] = {}
         self._last_total_session_count: int | None = None
@@ -124,10 +133,6 @@ class TelemetryService:
             _, state = active_volume_topics(self.config)
         else:
             _, state = app_volume_topics(self.config, app)
-        self._publish_number_state(state, volume)
-
-    def _publish_master_volume(self, volume: float) -> None:
-        _, state = master_volume_topics(self.config)
         self._publish_number_state(state, volume)
 
     def publish_discovery(self) -> int:
@@ -237,8 +242,8 @@ class TelemetryService:
                 continue
             if self._inventory_requested.is_set() and scheduler.run("inventory", 5, self.publish_discovery, 0):
                 self._inventory_requested.clear()
-            if self.config.control_master_volume:
-                scheduler.run("master_audio", 0, self._monitor_master)
+            if self.config.audio_enhancements_enabled and self.config.control_channel_balance:
+                scheduler.run("master_audio_enhancements", 0, self._monitor_master_enhancements)
             if names or self.config.control_active_app:
                 snapshot = scheduler.run("audio_sessions", 0, lambda: self.audio.session_snapshot(names), {})
                 running = scheduler.run("processes", 2, lambda: self.system.running_process_names(names), set())
@@ -264,28 +269,10 @@ class TelemetryService:
             if self.config.media_player_enabled:
                 scheduler.run("media", 1, self._monitor_media)
 
-    def _monitor_master(self) -> None:
-        snapshot = self.audio.get_master_snapshot()
-        if snapshot is None:
-            return
-        if self._last_master_volume is None:
-            self._last_master_volume = snapshot.volume
-            if self.config.publish_initial_state:
-                self._publish_master_volume(snapshot.volume)
-        elif abs(self._last_master_volume - snapshot.volume) >= 0.005:
-            self._last_master_volume = snapshot.volume
-            self._publish_master_volume(snapshot.volume)
-        if self._last_master_mute is None:
-            self._last_master_mute = snapshot.muted
-            if self.config.publish_initial_state:
-                _, state = master_mute_topics(self.config)
-                self._publish_switch_state(state, snapshot.muted)
-        elif self._last_master_mute != snapshot.muted:
-            self._last_master_mute = snapshot.muted
-            _, state = master_mute_topics(self.config)
-            self._publish_switch_state(state, snapshot.muted)
+    def _monitor_master_enhancements(self) -> None:
         if self.config.audio_enhancements_enabled and self.config.control_channel_balance:
-            balance = self.audio.get_master_balance()
+            owner = self.master_audio or self.audio
+            balance = owner.get_master_balance()
             if balance is not None and (
                 self._last_master_balance is None
                 or abs(self._last_master_balance - balance) >= 0.01
@@ -592,8 +579,13 @@ class TelemetryService:
                 qos=1,
                 retain=True,
             )
+        master = (
+            self.computer_state.snapshot().master_audio
+            if self.computer_state is not None
+            else None
+        )
         payload = json.dumps(
-            media_state_payload(snapshot, self.audio.get_master_snapshot()),
+            media_state_payload(snapshot, master),
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,

@@ -200,13 +200,14 @@ class _AsyncRunner:
             future.cancel()
             raise
 
-    def close(self) -> None:
+    def close(self) -> bool:
         with self._submission_lock:
             if not self._closing.is_set():
                 self._closing.set()
                 self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread.is_alive() and self._thread is not threading.current_thread():
             self._thread.join(timeout=1)
+        return not self._thread.is_alive()
 
 
 class WindowsMediaService:
@@ -350,14 +351,16 @@ class WindowsMediaService:
             self.log.debug("Nie można wykonać komendy multimedialnej %s", action, exc_info=True)
             return False
 
-    def close(self) -> None:
+    def close(self) -> bool:
         with self._runner_lock:
             self._closed = True
+            stopped = True
             if self._runner is not None:
-                self._runner.close()
+                stopped = self._runner.close()
                 if not self._runner._thread.is_alive():
                     self._runner = None
                 self._manager = None
+            return stopped
 
     def reopen(self) -> None:
         with self._runner_lock:

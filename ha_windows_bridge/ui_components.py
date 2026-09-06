@@ -593,6 +593,7 @@ class MasterVolumeCard(QFrame):
         self._feature_enabled = True
         self._volume_available = False
         self._mute_available = False
+        self._source_available = False
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 10, 18, 10)
@@ -610,15 +611,22 @@ class MasterVolumeCard(QFrame):
         text.setSpacing(2)
         name = QLabel("Master volume")
         name.setObjectName("appName")
+        name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         process = QLabel("Domyślne urządzenie wyjściowe Windows")
         process.setObjectName("appProcess")
+        process.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         text.addWidget(name)
         text.addWidget(process)
         layout.addLayout(text, 1)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(0, 100)
-        self.slider.setFixedWidth(190)
+        self.slider.setMinimumWidth(80)
+        self.slider.setMaximumWidth(190)
+        self.slider.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
         self.slider.setEnabled(False)
         self.slider.sliderPressed.connect(self._slider_pressed)
         self.slider.sliderReleased.connect(self._slider_released)
@@ -685,6 +693,20 @@ class MasterVolumeCard(QFrame):
         self.mute_button.blockSignals(False)
         self._apply_feature_state()
 
+    def set_quality(self, quality: str, detail: str = "") -> None:
+        self._source_available = quality == "good"
+        labels = {
+            "good": "Aktualny stan Windows",
+            "stale": "Stan Windows jest nieaktualny",
+            "error": "Błąd odczytu stanu Windows",
+            "unavailable": "Urządzenie audio jest niedostępne",
+            "paused": "Odczyt stanu jest wstrzymany",
+            "stopped": "Usługa audio jest zatrzymana",
+        }
+        self.setToolTip(labels.get(quality, detail or quality))
+        self.setProperty("stateQuality", quality)
+        self._apply_feature_state()
+
     def _mute_toggled(self, muted: bool) -> None:
         self.mute_button.setText("🔇" if muted else "🔊")
         self.mute_requested.emit(muted)
@@ -698,8 +720,12 @@ class MasterVolumeCard(QFrame):
     def _apply_feature_state(self) -> None:
         self.setProperty("featureEnabled", self._feature_enabled)
         self.avatar_effect.setOpacity(1.0 if self._feature_enabled else 0.28)
-        self.slider.setEnabled(self._feature_enabled and self._volume_available)
-        self.mute_button.setEnabled(self._feature_enabled and self._mute_available)
+        self.slider.setEnabled(
+            self._feature_enabled and self._source_available and self._volume_available
+        )
+        self.mute_button.setEnabled(
+            self._feature_enabled and self._source_available and self._mute_available
+        )
         for widget in self.findChildren(QLabel):
             widget.setEnabled(self._feature_enabled)
         self.style().unpolish(self)

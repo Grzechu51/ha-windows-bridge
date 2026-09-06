@@ -5,12 +5,14 @@ from unittest.mock import Mock
 
 import pytest
 
+from ha_windows_bridge.application.state_projection import MasterAudioProjection
 from ha_windows_bridge.application.telemetry import TelemetryService
 from ha_windows_bridge.communication.gateway import MqttGateway
 from ha_windows_bridge.communication.publishing import StatePublisher
 from ha_windows_bridge.communication.state import ConnectionMachine
 from ha_windows_bridge.config import AppConfig
 from ha_windows_bridge.core.events import EventBus
+from ha_windows_bridge.core.state import ComputerStateStore
 from ha_windows_bridge.discovery import master_volume_topics
 
 
@@ -21,29 +23,39 @@ def telemetry(transport):
     return TelemetryService(config, audio, Mock(), Mock(), publisher, EventBus(), []), publisher
 
 
+def master_pipeline(transport):
+    config = AppConfig()
+    events = EventBus()
+    state = ComputerStateStore(events)
+    state.begin_generation(1)
+    publisher = StatePublisher(transport, events, generation=1)
+    projection = MasterAudioProjection(config, state, publisher, events, 1)
+    projection.start()
+    return config, state, publisher, projection
+
+
 @pytest.mark.parametrize("failure", [False, OSError("send failed")])
 def test_p01_latest_sample_survives_failed_send_and_reconnect(failure):
     sent = []
     transport = Mock(connected=True)
     transport.publish.side_effect = lambda topic, value, **kw: sent.append((topic, value)) or True
-    service, publisher = telemetry(transport)
-    topic = master_volume_topics(service.config)[1]
-    service._monitor_master()
+    config, state, publisher, projection = master_pipeline(transport)
+    topic = master_volume_topics(config)[1]
+    state.observe_master_audio(.2, False, generation=1)
     assert (topic, "20") in sent
     transport.publish.side_effect = failure if isinstance(failure, Exception) else lambda *a, **k: False
-    service.audio.get_master_snapshot = lambda: SimpleNamespace(volume=.8, muted=False)
-    service._monitor_master()
+    state.observe_master_audio(.8, False, generation=1)
     transport.publish.side_effect = lambda topic, value, **kw: sent.append((topic, value)) or True
     publisher.replay()
-    service._monitor_master()
     assert [value for key, value in sent if key == topic] == ["20", "80"]
+    projection.stop()
 
 
 def test_p01_offline_observation_is_cached_and_failed_replay_is_retried():
     transport = Mock(connected=False)
     transport.publish.return_value = False
-    service, publisher = telemetry(transport)
-    service._monitor_master()
+    _config, state, publisher, projection = master_pipeline(transport)
+    state.observe_master_audio(.2, False, generation=1)
     publisher.replay()
     transport.connected = True
     transport.publish.return_value = True
@@ -52,6 +64,7 @@ def test_p01_offline_observation_is_cached_and_failed_replay_is_retried():
     transport.publish.reset_mock()
     assert publisher.flush()
     transport.publish.assert_not_called()
+    projection.stop()
 
 
 def test_p06_gateway_reconnect_and_publish_finish_in_controlled_interleaving(monkeypatch):

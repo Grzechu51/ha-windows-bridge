@@ -8,8 +8,20 @@ from ..core.commands import Command, CommandError
 
 
 class WindowsCommands:
-    def __init__(self, config, audio, system, media, power, events, monitors):
+    def __init__(
+        self,
+        config,
+        audio,
+        system,
+        media,
+        power,
+        events,
+        monitors,
+        *,
+        master_audio=None,
+    ):
         self.config, self.audio, self.system = config, audio, system
+        self.master_audio = master_audio or audio
         self.media, self.power, self.events = media, power, events
         self.monitors = monitors
 
@@ -69,11 +81,11 @@ class WindowsCommands:
                 if self.system.close_application(app.process_name) < 0:
                     raise CommandError("protected_process")
         elif kind == "audio.master.volume":
-            self._success(self.audio.set_master_volume(number(value)))
+            self._success(self.master_audio.set_master_volume(number(value)))
         elif kind == "audio.master.mute":
-            self._success(self.audio.set_master_mute(self._bool(value)))
+            self._success(self.master_audio.set_master_mute(self._bool(value)))
         elif kind == "audio.master.balance":
-            self._success(self.audio.set_master_balance(number(value, -1, 1)))
+            self._success(self.master_audio.set_master_balance(number(value, -1, 1)))
         elif kind == "audio.microphone.volume":
             self._success(self.audio.set_microphone_volume(number(value)))
         elif kind == "audio.microphone.mute":
@@ -93,9 +105,9 @@ class WindowsCommands:
         elif kind == "media.control":
             action = command.arguments.get("action")
             if action == "set_volume":
-                self._success(self.audio.set_master_volume(number(value)))
+                self._success(self.master_audio.set_master_volume(number(value)))
             elif action == "mute":
-                self._success(self.audio.set_master_mute(self._bool(value)))
+                self._success(self.master_audio.set_master_mute(self._bool(value)))
             elif action in {"play", "pause", "stop", "next", "previous", "seek"}:
                 self._success(self.media.execute(action, number(value, 0, 86400) if action == "seek" else None))
             else:

@@ -8,9 +8,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEvent
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication
+from test_phase1_core import FakeGateway, wait_until
+from test_phase1_core import application as phase1_application
 from test_v2_application import runtime
 
 from ha_windows_bridge.config import AppConfig
+from ha_windows_bridge.discovery import master_volume_topics
 from ha_windows_bridge.overlays.service import OverlayService
 from ha_windows_bridge.ui.control_style import BridgeProxyStyle
 from ha_windows_bridge.ui.shell import PAGES, DesktopWindow
@@ -79,5 +82,41 @@ def test_new_overlay_badges_are_content_sized_spaced_and_cleaned():
         assert not overlays.windows
     finally:
         overlays.close()
+        assert application.shutdown()
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_master_audio_gui_windows_and_ha_use_one_computer_state():
+    qt = qt_app()
+    FakeGateway.instances.clear()
+    application = phase1_application()
+    window = DesktopWindow(application)
+    try:
+        assert application.start()
+        assert wait_until(lambda: application.computer_snapshot().master_audio is not None)
+        qt.processEvents()
+        window._refresh_master_audio()
+        assert window.master_audio.slider.value() == 20
+        assert window.master_audio.slider.isEnabled()
+
+        window.master_audio.volume_requested.emit(61)
+        window.master_audio.mute_requested.emit(True)
+        assert wait_until(
+            lambda: application.computer_snapshot().master_audio.volume == .61
+            and application.computer_snapshot().master_audio.muted
+        )
+        qt.processEvents()
+        window._refresh_master_audio()
+        assert window.master_audio.percent_label.text() == "61%"
+        assert window.master_audio.mute_button.isChecked()
+        topic = master_volume_topics(application.config)[1]
+        assert any(
+            sent_topic == topic and payload == "61"
+            for sent_topic, payload, _kwargs in FakeGateway.instances[-1].transport.sent
+        )
+    finally:
+        window._force_close = True
+        window.close()
+        window.deleteLater()
         assert application.shutdown()
         QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
