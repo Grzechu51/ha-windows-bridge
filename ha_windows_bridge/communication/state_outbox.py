@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -36,7 +37,14 @@ class StateOutbox:
     revision still match after I/O completes.
     """
 
-    def __init__(self, *, capacity: int = 2048, generation: int = 0) -> None:
+    def __init__(
+        self,
+        *,
+        capacity: int = 2048,
+        generation: int = 0,
+        monotonic_clock=time.monotonic,
+        ack_timeout: float = 10.0,
+    ) -> None:
         if capacity <= 0:
             raise ValueError("StateOutbox capacity must be positive")
         self.capacity = capacity
@@ -44,11 +52,14 @@ class StateOutbox:
         self._observed: OrderedDict[str, OutboxItem] = OrderedDict()
         self._delivered: dict[str, DeliveredState] = {}
         self._dirty: set[str] = set()
-        self._inflight: dict[str, tuple[int, int, int]] = {}
+        self._inflight: dict[str, tuple[int, int, int, int, float]] = {}
         self._generation = generation
         self._session = 0
         self._next_revision = 0
         self._sending = False
+        self._monotonic_clock = monotonic_clock
+        self._ack_timeout = max(0.001, float(ack_timeout))
+        self._next_attempt = 0
 
     @property
     def generation(self) -> int:
@@ -196,9 +207,13 @@ class StateOutbox:
     ) -> bool:
         """Dispatch one pass and clear items only from matching PUBACK callbacks."""
 
+        now = self._monotonic_clock()
         with self._lock:
             if self._sending:
                 return False
+            for key, attempt in tuple(self._inflight.items()):
+                if attempt[4] <= now:
+                    self._inflight.pop(key, None)
             self._sending = True
             generation = self._generation
             session = self._session
@@ -208,7 +223,6 @@ class StateOutbox:
             )
         try:
             for item in items:
-                attempt = (generation, session, item.revision)
                 with self._lock:
                     if (
                         self._generation != generation
@@ -216,6 +230,14 @@ class StateOutbox:
                         or self._observed.get(item.key) != item
                     ):
                         continue
+                    self._next_attempt += 1
+                    attempt = (
+                        generation,
+                        session,
+                        item.revision,
+                        self._next_attempt,
+                        self._monotonic_clock() + self._ack_timeout,
+                    )
                     self._inflight[item.key] = attempt
 
                 def acknowledge(success: bool, selected=item, selected_attempt=attempt) -> None:

@@ -83,6 +83,7 @@ def inventory_budget_errors(config: AppConfig) -> list[str]:
         "capabilities_topic": protocol.capabilities_topic,
         "snapshot_topic": protocol.snapshot_topic,
         "legacy_command_topic": protocol.legacy_command_topic,
+        "legacy_result_topic": protocol.legacy_result_topic,
         "routes": routes,
     })
     errors = []

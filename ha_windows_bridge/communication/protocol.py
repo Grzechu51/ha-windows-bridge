@@ -1,13 +1,10 @@
 """Protocol v3 routing plus the deliberately isolated legacy compatibility edge."""
 from __future__ import annotations
 
-import hashlib
 import json
 import math
-import threading
 import time
 import uuid
-from collections import OrderedDict
 from dataclasses import dataclass
 
 from .. import discovery as topics
@@ -35,6 +32,13 @@ class Route:
     parser: str = "value"
 
 
+@dataclass(frozen=True, slots=True)
+class ReplyContext:
+    protocol_version: int
+    session: str
+    result_topic: str
+
+
 def number(value, minimum=0.0, maximum=1.0):
     if isinstance(value, bool):
         raise CommandError("invalid_number")
@@ -60,8 +64,6 @@ class LegacyProtocolAdapter:
                  monotonic_clock=time.monotonic):
         self.command_topic, self.routes, self._clock = command_topic, routes, clock
         self._monotonic_clock = monotonic_clock
-        self._lock = threading.Lock()
-        self._recent: OrderedDict[str, tuple[str, float]] = OrderedDict()
 
     def decode(self, topic: str, payload: bytes, retained: bool) -> Command:
         if retained:
@@ -75,17 +77,12 @@ class LegacyProtocolAdapter:
         if not payload or len(payload) > limit:
             raise CommandError("payload_size")
         arguments = self._arguments(route.parser, payload)
+        if route.parser in {"button", "json"}:
+            raise CommandError("legacy_command_id_required")
         now = self._clock()
-        digest = hashlib.sha256(topic.encode() + b"\0" + payload).hexdigest()
-        with self._lock:
-            for key, (_identifier, expires) in tuple(self._recent.items()):
-                if expires <= now:
-                    self._recent.pop(key)
-            cached = self._recent.get(digest)
-            identifier = cached[0] if cached else "legacy-" + uuid.uuid4().hex
-            self._recent[digest] = (identifier, now + 10)
-            while len(self._recent) > 1024:
-                self._recent.popitem(last=False)
+        # Entity setters have no retry identity. Every frame is a new,
+        # idempotent set operation; effectful commands require an envelope ID.
+        identifier = "legacy-" + uuid.uuid4().hex
         return Command(identifier, route.kind, route.target, arguments, now + 10,
                        session="legacy-v2", monotonic_expires_at=self._monotonic_clock() + 10)
 
@@ -147,6 +144,7 @@ class TopicProtocol:
         self.capabilities_topic = f"{prefix}/v3/capabilities"
         self.snapshot_topic = f"{prefix}/v3/snapshot"
         self.legacy_command_topic = f"{prefix}/v2/command"
+        self.legacy_result_topic = f"{prefix}/v2/result"
         self.birth_topic = f"{config.mqtt.discovery_prefix}/status"
         self._clock = clock
         self._monotonic_clock = monotonic_clock
@@ -218,6 +216,35 @@ class TopicProtocol:
         return Command(message.id, message.kind, message.target, message.arguments,
                        deadline, session=message.session, device_id=message.device_id,
                        monotonic_expires_at=self._monotonic_clock() + deadline - now)
+
+    def decode_inbound(
+        self, topic: str, payload: bytes, retained: bool = False
+    ) -> tuple[Command, ReplyContext]:
+        command = self.decode(topic, payload, retained)
+        if topic == self.command_topic:
+            context = ReplyContext(3, command.session, self.result_topic)
+        else:
+            context = ReplyContext(2, command.session or "legacy-v2", self.legacy_result_topic)
+        return command, context
+
+    def encode_result(
+        self, result: CommandResult, context: ReplyContext
+    ) -> tuple[str, str]:
+        if context.protocol_version == LEGACY_PROTOCOL_VERSION:
+            payload = json.dumps(
+                {
+                    "version": LEGACY_PROTOCOL_VERSION,
+                    "id": result.id,
+                    "status": result.status,
+                    "code": result.code,
+                    "data": result.data,
+                },
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+            return context.result_topic, payload
+        return context.result_topic, self.result(result).encode()
 
     def capabilities(self) -> CapabilitiesMessage:
         grouped: dict[str, dict] = {}

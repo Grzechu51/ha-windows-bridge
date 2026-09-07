@@ -22,6 +22,8 @@ class MessageItem:
     qos: int
     token: int
     state: DeliveryState = DeliveryState.ACCEPTED
+    connection_generation: int = 0
+    attempts: int = 0
 
 
 class MessageOutbox:
@@ -56,24 +58,76 @@ class MessageOutbox:
             self._items.move_to_end(key)
             return item
 
-    def mark_delivered(self, key: str, token: int) -> bool:
-        return self._mark(key, token, DeliveryState.DELIVERED)
+    def mark_delivered(
+        self, key: str, token: int, connection_generation: int | None = None
+    ) -> bool:
+        return self._mark(
+            key, token, DeliveryState.DELIVERED, connection_generation
+        )
 
-    def mark_failed(self, key: str, token: int) -> bool:
-        return self._mark(key, token, DeliveryState.FAILED)
+    def mark_failed(
+        self, key: str, token: int, connection_generation: int | None = None
+    ) -> bool:
+        return self._mark(key, token, DeliveryState.FAILED, connection_generation)
 
-    def _mark(self, key: str, token: int, state: DeliveryState) -> bool:
+    def _mark(
+        self,
+        key: str,
+        token: int,
+        state: DeliveryState,
+        connection_generation: int | None,
+    ) -> bool:
         with self._lock:
             current = self._items.get(key)
-            if current is None or current.token != token:
+            if (
+                current is None
+                or current.token != token
+                or (
+                    connection_generation is not None
+                    and current.connection_generation != connection_generation
+                )
+            ):
                 return False
             self._items[key] = replace(current, state=state)
             return True
 
-    def replay(self) -> None:
+    def begin_attempt(
+        self, key: str, token: int, connection_generation: int
+    ) -> MessageItem | None:
+        """Give one wire attempt a unique identity tied to its connection."""
+
+        with self._lock:
+            current = self._items.get(key)
+            if current is None or current.token != token or self._closed:
+                return None
+            self._token += 1
+            attempted = replace(
+                current,
+                token=self._token,
+                state=DeliveryState.ACCEPTED,
+                connection_generation=int(connection_generation),
+                attempts=current.attempts + 1,
+            )
+            self._items[key] = attempted
+            return attempted
+
+    def replay(
+        self, connection_generation: int = 0, *, retained_only: bool = False
+    ) -> None:
+        """Invalidate every old attempt before making messages replayable."""
+
         with self._lock:
             for key, item in tuple(self._items.items()):
-                self._items[key] = replace(item, state=DeliveryState.ACCEPTED)
+                if retained_only and not item.retain:
+                    continue
+                self._token += 1
+                self._items[key] = replace(
+                    item,
+                    token=self._token,
+                    state=DeliveryState.ACCEPTED,
+                    connection_generation=int(connection_generation),
+                    attempts=0,
+                )
 
     def pending(self) -> tuple[MessageItem, ...]:
         with self._lock:
@@ -89,6 +143,14 @@ class MessageOutbox:
             for key, item in tuple(self._items.items()):
                 if item.state == DeliveryState.DELIVERED and not (keep_retained and item.retain):
                     self._items.pop(key)
+
+    def discard(self, key: str, token: int) -> bool:
+        with self._lock:
+            current = self._items.get(key)
+            if current is None or current.token != token:
+                return False
+            self._items.pop(key)
+            return True
 
     def close(self) -> None:
         with self._lock:

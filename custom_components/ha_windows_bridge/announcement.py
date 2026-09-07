@@ -276,5 +276,12 @@ def _protocol(value, prefix):
         }
         if any(value.get(key) != topic for key, topic in expected.items()):
             return None
-        result.update(session=session, **expected)
+        legacy_result_topic = prefix + "v2/result"
+        if value.get("legacy_result_topic", legacy_result_topic) != legacy_result_topic:
+            return None
+        result.update(
+            session=session,
+            legacy_result_topic=legacy_result_topic,
+            **expected,
+        )
     return result

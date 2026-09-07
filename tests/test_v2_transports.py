@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -59,6 +60,104 @@ def test_ha_authenticates_with_scoped_api_and_acks_without_event_bus():
     assert socket.sent[-1]["type"] == "ha_windows_bridge/result"
     assert socket.sent[-1]["result"]["version"] == 3
     assert transport.stop() and socket.closed
+
+
+def test_p2_r1_direct_writer_preserves_id_allocation_wire_order_without_owner_lock():
+    entered = threading.Event()
+    release = threading.Event()
+    owner_lock_free = threading.Event()
+    second_started = threading.Event()
+    second_done = threading.Event()
+    errors = []
+
+    class BarrierSocket:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, raw):
+            value = json.loads(raw)
+            if value["id"] == 2:
+                entered.set()
+                assert release.wait(1)
+            self.sent.append(value)
+
+        def close(self, **_kwargs):
+            pass
+
+    socket = BarrierSocket()
+    transport = ha_transport(socket)
+    transport._socket = socket
+    transport._sequence = 1
+
+    def send_result():
+        try:
+            transport._send({"type": "ha_windows_bridge/result"})
+        except Exception as exc:  # pragma: no cover - assertion reports thread failures
+            errors.append(exc)
+
+    def send_heartbeat():
+        second_started.set()
+        try:
+            transport._send({"type": "ha_windows_bridge/heartbeat"})
+        except Exception as exc:  # pragma: no cover - assertion reports thread failures
+            errors.append(exc)
+        finally:
+            second_done.set()
+
+    first = threading.Thread(target=send_result)
+    first.start()
+    assert entered.wait(1)
+
+    def inspect_owner():
+        with transport._lock:
+            owner_lock_free.set()
+
+    inspector = threading.Thread(target=inspect_owner)
+    inspector.start()
+    assert owner_lock_free.wait(1)
+    second = threading.Thread(target=send_heartbeat)
+    second.start()
+    assert second_started.wait(1)
+    assert not second_done.is_set()
+    release.set()
+    first.join(1)
+    second.join(1)
+    inspector.join(1)
+    assert not errors
+    assert [item["id"] for item in socket.sent] == [2, 3]
+    transport.stop()
+
+
+def test_p2_r10_old_direct_endpoint_invalid_format_is_permanent_mismatch():
+    events = EventBus()
+    incompatible = threading.Event()
+    events.subscribe(
+        "connection.changed",
+        lambda event: incompatible.set()
+        if event.data.state == ConnectionState.CONFIGURATION_ERROR
+        else None,
+    )
+    socket = Socket(
+        handshake()[:2]
+        + [{"type": "result", "id": 1, "success": False,
+            "error": {"code": "invalid_format", "message": "old schema"}}]
+    )
+    calls = []
+    transport = HomeAssistantTransport(
+        AppConfig(
+            home_assistant=HomeAssistantConfig(
+                enabled=True, url="https://ha.local", token="private"
+            )
+        ),
+        events,
+        lambda _value: None,
+        socket_factory=lambda *_args, **_kwargs: calls.append(True) or socket,
+    )
+    transport.start()
+    assert incompatible.wait(1)
+    assert transport.machine.status.error == "protocol_mismatch"
+    assert len(calls) == 1
+    assert transport.stop()
 
 
 @pytest.mark.parametrize("messages", [[], [{"type": "auth_required"}], [{"type": "auth_required"}, {"type": "auth_invalid"}], handshake()[:2] + [{"id": 1, "success": False}]])

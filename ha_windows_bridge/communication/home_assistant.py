@@ -44,6 +44,11 @@ def response_error(response):
         return HomeAssistantConnectionError("unauthorized", authentication=True)
     if code == "unknown_command":
         return HomeAssistantConnectionError("integration_missing", configuration=True)
+    if code == "invalid_format":
+        # Old Direct endpoints reject the v3 connect payload before they can
+        # return our explicit protocol_mismatch code. This is permanent until
+        # one endpoint is upgraded, not a network condition to retry forever.
+        return HomeAssistantConnectionError("protocol_mismatch", configuration=True)
     if code in ("bridge_not_configured", "popup_unavailable", "protocol_mismatch"):
         return HomeAssistantConnectionError(code, configuration=True)
     if code in ("bridge_busy", "bridge_not_ready"):
@@ -66,6 +71,7 @@ class HomeAssistantTransport:
         self._socket_factory = socket_factory or websocket.create_connection
         self._socket = None
         self._lock = threading.RLock()
+        self._write_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
         self._sequence = 0
@@ -107,17 +113,19 @@ class HomeAssistantTransport:
         return data
 
     def _send(self, payload, *, numbered=True):
-        with self._lock:
-            if self._stop.is_set() or self._socket is None:
-                raise ConnectionError("HA disconnected")
-            connection = self._socket
-            if numbered:
-                self._sequence += 1
-                payload = {**payload, "id": self._sequence}
-            sequence = self._sequence
-        # WebSocket I/O must never run while the transport ownership lock is held.
-        connection.send(json.dumps(payload, separators=(",", ":"), allow_nan=False))
-        return sequence
+        # This is the single socket writer. It serializes allocation with wire
+        # order, while the transport ownership lock remains free during I/O.
+        with self._write_lock:
+            with self._lock:
+                if self._stop.is_set() or self._socket is None:
+                    raise ConnectionError("HA disconnected")
+                connection = self._socket
+                if numbered:
+                    self._sequence += 1
+                    payload = {**payload, "id": self._sequence}
+                sequence = self._sequence
+            connection.send(json.dumps(payload, separators=(",", ":"), allow_nan=False))
+            return sequence
 
     def _connect(self):
         settings = self.config.home_assistant

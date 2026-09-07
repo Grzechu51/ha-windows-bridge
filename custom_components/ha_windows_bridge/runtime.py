@@ -14,6 +14,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_call_later
 
 from .protocol import (
+    MAX_CONTROL_BYTES,
     CapabilitiesMessage,
     CommandMessage,
     ProtocolError,
@@ -108,9 +109,16 @@ class BridgeRuntime:
 
     @callback
     def _mqtt_result(self, message):
-        if message.retain or len(message.payload) > 8192:
+        payload = message.payload
+        if isinstance(payload, str):
+            size = len(payload.encode("utf-8"))
+        elif isinstance(payload, bytes):
+            size = len(payload)
+        else:
             return
-        self._result(message.payload)
+        if message.retain or size > MAX_CONTROL_BYTES:
+            return
+        self._result(payload)
 
     @callback
     def _mqtt_capabilities(self, message):

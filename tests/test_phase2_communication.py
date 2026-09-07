@@ -21,11 +21,12 @@ from ha_windows_bridge.communication.protocol import TopicProtocol
 from ha_windows_bridge.communication.publishing import StatePublisher
 from ha_windows_bridge.communication.schema import CommandMessage, ResultMessage, SnapshotMessage
 from ha_windows_bridge.communication.state import ConnectionState
+from ha_windows_bridge.communication.state_outbox import StateOutbox
 from ha_windows_bridge.config import AppConfig, HomeAssistantConfig, MqttConfig
 from ha_windows_bridge.core.commands import CommandError, CommandResult
 from ha_windows_bridge.core.events import EventBus
 from ha_windows_bridge.core.state import ComputerStateStore
-from ha_windows_bridge.discovery import master_volume_topics
+from ha_windows_bridge.discovery import master_volume_topics, power_action_topic
 
 
 def _wait_for(predicate, timeout=5):
@@ -376,7 +377,8 @@ def test_protocol_outbox_is_bounded_and_tracks_accepted_delivered_failed():
     }
     outbox.replay()
     assert all(item.state == DeliveryState.ACCEPTED for item in outbox.pending())
-    assert outbox.mark_delivered(second.key, second.token)
+    replayed_second = next(item for item in outbox.pending() if item.key == second.key)
+    assert outbox.mark_delivered(replayed_second.key, replayed_second.token)
     outbox.discard_delivered()
     assert [item.key for item in outbox.snapshot()] == ["snapshot"]
     outbox.close()
@@ -433,14 +435,14 @@ def test_failed_result_publish_is_replayed_after_reconnect_with_puback():
     transport = AckTransport()
     gateway.transport = transport
     gateway._reply(CommandResult("command-1", "succeeded"))
-    failed = [item for item in gateway.outbox.snapshot() if item.key == "result:command-1"]
+    failed = [item for item in gateway.outbox.snapshot() if item.key.endswith(":command-1")]
     assert failed[0].state == DeliveryState.FAILED
     gateway._connection_changed(SimpleNamespace(data=SimpleNamespace(
         transport="mqtt", state="connected")))
     results = [ResultMessage.decode(payload) for topic, payload, _kw in transport.calls
                if topic == gateway.protocol.result_topic]
     assert len(results) == 2 and results[-1].status == "succeeded"
-    assert not any(item.key == "result:command-1" for item in gateway.outbox.snapshot())
+    assert not any(item.key.endswith(":command-1") for item in gateway.outbox.snapshot())
 
 
 class _MqttClient:
@@ -493,6 +495,7 @@ def test_mqtt_waits_for_all_subacks_and_distinguishes_puback_delivery():
     transport._on_publish(client, None, mid, None, None)
     assert delivered == [True]
     assert client.queued == 256 and client.inflight == 20
+    transport.machine.stop()
     assert transport.stop()
 
 
@@ -522,13 +525,13 @@ def test_shutdown_interrupts_mqtt_reconnect_wait_without_another_attempt():
     assert transport.machine.status.state == ConnectionState.STOPPED
 
 
-def test_legacy_adapter_is_transition_only_and_deduplicates_replayed_entity_frame():
+def test_legacy_adapter_uses_new_ids_for_idempotent_entity_setters():
     config = AppConfig(control_master_volume=True)
     protocol = TopicProtocol(config, session="current", clock=lambda: 100)
     topic = master_volume_topics(config)[0]
     first = protocol.decode(topic, b"42")
     retry = protocol.decode(topic, b"42")
-    assert first.id == retry.id
+    assert first.id != retry.id
     assert first.session == "legacy-v2" and first.arguments == {"value": 0.42}
     legacy = json.dumps({"version": 2, "id": "old-command", "kind": "audio.master.volume",
                          "target": "", "arguments": {"value": 0.5},
@@ -622,3 +625,364 @@ def test_real_direct_websocket_reconnect_keeps_session_and_shutdown_stops_retry(
     finally:
         transport.stop()
         server.stop()
+
+
+def test_p2_r2_late_ack_from_old_connection_cannot_ack_new_failed_attempt():
+    outbox = MessageOutbox()
+    accepted = outbox.accept("result", "v3/result", "payload", retain=False)
+    old_attempt = outbox.begin_attempt("result", accepted.token, 1)
+    assert old_attempt is not None
+
+    outbox.replay(2)
+    replayed = outbox.pending()[0]
+    new_attempt = outbox.begin_attempt("result", replayed.token, 2)
+    assert new_attempt is not None
+    assert outbox.mark_failed(
+        new_attempt.key, new_attempt.token, new_attempt.connection_generation
+    )
+
+    assert not outbox.mark_delivered(
+        old_attempt.key, old_attempt.token, old_attempt.connection_generation
+    )
+    current = outbox.snapshot()[0]
+    assert current.token == new_attempt.token
+    assert current.state == DeliveryState.FAILED
+
+
+def test_p2_r3_terminal_result_wins_when_router_callback_precedes_accepted():
+    entered = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+
+    class ReverseRouter:
+        def submit(self, command, reply):
+            def finish():
+                entered.set()
+                assert release.wait(1)
+                reply(CommandResult(command.id, "succeeded"))
+                completed.set()
+
+            worker = threading.Thread(target=finish)
+            worker.start()
+            assert entered.wait(1)
+            release.set()
+            assert completed.wait(1)
+            worker.join(1)
+            return CommandResult(command.id, "accepted")
+
+    class Transport:
+        connected = True
+
+        def __init__(self):
+            self.payloads = []
+
+        def publish(self, _topic, payload, *, on_delivery=None, **_kwargs):
+            self.payloads.append(payload)
+            if on_delivery:
+                on_delivery(True)
+            return True
+
+    gateway = MqttGateway(AppConfig(device_id="desktop"), ReverseRouter(), EventBus())
+    gateway.transport = Transport()
+    message = CommandMessage(
+        "reverse-order",
+        gateway.protocol.session,
+        "desktop",
+        "audio.master.volume",
+        "",
+        {"value": 0.4},
+        time.time(),
+        10_000,
+    )
+    gateway.receive(gateway.protocol.command_topic, message.encode().encode())
+    results = [ResultMessage.decode(payload) for payload in gateway.transport.payloads]
+    assert [result.status for result in results] == ["succeeded"]
+
+
+def test_p2_r4_legacy_setter_sequence_and_explicit_id_retry():
+    config = AppConfig(control_master_volume=True, allow_power_actions=True)
+    protocol = TopicProtocol(config, clock=lambda: 100, monotonic_clock=lambda: 10)
+    topic = master_volume_topics(config)[0]
+    commands = [protocol.decode(topic, value) for value in (b"20", b"80", b"20")]
+    assert [item.arguments["value"] for item in commands] == [0.2, 0.8, 0.2]
+    assert len({item.id for item in commands}) == 3
+    with pytest.raises(CommandError, match="legacy_command_id_required"):
+        protocol.decode(power_action_topic(config, "restart"), b"PRESS")
+
+    payload = json.dumps(
+        {
+            "version": 2,
+            "id": "explicit-retry",
+            "kind": "audio.master.volume",
+            "target": "",
+            "arguments": {"value": 0.5},
+            "issued_at": 100,
+            "ttl_ms": 10_000,
+        }
+    ).encode()
+    router = CommandRouter(clock=lambda: 100, monotonic_clock=lambda: 10)
+    executions = []
+    done = threading.Event()
+
+    def execute(command):
+        executions.append(command.arguments["value"])
+        if len(executions) == 3:
+            done.set()
+        return {}
+
+    router.register("audio.master.volume", execute)
+    try:
+        for command in commands:
+            assert router.submit(command, lambda _result: None).status == "accepted"
+        assert done.wait(1)
+        assert executions == [0.2, 0.8, 0.2]
+
+        first = protocol.decode(protocol.legacy_command_topic, payload)
+        retry = protocol.decode(protocol.legacy_command_topic, payload)
+        assert first.id == retry.id == "explicit-retry"
+        retried = threading.Event()
+        assert router.submit(first, lambda _result: retried.set()).status == "accepted"
+        assert retried.wait(1)
+        assert router.submit(retry, lambda _result: None).status == "succeeded"
+        assert executions == [0.2, 0.8, 0.2, 0.5]
+    finally:
+        assert router.stop()
+
+
+def test_p2_r5_v2_command_execution_returns_v2_result_topic():
+    config = AppConfig(device_id="desktop", control_master_volume=True)
+    events = EventBus()
+    router = CommandRouter()
+    terminal = threading.Event()
+
+    class Transport:
+        connected = True
+
+        def __init__(self):
+            self.frames = []
+
+        def publish(self, topic, payload, *, on_delivery=None, **_kwargs):
+            decoded = json.loads(payload)
+            self.frames.append((topic, decoded))
+            if decoded.get("status") == "succeeded":
+                terminal.set()
+            if on_delivery:
+                on_delivery(True)
+            return True
+
+    gateway = MqttGateway(config, router, events)
+    gateway.transport = Transport()
+    router.register("audio.master.volume", lambda _command: {"applied": True})
+    payload = json.dumps(
+        {
+            "version": 2,
+            "id": "legacy-command",
+            "kind": "audio.master.volume",
+            "target": "",
+            "arguments": {"value": 0.5},
+            "issued_at": time.time(),
+            "ttl_ms": 10_000,
+        }
+    ).encode()
+    try:
+        gateway.receive(gateway.protocol.legacy_command_topic, payload)
+        assert terminal.wait(1)
+        topic, result = gateway.transport.frames[-1]
+        assert topic == gateway.protocol.legacy_result_topic
+        assert result == {
+            "version": 2,
+            "id": "legacy-command",
+            "status": "succeeded",
+            "code": "",
+            "data": {"applied": True},
+        }
+    finally:
+        assert router.stop()
+
+
+def test_p2_r6_state_outbox_retries_after_missing_ack_deadline():
+    clock = [0.0]
+    outbox = StateOutbox(monotonic_clock=lambda: clock[0], ack_timeout=5)
+    callbacks = []
+    assert outbox.observe("snapshot", "one")
+    assert not outbox.flush_confirmed(
+        lambda _item, callback: callbacks.append(callback) or True
+    )
+    clock[0] = 6
+    assert not outbox.flush_confirmed(
+        lambda _item, callback: callbacks.append(callback) or True
+    )
+    assert len(callbacks) == 2
+    callbacks[0](True)
+    assert outbox.is_dirty("snapshot")
+    callbacks[1](True)
+    assert not outbox.is_dirty("snapshot")
+
+
+def test_p2_r6_missing_suback_and_puback_trigger_controlled_retry():
+    sub_clock = [0.0]
+    sub_client = _MqttClient()
+    sub_transport = MqttTransport(
+        MqttConfig(base_topic="desktop"),
+        "desktop",
+        EventBus(),
+        lambda *_args: None,
+        {"command"},
+        client_factory=lambda *_args, **_kwargs: sub_client,
+        monotonic_clock=lambda: sub_clock[0],
+        ack_timeout=5,
+    )
+    sub_transport._epoch = sub_transport.machine.begin()
+    sub_transport._on_connect(
+        sub_client, None, None, SimpleNamespace(is_failure=False), None
+    )
+    sub_clock[0] = 6
+    assert sub_transport._expire_ack_deadlines()
+    assert sub_transport.machine.status.error == "suback_timeout"
+
+    pub_clock = [0.0]
+    pub_client = _MqttClient()
+    pub_transport = MqttTransport(
+        MqttConfig(base_topic="desktop"),
+        "desktop",
+        EventBus(),
+        lambda *_args: None,
+        set(),
+        client_factory=lambda *_args, **_kwargs: pub_client,
+        monotonic_clock=lambda: pub_clock[0],
+        ack_timeout=5,
+    )
+    pub_transport._epoch = pub_transport.machine.begin()
+    pub_transport._on_connect(
+        pub_client, None, None, SimpleNamespace(is_failure=False), None
+    )
+    publisher = StatePublisher(pub_transport, EventBus())
+    assert publisher.publish_observation("desktop/v3/snapshot", "latest")
+    pub_clock[0] = 6
+    assert pub_transport._expire_ack_deadlines()
+    assert pub_transport.machine.status.error == "puback_timeout"
+    assert publisher.outbox.is_dirty("desktop/v3/snapshot")
+
+
+def test_p2_r7_active_connection_retries_transient_result_publish():
+    delivered = threading.Event()
+
+    class Transport:
+        connected = True
+
+        def __init__(self):
+            self.calls = 0
+
+        def start(self):
+            pass
+
+        def stop(self):
+            return True
+
+        def publish(self, topic, _payload, *, on_delivery=None, **_kwargs):
+            if not topic.endswith("/result"):
+                return True
+            self.calls += 1
+            if self.calls == 1:
+                return False
+            on_delivery(True)
+            delivered.set()
+            return True
+
+    gateway = MqttGateway(
+        AppConfig(device_id="desktop"),
+        SimpleNamespace(),
+        EventBus(),
+        protocol_retry_delay=lambda _attempt: 0,
+    )
+    gateway.transport = Transport()
+    gateway.start()
+    try:
+        gateway._reply(CommandResult("retry-active", "succeeded"))
+        assert delivered.wait(1)
+        assert gateway.transport.calls == 2
+        assert not any(item.key.endswith(":retry-active") for item in gateway.outbox.snapshot())
+    finally:
+        assert gateway.stop()
+
+
+def test_p2_r7_failed_result_is_evicted_after_bounded_active_retries():
+    class Transport:
+        connected = True
+
+        @staticmethod
+        def publish(topic, _payload, **_kwargs):
+            return not topic.endswith("/result")
+
+    gateway = MqttGateway(AppConfig(device_id="desktop"), SimpleNamespace(), EventBus())
+    gateway.transport = Transport()
+    gateway._reply(CommandResult("bounded-failure", "failed", "execution_failed"))
+    for _attempt in range(gateway._max_active_attempts - 1):
+        gateway._flush_protocol()
+    assert not any(
+        item.key.endswith(":bounded-failure") for item in gateway.outbox.snapshot()
+    )
+
+
+def test_p2_r8_shutdown_preserves_lwt_when_offline_cannot_enter_full_window():
+    client = _MqttClient()
+    client.disconnect_calls = 0
+    client.socket_closes = 0
+    client.disconnect = lambda: setattr(
+        client, "disconnect_calls", client.disconnect_calls + 1
+    )
+    client._sock_close = lambda: setattr(
+        client, "socket_closes", client.socket_closes + 1
+    )
+    transport = MqttTransport(
+        MqttConfig(base_topic="desktop"),
+        "desktop",
+        EventBus(),
+        lambda *_args: None,
+        set(),
+        client_factory=lambda *_args, **_kwargs: client,
+        shutdown_timeout=0.01,
+    )
+    transport._epoch = transport.machine.begin()
+    assert transport.machine.connected(transport._epoch)
+    for index in range(transport._ack_capacity):
+        assert transport.publish(
+            f"state/{index}", "value", on_delivery=lambda _success: None
+        )
+    assert not transport.stop()
+    assert client.disconnect_calls == 0
+    assert client.socket_closes == 1
+    assert transport.machine.status.state == ConnectionState.STOPPED
+
+
+def test_p2_r9_ha_birth_forces_inventory_capabilities_and_latest_snapshot():
+    events = EventBus()
+    inventory = threading.Event()
+    events.subscribe("inventory.requested", lambda _event: inventory.set())
+
+    class Transport:
+        connected = True
+
+        def __init__(self):
+            self.topics = []
+
+        def publish(self, topic, _payload, *, on_delivery=None, **_kwargs):
+            self.topics.append(topic)
+            if on_delivery:
+                on_delivery(True)
+            return True
+
+    gateway = MqttGateway(AppConfig(device_id="desktop"), SimpleNamespace(), events)
+    transport = Transport()
+    gateway.transport = transport
+    gateway.publisher.transport = transport
+    assert gateway.publisher.publish_observation(
+        gateway.protocol.snapshot_topic, "latest-snapshot"
+    )
+    gateway._flush_protocol()
+    transport.topics.clear()
+
+    gateway.receive(gateway.protocol.birth_topic, b"online")
+    assert inventory.is_set()
+    assert gateway.protocol.capabilities_topic in transport.topics
+    assert gateway.protocol.snapshot_topic in transport.topics

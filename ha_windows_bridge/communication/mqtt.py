@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import dataclass
 
 import paho.mqtt.client as mqtt
 
@@ -13,12 +15,20 @@ from ..core.events import EventBus
 from .state import Backoff, ConnectionMachine, ConnectionState
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingPublish:
+    callback: Callable[[bool], None]
+    deadline: float
+    connection_generation: int
+
+
 class MqttTransport:
     supports_delivery_ack = True
 
     def __init__(self, config: MqttConfig, device_id: str, events: EventBus,
                  on_message: Callable[[str, bytes, bool], None], topics: set[str],
-                 *, client_factory=None):
+                 *, client_factory=None, monotonic_clock=time.monotonic,
+                 ack_timeout: float = 10.0, shutdown_timeout: float = 1.0):
         self.config, self.events = config, events
         self.machine = ConnectionMachine("mqtt", events)
         self.log = logging.getLogger("bridge.mqtt")
@@ -44,13 +54,18 @@ class MqttTransport:
         self._client.on_subscribe = self._on_subscribe
         self._client.on_publish = self._on_publish
         self._epoch = 0
+        self._monotonic_clock = monotonic_clock
+        self._ack_timeout = max(0.001, float(ack_timeout))
+        self._shutdown_timeout = max(0.0, float(shutdown_timeout))
         self._ack_lock = threading.Lock()
-        self._pending_subacks: set[int] = set()
-        self._pending_pubacks: dict[int, Callable[[bool], None]] = {}
+        self._pending_subacks: dict[int, float] = {}
+        self._pending_pubacks: dict[int, _PendingPublish] = {}
         self._early_pubacks: set[int] = set()
         self._ignored_pubacks: set[int] = set()
         self._ack_capacity = 256
         self._reserved_pubacks = 0
+        self._connection_generation = 0
+        self._unclean_shutdown = False
 
     @property
     def connected(self) -> bool:
@@ -60,22 +75,54 @@ class MqttTransport:
         if self._thread is not None and self._thread.is_alive():
             raise RuntimeError("MQTT transport already running or stopping")
         self._stop.clear()
+        self._unclean_shutdown = False
         self._epoch = self.machine.begin()
         self._thread = threading.Thread(target=self._run, name="mqtt-transport", daemon=True)
         self._thread.start()
 
     def stop(self) -> bool:
-        self._stop.set()
+        offline_delivered = True
         if self.connected:
-            with suppress(Exception):
-                self._client.publish(self._status_topic, "offline", qos=1, retain=True)
+            completed = threading.Event()
+            outcome = []
+
+            def offline_ack(success: bool) -> None:
+                outcome.append(bool(success))
+                completed.set()
+
+            try:
+                accepted = self.publish(
+                    self._status_topic,
+                    "offline",
+                    qos=1,
+                    retain=True,
+                    on_delivery=offline_ack,
+                )
+            except Exception:
+                accepted = False
+            offline_delivered = bool(
+                accepted
+                and completed.wait(self._shutdown_timeout)
+                and outcome
+                and outcome[-1]
+            )
+        self._unclean_shutdown = not offline_delivered
+        if not offline_delivered:
+            self.log.warning(
+                "MQTT offline publication was not confirmed; preserving LWT shutdown"
+            )
+        self._stop.set()
         self.machine.stop()
-        with suppress(Exception):
-            self._client.disconnect()
+        if offline_delivered:
+            with suppress(Exception):
+                self._client.disconnect()
+        else:
+            self._abort_socket()
         self._fail_pubacks()
         if self._thread is not None:
             self._thread.join(timeout=4)
-        return self._thread is None or not self._thread.is_alive()
+        stopped = self._thread is None or not self._thread.is_alive()
+        return stopped and offline_delivered
 
     def publish(self, topic: str, payload: str | bytes, *, retain: bool = True, qos: int = 1,
                 on_delivery: Callable[[bool], None] | None = None) -> bool:
@@ -126,7 +173,11 @@ class MqttTransport:
             elif self._stop.is_set() or not self.connected:
                 disconnected = True
             else:
-                self._pending_pubacks[info.mid] = on_delivery
+                self._pending_pubacks[info.mid] = _PendingPublish(
+                    on_delivery,
+                    self._monotonic_clock() + self._ack_timeout,
+                    self._connection_generation,
+                )
         try:
             if immediate:
                 on_delivery(True)
@@ -145,6 +196,7 @@ class MqttTransport:
                     rc = self._client.loop(timeout=1.0)
                     if rc != mqtt.MQTT_ERR_SUCCESS:
                         raise ConnectionError("network")
+                    self._expire_ack_deadlines()
                     if self.machine.status.state in {ConnectionState.RETRY_WAIT, ConnectionState.AUTH_ERROR}:
                         break
             except Exception:
@@ -152,8 +204,11 @@ class MqttTransport:
                     self.machine.failed(self._epoch, "network")
                     self.log.warning("MQTT connection unavailable")
             finally:
-                with suppress(Exception):
-                    self._client.disconnect()
+                if self._unclean_shutdown:
+                    self._abort_socket()
+                else:
+                    with suppress(Exception):
+                        self._client.disconnect()
             if self.machine.status.state == ConnectionState.AUTH_ERROR:
                 break  # Configuration must change; do not retry bad credentials forever.
             if self._stop.wait(backoff.delay(self.machine.status.attempt)):
@@ -170,7 +225,8 @@ class MqttTransport:
         if self._stop.is_set():
             client.disconnect()
             return
-        pending = set()
+        now = self._monotonic_clock()
+        pending = {}
         for topic in self._topics:
             try:
                 result = client.subscribe(topic, qos=1)
@@ -191,9 +247,12 @@ class MqttTransport:
                 with suppress(Exception):
                     client.disconnect()
                 return
-            pending.add(int(message_id))
+            pending[int(message_id)] = now + self._ack_timeout
         with self._ack_lock:
+            self._connection_generation += 1
             self._pending_subacks = pending
+            self._early_pubacks.clear()
+            self._ignored_pubacks.clear()
         if not pending:
             self._subscriptions_ready(client)
 
@@ -203,7 +262,7 @@ class MqttTransport:
         with self._ack_lock:
             if int(mid) not in self._pending_subacks:
                 return
-            self._pending_subacks.discard(int(mid))
+            self._pending_subacks.pop(int(mid), None)
             ready = not self._pending_subacks
         if failures:
             self.machine.failed(self._epoch, "subscribe_rejected")
@@ -220,25 +279,26 @@ class MqttTransport:
             client.publish(self._status_topic, "online", qos=1, retain=True)
 
     def _on_publish(self, _client, _userdata, mid, _reason_codes, _properties):
-        callback = None
         with self._ack_lock:
             if int(mid) in self._ignored_pubacks:
                 self._ignored_pubacks.discard(int(mid))
                 return
-            callback = self._pending_pubacks.pop(int(mid), None)
-            if callback is None:
+            pending = self._pending_pubacks.pop(int(mid), None)
+            if pending is None:
                 self._early_pubacks.add(int(mid))
                 if len(self._early_pubacks) > self._ack_capacity:
                     self._early_pubacks.pop()
-        if callback is not None:
+            elif pending.connection_generation != self._connection_generation:
+                pending = None
+        if pending is not None:
             try:
-                callback(True)
+                pending.callback(True)
             except Exception:
                 self.log.exception("MQTT delivery callback failed")
 
     def _fail_pubacks(self) -> None:
         with self._ack_lock:
-            callbacks = tuple(self._pending_pubacks.values())
+            callbacks = tuple(item.callback for item in self._pending_pubacks.values())
             self._pending_pubacks.clear()
             self._pending_subacks.clear()
             self._early_pubacks.clear()
@@ -248,6 +308,42 @@ class MqttTransport:
                 callback(False)
             except Exception:
                 self.log.exception("MQTT delivery callback failed")
+
+    def _expire_ack_deadlines(self) -> bool:
+        """Expire ACK waits using monotonic time and force a controlled reconnect."""
+
+        now = self._monotonic_clock()
+        with self._ack_lock:
+            suback_timeout = any(deadline <= now for deadline in self._pending_subacks.values())
+            if suback_timeout:
+                self._pending_subacks.clear()
+            expired = [
+                mid for mid, item in self._pending_pubacks.items()
+                if item.deadline <= now
+            ]
+            callbacks = tuple(
+                self._pending_pubacks.pop(mid).callback for mid in expired
+            )
+        for callback in callbacks:
+            try:
+                callback(False)
+            except Exception:
+                self.log.exception("MQTT delivery callback failed")
+        if not suback_timeout and not callbacks:
+            return False
+        code = "suback_timeout" if suback_timeout else "puback_timeout"
+        self.machine.failed(self._epoch, code)
+        with suppress(Exception):
+            self._client.disconnect()
+        return True
+
+    def _abort_socket(self) -> None:
+        """Close TCP without MQTT DISCONNECT so the broker retains the LWT path."""
+
+        close_socket = getattr(self._client, "_sock_close", None)
+        if callable(close_socket):
+            with suppress(Exception):
+                close_socket()
 
     def _on_disconnect(self, _client, _userdata, _flags, _reason, _properties):
         self._fail_pubacks()

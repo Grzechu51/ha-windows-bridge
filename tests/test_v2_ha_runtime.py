@@ -217,3 +217,41 @@ def test_ha_runtime_accepts_current_capabilities_and_monotonic_snapshot(runtime_
         runtime.close()
 
     asyncio.run(exercise())
+
+
+def test_p2_r11_mqtt_result_uses_shared_utf8_byte_limit(runtime_module):
+    async def exercise():
+        runtime = make_runtime(runtime_module, protocol=protocol({}))
+
+        large = {
+            "version": 3,
+            "type": "result",
+            "id": "large-result",
+            "session": "mqtt-session",
+            "device_id": "pc",
+            "status": "succeeded",
+            "code": "",
+            "data": {"text": "ą" * 4600},
+        }
+        encoded_large = json.dumps(
+            large, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        assert len(encoded_large) > 9_000
+        large_future = asyncio.get_running_loop().create_future()
+        runtime.pending["large-result"] = large_future
+        runtime._mqtt_result(SimpleNamespace(retain=False, payload=encoded_large))
+        assert large_future.done()
+
+        boundary = {**large, "id": "boundary-result", "data": {}}
+        raw = json.dumps(boundary, separators=(",", ":")).encode()
+        exact = raw + b" " * (runtime_module.MAX_CONTROL_BYTES - len(raw))
+        assert len(exact) == runtime_module.MAX_CONTROL_BYTES
+        boundary_future = asyncio.get_running_loop().create_future()
+        runtime.pending["boundary-result"] = boundary_future
+        runtime._mqtt_result(SimpleNamespace(retain=False, payload=exact + b" "))
+        assert not boundary_future.done()
+        runtime._mqtt_result(SimpleNamespace(retain=False, payload=exact))
+        assert boundary_future.done()
+        runtime.close()
+
+    asyncio.run(exercise())
