@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
 
 from ..core.commands import CommandError
@@ -22,8 +23,24 @@ _RESULT_PRECEDENCE = {
 _TERMINAL_RESULTS = frozenset({"succeeded", "failed", "rejected", "cancelled"})
 
 
+def _schedule_timer(delay, callback):
+    timer = threading.Timer(delay, callback)
+    timer.daemon = True
+    timer.start()
+    return timer.cancel
+
+
 class MqttGateway:
-    def __init__(self, config, router, events, *, protocol_retry_delay=None):
+    def __init__(
+        self,
+        config,
+        router,
+        events,
+        *,
+        protocol_retry_delay=None,
+        resync_delay=None,
+        resync_scheduler=None,
+    ):
         self.protocol = TopicProtocol(config)
         self.router, self.events = router, events
         self.log = logging.getLogger("bridge.mqtt")
@@ -43,6 +60,11 @@ class MqttGateway:
             lambda attempt: Backoff(0.25, 5.0).delay(attempt)
         )
         self._max_active_attempts = 5
+        self._resync_delay = resync_delay or (lambda: random.uniform(0.1, 0.5))
+        self._resync_scheduler = resync_scheduler or _schedule_timer
+        self._resync_pending = False
+        self._resync_cancel = None
+        self._resync_token = 0
         capabilities = self.protocol.capabilities()
         self.outbox.accept("capabilities", self.protocol.capabilities_topic,
                            capabilities.encode(), retain=True, replace_latest=True)
@@ -59,6 +81,12 @@ class MqttGateway:
     def stop(self):
         self._stop.set()
         self._retry.set()
+        with self._lock:
+            self._resync_token += 1
+            self._resync_pending = False
+            cancel_resync, self._resync_cancel = self._resync_cancel, None
+        if cancel_resync is not None:
+            cancel_resync()
         if self._unsubscribe:
             self._unsubscribe()
             self._unsubscribe = None
@@ -81,13 +109,7 @@ class MqttGateway:
     def receive(self, topic, payload, retained=False):
         if topic == self.protocol.birth_topic:
             if payload == b"online":
-                with self._lock:
-                    generation = self._connection_generation
-                self.events.emit("inventory.requested", {"force": True})
-                self.publisher.request_replay()
-                self.publisher.flush()
-                self.outbox.replay(generation, retained_only=True)
-                self._flush_protocol()
+                self._schedule_resync()
             return
         try:
             command, context = self.protocol.decode_inbound(topic, payload, retained)
@@ -104,6 +126,8 @@ class MqttGateway:
     def _reply(self, result, context: ReplyContext | None = None):
         context = context or ReplyContext(3, self.protocol.session, self.protocol.result_topic)
         identity = (context.protocol_version, context.session, result.id)
+        topic, payload = self.protocol.encode_result(result, context)
+        key = f"result:{context.protocol_version}:{context.session}:{result.id}"
         with self._lock:
             previous = self._result_status.get(identity)
             if (previous in _TERMINAL_RESULTS and previous != result.status) or (
@@ -113,10 +137,11 @@ class MqttGateway:
                 return
             if identity not in self._result_status and len(self._result_status) >= 1024:
                 self._result_status.pop(next(iter(self._result_status)))
-            self._result_status[identity] = result.status
-        topic, payload = self.protocol.encode_result(result, context)
-        key = f"result:{context.protocol_version}:{context.session}:{result.id}"
-        item = self.outbox.accept(key, topic, payload, retain=False, replace_latest=True)
+            item = self.outbox.accept(
+                key, topic, payload, retain=False, replace_latest=True
+            )
+            if item is not None:
+                self._result_status[identity] = result.status
         if item is None:
             self.log.error("Protocol result outbox is full")
             return
@@ -146,14 +171,14 @@ class MqttGateway:
                 ):
                     return
                 if attempt.attempts >= self._max_active_attempts:
-                    if not attempt.retain:
-                        self.log.error(
-                            "Dropping protocol result after bounded retries: %s",
-                            attempt.key,
-                        )
-                        self.outbox.discard(attempt.key, attempt.token)
-                    # Retained contract state stays failed for the next reconnect
-                    # or HA birth, but does not retry forever on this connection.
+                    self.outbox.mark_exhausted(
+                        attempt.key,
+                        attempt.token,
+                        attempt.connection_generation,
+                    )
+                    # Exhausted messages remain bounded retained history. They
+                    # become ready only on reconnect/explicit replay and are
+                    # oldest-first eviction candidates if capacity is needed.
                 elif not self._stop.is_set() and self.transport.connected:
                     self._retry.set()
 
@@ -181,3 +206,51 @@ class MqttGateway:
                 break
             if self.transport.connected:
                 self._flush_protocol()
+
+    def _schedule_resync(self):
+        with self._lock:
+            if self._stop.is_set() or self._resync_pending:
+                return
+            self._resync_pending = True
+            self._resync_token += 1
+            token = self._resync_token
+        try:
+            cancel = self._resync_scheduler(
+                max(0.0, float(self._resync_delay())),
+                lambda: self._force_resync(token),
+            )
+        except Exception:
+            with self._lock:
+                if self._resync_token == token:
+                    self._resync_pending = False
+            self.log.exception("HA birth resync could not be scheduled")
+            return
+        cancel_now = False
+        with self._lock:
+            if (
+                self._stop.is_set()
+                or self._resync_token != token
+                or not self._resync_pending
+            ):
+                cancel_now = True
+            else:
+                self._resync_cancel = cancel
+        if cancel_now:
+            cancel()
+
+    def _force_resync(self, token):
+        with self._lock:
+            if (
+                self._stop.is_set()
+                or not self._resync_pending
+                or self._resync_token != token
+            ):
+                return
+            self._resync_pending = False
+            self._resync_cancel = None
+            generation = self._connection_generation
+        self.events.emit("inventory.requested", {"force": True})
+        self.publisher.request_replay()
+        self.publisher.flush()
+        self.outbox.replay(generation, retained_only=True)
+        self._flush_protocol()

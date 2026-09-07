@@ -371,14 +371,28 @@ def test_protocol_outbox_is_bounded_and_tracks_accepted_delivered_failed():
     replacement = outbox.accept("snapshot", "v3/snapshot", "latest", retain=True,
                                 replace_latest=True)
     assert replacement and replacement.token != first.token
-    assert outbox.mark_failed(second.key, second.token)
+    second_attempt = outbox.begin_attempt(second.key, second.token, 1)
+    assert second_attempt is not None
+    assert outbox.mark_failed(
+        second_attempt.key,
+        second_attempt.token,
+        second_attempt.connection_generation,
+    )
     assert {item.state for item in outbox.pending()} == {
         DeliveryState.ACCEPTED, DeliveryState.FAILED
     }
     outbox.replay()
     assert all(item.state == DeliveryState.ACCEPTED for item in outbox.pending())
     replayed_second = next(item for item in outbox.pending() if item.key == second.key)
-    assert outbox.mark_delivered(replayed_second.key, replayed_second.token)
+    delivered_attempt = outbox.begin_attempt(
+        replayed_second.key, replayed_second.token, 2
+    )
+    assert delivered_attempt is not None
+    assert outbox.mark_delivered(
+        delivered_attempt.key,
+        delivered_attempt.token,
+        delivered_attempt.connection_generation,
+    )
     outbox.discard_delivered()
     assert [item.key for item in outbox.snapshot()] == ["snapshot"]
     outbox.close()
@@ -649,54 +663,61 @@ def test_p2_r2_late_ack_from_old_connection_cannot_ack_new_failed_attempt():
     assert current.state == DeliveryState.FAILED
 
 
-def test_p2_r3_terminal_result_wins_when_router_callback_precedes_accepted():
-    entered = threading.Event()
+def test_p2_r3_precedence_and_outbox_update_are_atomic():
+    accepted_passed_precedence = threading.Event()
+    terminal_started = threading.Event()
     release = threading.Event()
-    completed = threading.Event()
-
-    class ReverseRouter:
-        def submit(self, command, reply):
-            def finish():
-                entered.set()
-                assert release.wait(1)
-                reply(CommandResult(command.id, "succeeded"))
-                completed.set()
-
-            worker = threading.Thread(target=finish)
-            worker.start()
-            assert entered.wait(1)
-            release.set()
-            assert completed.wait(1)
-            worker.join(1)
-            return CommandResult(command.id, "accepted")
+    errors = []
 
     class Transport:
-        connected = True
+        connected = False
 
-        def __init__(self):
-            self.payloads = []
+        @staticmethod
+        def publish(*_args, **_kwargs):
+            return False
 
-        def publish(self, _topic, payload, *, on_delivery=None, **_kwargs):
-            self.payloads.append(payload)
-            if on_delivery:
-                on_delivery(True)
-            return True
-
-    gateway = MqttGateway(AppConfig(device_id="desktop"), ReverseRouter(), EventBus())
+    gateway = MqttGateway(AppConfig(device_id="desktop"), SimpleNamespace(), EventBus())
     gateway.transport = Transport()
-    message = CommandMessage(
-        "reverse-order",
-        gateway.protocol.session,
-        "desktop",
-        "audio.master.volume",
-        "",
-        {"value": 0.4},
-        time.time(),
-        10_000,
+    original_accept = gateway.outbox.accept
+
+    def barrier_accept(*args, **kwargs):
+        payload = json.loads(args[2])
+        if payload.get("status") == "accepted":
+            accepted_passed_precedence.set()
+            assert release.wait(1)
+        return original_accept(*args, **kwargs)
+
+    gateway.outbox.accept = barrier_accept
+
+    def reply(result):
+        try:
+            gateway._reply(result)
+        except Exception as exc:  # pragma: no cover - assertions expose failures
+            errors.append(exc)
+
+    accepted = threading.Thread(
+        target=reply, args=(CommandResult("reverse-order", "accepted"),)
     )
-    gateway.receive(gateway.protocol.command_topic, message.encode().encode())
-    results = [ResultMessage.decode(payload) for payload in gateway.transport.payloads]
-    assert [result.status for result in results] == ["succeeded"]
+    accepted.start()
+    assert accepted_passed_precedence.wait(1)
+
+    def terminal_reply():
+        terminal_started.set()
+        reply(CommandResult("reverse-order", "succeeded"))
+
+    terminal = threading.Thread(target=terminal_reply)
+    terminal.start()
+    assert terminal_started.wait(1)
+    release.set()
+    accepted.join(1)
+    terminal.join(1)
+    assert not accepted.is_alive() and not terminal.is_alive() and not errors
+    item = next(
+        item for item in gateway.outbox.snapshot()
+        if item.key.endswith(":reverse-order")
+    )
+    assert ResultMessage.decode(item.payload).status == "succeeded"
+    assert gateway._result_status[(3, gateway.protocol.session, "reverse-order")] == "succeeded"
 
 
 def test_p2_r4_legacy_setter_sequence_and_explicit_id_retry():
@@ -906,7 +927,41 @@ def test_p2_r7_active_connection_retries_transient_result_publish():
         assert gateway.stop()
 
 
-def test_p2_r7_failed_result_is_evicted_after_bounded_active_retries():
+def test_p2_r7_retry_does_not_republish_another_message_waiting_for_ack():
+    callbacks = {}
+    calls = []
+
+    class Transport:
+        connected = True
+
+        @staticmethod
+        def publish(_topic, payload, *, on_delivery=None, **_kwargs):
+            identifier = ResultMessage.decode(payload).id
+            calls.append(identifier)
+            if identifier == "message-a":
+                callbacks[identifier] = on_delivery
+                return True
+            if calls.count(identifier) == 1:
+                return False
+            on_delivery(True)
+            return True
+
+    gateway = MqttGateway(AppConfig(device_id="desktop"), SimpleNamespace(), EventBus())
+    gateway.transport = Transport()
+    gateway._reply(CommandResult("message-a", "succeeded"))
+    gateway._reply(CommandResult("message-b", "succeeded"))
+    assert calls == ["message-a", "message-b"]
+    assert next(
+        item for item in gateway.outbox.snapshot() if item.key.endswith(":message-a")
+    ).state == DeliveryState.INFLIGHT
+
+    gateway._flush_protocol()
+    assert calls == ["message-a", "message-b", "message-b"]
+    callbacks["message-a"](True)
+    assert not any(item.key.endswith(":message-a") for item in gateway.outbox.snapshot())
+
+
+def test_p2_r7_exhausted_terminal_result_is_retained_for_bounded_replay():
     class Transport:
         connected = True
 
@@ -916,12 +971,28 @@ def test_p2_r7_failed_result_is_evicted_after_bounded_active_retries():
 
     gateway = MqttGateway(AppConfig(device_id="desktop"), SimpleNamespace(), EventBus())
     gateway.transport = Transport()
-    gateway._reply(CommandResult("bounded-failure", "failed", "execution_failed"))
+    gateway._reply(CommandResult("bounded-result", "succeeded"))
     for _attempt in range(gateway._max_active_attempts - 1):
         gateway._flush_protocol()
-    assert not any(
-        item.key.endswith(":bounded-failure") for item in gateway.outbox.snapshot()
+    retained = next(
+        item for item in gateway.outbox.snapshot()
+        if item.key.endswith(":bounded-result")
     )
+    assert retained.state == DeliveryState.EXHAUSTED
+    assert ResultMessage.decode(retained.payload).status == "succeeded"
+    assert not any(item.key == retained.key for item in gateway.outbox.pending())
+
+    gateway.outbox.replay(2)
+    replayed = next(item for item in gateway.outbox.pending() if item.key == retained.key)
+    assert replayed.state == DeliveryState.ACCEPTED and replayed.attempts == 0
+
+    bounded = MessageOutbox(capacity=1)
+    old = bounded.accept("old", "v3/result", "old", retain=False)
+    attempt = bounded.begin_attempt("old", old.token, 1)
+    assert bounded.mark_failed("old", attempt.token, 1)
+    assert bounded.mark_exhausted("old", attempt.token, 1)
+    assert bounded.accept("new", "v3/result", "new", retain=False) is not None
+    assert [item.key for item in bounded.snapshot()] == ["new"]
 
 
 def test_p2_r8_shutdown_preserves_lwt_when_offline_cannot_enter_full_window():
@@ -955,10 +1026,74 @@ def test_p2_r8_shutdown_preserves_lwt_when_offline_cannot_enter_full_window():
     assert transport.machine.status.state == ConnectionState.STOPPED
 
 
-def test_p2_r9_ha_birth_forces_inventory_capabilities_and_latest_snapshot():
+def test_p2_r8_ack_timeout_during_offline_wait_never_sends_disconnect():
+    clock = [0.0]
+    offline_enqueued = threading.Event()
+    client = _MqttClient()
+    client.disconnect_calls = 0
+    client.socket_closes = 0
+    client.disconnect = lambda: setattr(
+        client, "disconnect_calls", client.disconnect_calls + 1
+    )
+    client._sock_close = lambda: setattr(
+        client, "socket_closes", client.socket_closes + 1
+    )
+    original_publish = client.publish
+
+    def publish(topic, payload, **kwargs):
+        info = original_publish(topic, payload, **kwargs)
+        if topic == "desktop/status" and payload == "offline":
+            offline_enqueued.set()
+        return info
+
+    client.publish = publish
+    transport = MqttTransport(
+        MqttConfig(base_topic="desktop"),
+        "desktop",
+        EventBus(),
+        lambda *_args: None,
+        set(),
+        client_factory=lambda *_args, **_kwargs: client,
+        monotonic_clock=lambda: clock[0],
+        ack_timeout=5,
+        shutdown_timeout=1,
+    )
+    transport._epoch = transport.machine.begin()
+    assert transport.machine.connected(transport._epoch)
+    for index in range(20):
+        assert transport.publish(
+            f"state/{index}", "value", on_delivery=lambda _success: None
+        )
+    clock[0] = 4
+    outcome = []
+    stopping = threading.Thread(target=lambda: outcome.append(transport.stop()))
+    stopping.start()
+    assert offline_enqueued.wait(1)
+    assert transport._shutdown.is_set()
+    clock[0] = 6
+    assert transport._expire_ack_deadlines()
+    stopping.join(1)
+    assert not stopping.is_alive()
+    assert outcome == [False]
+    assert client.disconnect_calls == 0
+    assert client.socket_closes >= 1
+    assert transport.machine.status.state == ConnectionState.STOPPED
+
+
+def test_p2_r9_ha_birth_resync_is_jittered_coalesced_and_cancelled_on_stop():
     events = EventBus()
-    inventory = threading.Event()
-    events.subscribe("inventory.requested", lambda _event: inventory.set())
+    inventory = []
+    events.subscribe("inventory.requested", inventory.append)
+    scheduled = []
+
+    def schedule(delay, callback):
+        item = {"delay": delay, "callback": callback, "cancelled": False}
+        scheduled.append(item)
+
+        def cancel():
+            item["cancelled"] = True
+
+        return cancel
 
     class Transport:
         connected = True
@@ -966,13 +1101,23 @@ def test_p2_r9_ha_birth_forces_inventory_capabilities_and_latest_snapshot():
         def __init__(self):
             self.topics = []
 
+        @staticmethod
+        def stop():
+            return True
+
         def publish(self, topic, _payload, *, on_delivery=None, **_kwargs):
             self.topics.append(topic)
             if on_delivery:
                 on_delivery(True)
             return True
 
-    gateway = MqttGateway(AppConfig(device_id="desktop"), SimpleNamespace(), events)
+    gateway = MqttGateway(
+        AppConfig(device_id="desktop"),
+        SimpleNamespace(),
+        events,
+        resync_delay=lambda: 0.25,
+        resync_scheduler=schedule,
+    )
     transport = Transport()
     gateway.transport = transport
     gateway.publisher.transport = transport
@@ -982,7 +1127,20 @@ def test_p2_r9_ha_birth_forces_inventory_capabilities_and_latest_snapshot():
     gateway._flush_protocol()
     transport.topics.clear()
 
+    for _ in range(3):
+        gateway.receive(gateway.protocol.birth_topic, b"online")
+    assert len(scheduled) == 1 and scheduled[0]["delay"] == 0.25
+    assert not inventory and not transport.topics
+
+    scheduled[0]["callback"]()
+    assert len(inventory) == 1
+    assert transport.topics.count(gateway.protocol.capabilities_topic) == 1
+    assert transport.topics.count(gateway.protocol.snapshot_topic) == 1
+
+    transport.topics.clear()
     gateway.receive(gateway.protocol.birth_topic, b"online")
-    assert inventory.is_set()
-    assert gateway.protocol.capabilities_topic in transport.topics
-    assert gateway.protocol.snapshot_topic in transport.topics
+    assert len(scheduled) == 2
+    assert gateway.stop()
+    assert scheduled[1]["cancelled"]
+    scheduled[1]["callback"]()
+    assert len(inventory) == 1 and not transport.topics

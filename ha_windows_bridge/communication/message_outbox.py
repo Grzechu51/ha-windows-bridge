@@ -9,8 +9,10 @@ from enum import StrEnum
 
 class DeliveryState(StrEnum):
     ACCEPTED = "accepted"
+    INFLIGHT = "inflight"
     DELIVERED = "delivered"
     FAILED = "failed"
+    EXHAUSTED = "exhausted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +53,19 @@ class MessageOutbox:
                     return current
                 return None
             if key not in self._items and len(self._items) >= self.capacity:
-                return None
+                evicted = next(
+                    (
+                        candidate
+                        for candidate, item in self._items.items()
+                        if not item.retain
+                        and item.state
+                        in {DeliveryState.EXHAUSTED, DeliveryState.DELIVERED}
+                    ),
+                    None,
+                )
+                if evicted is None:
+                    return None
+                self._items.pop(evicted)
             self._token += 1
             item = MessageItem(key, topic, payload, bool(retain), int(qos), self._token)
             self._items[key] = item
@@ -82,6 +96,7 @@ class MessageOutbox:
             if (
                 current is None
                 or current.token != token
+                or current.state != DeliveryState.INFLIGHT
                 or (
                     connection_generation is not None
                     and current.connection_generation != connection_generation
@@ -91,6 +106,24 @@ class MessageOutbox:
             self._items[key] = replace(current, state=state)
             return True
 
+    def mark_exhausted(
+        self, key: str, token: int, connection_generation: int | None = None
+    ) -> bool:
+        with self._lock:
+            current = self._items.get(key)
+            if (
+                current is None
+                or current.token != token
+                or current.state != DeliveryState.FAILED
+                or (
+                    connection_generation is not None
+                    and current.connection_generation != connection_generation
+                )
+            ):
+                return False
+            self._items[key] = replace(current, state=DeliveryState.EXHAUSTED)
+            return True
+
     def begin_attempt(
         self, key: str, token: int, connection_generation: int
     ) -> MessageItem | None:
@@ -98,13 +131,18 @@ class MessageOutbox:
 
         with self._lock:
             current = self._items.get(key)
-            if current is None or current.token != token or self._closed:
+            if (
+                current is None
+                or current.token != token
+                or current.state not in {DeliveryState.ACCEPTED, DeliveryState.FAILED}
+                or self._closed
+            ):
                 return None
             self._token += 1
             attempted = replace(
                 current,
                 token=self._token,
-                state=DeliveryState.ACCEPTED,
+                state=DeliveryState.INFLIGHT,
                 connection_generation=int(connection_generation),
                 attempts=current.attempts + 1,
             )
@@ -131,8 +169,11 @@ class MessageOutbox:
 
     def pending(self) -> tuple[MessageItem, ...]:
         with self._lock:
-            return tuple(item for item in self._items.values()
-                         if item.state != DeliveryState.DELIVERED)
+            return tuple(
+                item
+                for item in self._items.values()
+                if item.state in {DeliveryState.ACCEPTED, DeliveryState.FAILED}
+            )
 
     def snapshot(self) -> tuple[MessageItem, ...]:
         with self._lock:
