@@ -61,11 +61,13 @@ class TelemetryService:
         monitors,
         computer_state=None,
         master_audio=None,
+        protocol=None,
     ):
         self.config, self.audio, self.system, self.media = config, audio, system, media
         self.publisher, self.events = publisher, events
         self.computer_state = computer_state
         self.master_audio = master_audio
+        self.protocol = protocol or TopicProtocol(config)
         self.log = logging.getLogger("bridge.sensors")
         self.overlay_monitors = monitors or ["1: Monitor"]
         _, self._overlay_monitor_state = overlay_monitor_topics(config)
@@ -207,10 +209,16 @@ class TelemetryService:
             hardware_metrics,
             self.overlay_monitors,
         )
-        protocol = TopicProtocol(self.config)
+        protocol = self.protocol
         payload["schema"] = 3
         payload["protocol"] = {
-            "version": 2, "command_topic": protocol.command_topic, "result_topic": protocol.result_topic,
+            "version": 3,
+            "session": protocol.session,
+            "command_topic": protocol.command_topic,
+            "result_topic": protocol.result_topic,
+            "capabilities_topic": protocol.capabilities_topic,
+            "snapshot_topic": protocol.snapshot_topic,
+            "legacy_command_topic": protocol.legacy_command_topic,
             "routes": {topic: asdict(route) for topic, route in protocol.routes.items()},
         }
         client.publish(

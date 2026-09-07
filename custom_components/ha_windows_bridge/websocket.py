@@ -1,6 +1,8 @@
 """Device-scoped WebSocket API, without an administrator-only event bus tunnel."""
 from __future__ import annotations
 
+import json
+
 import voluptuous as vol
 from homeassistant.auth.permissions.const import POLICY_CONTROL
 from homeassistant.components import websocket_api
@@ -9,6 +11,7 @@ from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_DEVICE_ID, DOMAIN
+from .protocol import Capability, ProtocolError, ResultMessage
 
 
 class BridgeConnectionError(HomeAssistantError):
@@ -50,7 +53,10 @@ def authorized_runtime(hass, connection, device_id):
 
 @callback
 @websocket_api.websocket_command({vol.Required("type"): "ha_windows_bridge/connect",
-                                  vol.Required("device_id"): vol.All(str, vol.Length(min=1, max=128))})
+                                  vol.Required("device_id"): vol.All(str, vol.Length(min=1, max=128)),
+                                  vol.Required("protocol"): 3,
+                                  vol.Required("session"): vol.All(str, vol.Match(r"^[A-Za-z0-9_.:-]{1,128}$")),
+                                  vol.Required("capabilities"): vol.All(list, vol.Length(max=512))})
 def connect(hass, connection, msg):
     try:
         runtime = authorized_runtime(hass, connection, msg["device_id"])
@@ -60,9 +66,23 @@ def connect(hass, connection, msg):
     if runtime.owner is not None:
         connection.send_error(msg["id"], "bridge_busy", "Another Windows Bridge is already connected")
         return
-    runtime.attach(connection, lambda command: connection.send_event(msg["id"], command))
+    try:
+        capabilities = tuple(Capability.from_dict(item) for item in msg["capabilities"])
+    except ProtocolError:
+        connection.send_error(msg["id"], "protocol_mismatch", "Invalid Protocol v3 capabilities")
+        return
+    names = [item.name for item in capabilities]
+    if len(names) != len(set(names)):
+        connection.send_error(msg["id"], "protocol_mismatch", "Duplicate capabilities")
+        return
+    direct = {item.name for item in capabilities if "direct" in item.transports}
+    if direct != {"overlay.show"}:
+        connection.send_error(msg["id"], "protocol_mismatch", "Unsupported Direct capabilities")
+        return
+    runtime.attach(connection, lambda command: connection.send_event(msg["id"], command), msg["session"])
     connection.subscriptions[msg["id"]] = lambda: runtime.detach(connection)
-    connection.send_result(msg["id"], {"protocol": 2})
+    connection.send_result(msg["id"], {"protocol": 3, "session": msg["session"],
+                                       "capabilities": ["overlay.show"]})
 
 
 @callback
@@ -79,18 +99,18 @@ def heartbeat(hass, connection, msg):
 @callback
 @websocket_api.websocket_command({vol.Required("type"): "ha_windows_bridge/result",
                                   vol.Required("device_id"): vol.All(str, vol.Length(min=1, max=128)),
-                                  vol.Required("result"): {
-                                      vol.Required("version"): 2,
-                                      vol.Required("id"): vol.All(str, vol.Length(min=1, max=128)),
-                                      vol.Required("status"): vol.In({"succeeded", "failed", "rejected", "cancelled"}),
-                                      vol.Optional("error", default=None): vol.Any(None, vol.All(str, vol.Length(max=64))),
-                                      vol.Optional("data", default={}): vol.Schema({}, extra=vol.REMOVE_EXTRA),
-                                  }})
+                                  vol.Required("result"): dict})
 def result(hass, connection, msg):
     runtime = authorized_runtime(hass, connection, msg["device_id"])
     if runtime.owner is not connection:
         raise Unauthorized()
-    # Only IDs belonging to this connection's device can complete its commands.
+    try:
+        decoded = ResultMessage.decode(json.dumps(msg["result"], allow_nan=False))
+    except (ProtocolError, ValueError, TypeError, RecursionError):
+        raise BridgeConnectionError("protocol_mismatch") from None
+    if decoded.device_id != runtime.device_id or decoded.session != runtime._direct_session:
+        raise Unauthorized()
+    # Only IDs belonging to this connection's device/session can complete commands.
     runtime._result(msg["result"])
     connection.send_result(msg["id"])
 

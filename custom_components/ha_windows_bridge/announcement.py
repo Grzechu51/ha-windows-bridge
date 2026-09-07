@@ -242,9 +242,11 @@ def parse_discovery_announcement(raw: str | bytes) -> dict[str, Any] | None:
 
 
 def _protocol(value, prefix):
-    if not isinstance(value, dict) or value.get("version") != 2:
+    if not isinstance(value, dict) or value.get("version") not in {2, 3}:
         return None
-    if value.get("command_topic") != prefix + "v2/command" or value.get("result_topic") != prefix + "v2/result":
+    version = value["version"]
+    protocol_prefix = prefix + f"v{version}/"
+    if value.get("command_topic") != protocol_prefix + "command" or value.get("result_topic") != protocol_prefix + "result":
         return None
     routes = value.get("routes")
     if not isinstance(routes, dict) or len(routes) > 512:
@@ -261,4 +263,18 @@ def _protocol(value, prefix):
         if not isinstance(parser, str) or parser not in {"json", "value", "volume", "balance", "switch", "button"}:
             return None
         clean[topic] = {"kind": kind, "target": target, "parser": parser}
-    return {"version": 2, "command_topic": value["command_topic"], "result_topic": value["result_topic"], "routes": clean}
+    result = {"version": version, "command_topic": value["command_topic"],
+              "result_topic": value["result_topic"], "routes": clean}
+    if version == 3:
+        session = value.get("session")
+        if not isinstance(session, str) or re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", session) is None:
+            return None
+        expected = {
+            "capabilities_topic": prefix + "v3/capabilities",
+            "snapshot_topic": prefix + "v3/snapshot",
+            "legacy_command_topic": prefix + "v2/command",
+        }
+        if any(value.get(key) != topic for key, topic in expected.items()):
+            return None
+        result.update(session=session, **expected)
+    return result

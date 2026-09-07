@@ -19,11 +19,7 @@ class OutboxItem:
 
 @dataclass(frozen=True, slots=True)
 class DeliveredState:
-    """State accepted by the current transport session.
-
-    For the existing protocol-v2 MQTT adapter this is local Paho acceptance,
-    not a broker PUBACK. Remote acknowledgement belongs to Phase 2.
-    """
+    """State acknowledged as delivered by the current transport session."""
 
     key: str
     generation: int
@@ -48,6 +44,7 @@ class StateOutbox:
         self._observed: OrderedDict[str, OutboxItem] = OrderedDict()
         self._delivered: dict[str, DeliveredState] = {}
         self._dirty: set[str] = set()
+        self._inflight: dict[str, tuple[int, int, int]] = {}
         self._generation = generation
         self._session = 0
         self._next_revision = 0
@@ -67,6 +64,7 @@ class StateOutbox:
             self._observed.clear()
             self._delivered.clear()
             self._dirty.clear()
+            self._inflight.clear()
 
     def observe(
         self,
@@ -135,12 +133,14 @@ class StateOutbox:
             self._observed[key] = item
             self._observed.move_to_end(key)
             self._dirty.add(key)
+            self._inflight.pop(key, None)
             return True
 
     def request_replay(self) -> None:
         with self._lock:
             self._session += 1
             self._dirty.update(self._observed)
+            self._inflight.clear()
 
     def flush(
         self,
@@ -183,6 +183,71 @@ class StateOutbox:
                         acknowledged = True
                 if acknowledged and delivered is not None:
                     delivered(item)
+        finally:
+            with self._lock:
+                self._sending = False
+        with self._lock:
+            return not self._dirty
+
+    def flush_confirmed(
+        self,
+        send: Callable[[OutboxItem, Callable[[bool], None]], bool],
+        delivered: Callable[[OutboxItem], None] | None = None,
+    ) -> bool:
+        """Dispatch one pass and clear items only from matching PUBACK callbacks."""
+
+        with self._lock:
+            if self._sending:
+                return False
+            self._sending = True
+            generation = self._generation
+            session = self._session
+            items = tuple(
+                item for key, item in self._observed.items()
+                if key in self._dirty and key not in self._inflight
+            )
+        try:
+            for item in items:
+                attempt = (generation, session, item.revision)
+                with self._lock:
+                    if (
+                        self._generation != generation
+                        or self._session != session
+                        or self._observed.get(item.key) != item
+                    ):
+                        continue
+                    self._inflight[item.key] = attempt
+
+                def acknowledge(success: bool, selected=item, selected_attempt=attempt) -> None:
+                    emitted = False
+                    with self._lock:
+                        if self._inflight.get(selected.key) != selected_attempt:
+                            return
+                        self._inflight.pop(selected.key, None)
+                        if (
+                            success
+                            and
+                            self._generation == generation
+                            and self._session == session
+                            and self._observed.get(selected.key) == selected
+                        ):
+                            self._dirty.discard(selected.key)
+                            self._delivered[selected.key] = DeliveredState(
+                                selected.key,
+                                selected.generation,
+                                selected.revision,
+                                session,
+                            )
+                            emitted = True
+                    if emitted and delivered is not None:
+                        delivered(selected)
+
+                try:
+                    accepted = bool(send(item, acknowledge))
+                except Exception:
+                    accepted = False
+                if not accepted:
+                    acknowledge(False)
         finally:
             with self._lock:
                 self._sending = False

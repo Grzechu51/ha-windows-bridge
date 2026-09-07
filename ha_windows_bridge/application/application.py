@@ -29,6 +29,7 @@ from .lifecycle import (
     ServiceSupervisor,
 )
 from .master_audio import MasterAudioProvider
+from .protocol_projection import ProtocolStateProjection
 from .state_projection import MasterAudioProjection
 from .windows_commands import WindowsCommands
 
@@ -66,6 +67,7 @@ class Application:
         self._telemetry = None
         self._master_audio = None
         self._state_projection = None
+        self._protocol_projection = None
         self._generation = 0
         self._services_generation = None
         self._restart_blocked = False
@@ -158,6 +160,7 @@ class Application:
                         master_audio=self._master_audio).install(self.router)
         self._telemetry = None
         self._state_projection = None
+        self._protocol_projection = None
         if self._master_audio is not None:
             self.supervisor.register("master_audio", self._master_audio)
         if self.config.mqtt.host:
@@ -165,6 +168,15 @@ class Application:
             if hasattr(gateway.publisher, "begin_generation"):
                 gateway.publisher.begin_generation(self._generation)
             self.supervisor.register("mqtt", gateway)
+            if hasattr(gateway, "protocol") and hasattr(gateway.protocol, "snapshot_topic"):
+                self._protocol_projection = ProtocolStateProjection(
+                    self.computer_state,
+                    gateway.publisher,
+                    self.events,
+                    gateway.protocol,
+                    self._generation,
+                )
+                self.supervisor.register("protocol_projection", self._protocol_projection, "mqtt")
             if self.config.control_master_volume and self._master_audio is not None:
                 self._state_projection = MasterAudioProjection(
                     self.config,
@@ -181,7 +193,8 @@ class Application:
                 )
             self._telemetry = TelemetryService(self.config, self.audio, self.system, self.media,
                                               gateway.publisher, self.events, self.monitors,
-                                              self.computer_state, self._master_audio)
+                                              self.computer_state, self._master_audio,
+                                              getattr(gateway, "protocol", None))
             self.supervisor.register("sensors", self._telemetry, "mqtt")
         if self.config.home_assistant.enabled and self.config.overlay_enabled:
             if self._direct_factory is None:
@@ -505,7 +518,8 @@ class Application:
         return self._schedule(resume)
 
     def command(self, kind: str, arguments: dict, target=""):
-        command = Command(uuid.uuid4().hex, kind, target, copy.deepcopy(arguments), time.time() + 10)
+        command = Command(uuid.uuid4().hex, kind, target, copy.deepcopy(arguments),
+                          time.time() + 10, monotonic_expires_at=time.monotonic() + 10)
         with self._guard:
             if self._closed:
                 result = CommandResult(command.id, "rejected", "stopping")

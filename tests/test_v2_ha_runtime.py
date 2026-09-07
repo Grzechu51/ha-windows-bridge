@@ -26,8 +26,17 @@ def runtime_module(monkeypatch):
     module("homeassistant.exceptions", HomeAssistantError=RuntimeError)
     module("homeassistant.helpers")
     module("homeassistant.helpers.event", async_call_later=lambda hass, delay, function: hass.loop.call_later(delay, function, None).cancel)
-    path = Path(__file__).parents[1] / "custom_components/ha_windows_bridge/runtime.py"
-    spec = importlib.util.spec_from_file_location("bridge_runtime_test", path)
+    directory = Path(__file__).parents[1] / "custom_components/ha_windows_bridge"
+    package = module("bridge_runtime_test")
+    package.__path__ = [str(directory)]
+    protocol_spec = importlib.util.spec_from_file_location(
+        "bridge_runtime_test.protocol", directory / "protocol.py"
+    )
+    protocol_module = importlib.util.module_from_spec(protocol_spec)
+    monkeypatch.setitem(sys.modules, protocol_spec.name, protocol_module)
+    protocol_spec.loader.exec_module(protocol_module)
+    path = directory / "runtime.py"
+    spec = importlib.util.spec_from_file_location("bridge_runtime_test.runtime", path)
     loaded = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, loaded)
     spec.loader.exec_module(loaded)
@@ -36,6 +45,18 @@ def runtime_module(monkeypatch):
 
 def make_runtime(module, **kwargs):
     return module.BridgeRuntime(SimpleNamespace(loop=asyncio.get_running_loop()), "pc", {"popup"}, "popup", "pc/overlay", "direct", **kwargs)
+
+
+def protocol(routes):
+    return {"version": 3, "session": "mqtt-session", "command_topic": "v3/command",
+            "result_topic": "v3/result", "capabilities_topic": "v3/capabilities",
+            "snapshot_topic": "v3/snapshot", "routes": routes}
+
+
+def result(command, status="succeeded", *, session=None):
+    return {"version": 3, "type": "result", "id": command["id"],
+            "session": session or command["session"], "device_id": "pc",
+            "status": status, "code": "", "data": {}}
 
 
 def test_direct_ack_is_correlated_and_disconnect_fails_pending(runtime_module):
@@ -47,11 +68,12 @@ def test_direct_ack_is_correlated_and_disconnect_fails_pending(runtime_module):
         task = asyncio.create_task(runtime.send("", '{"message":"hello"}', direct=True))
         await asyncio.sleep(0)
         command = sent[0]
-        assert command["version"] == 2 and command["kind"] == "overlay.show"
-        for bad in ({"version": 2, "id": []}, {"version": 2, "id": "other", "status": "succeeded"}):
+        assert command["version"] == 3 and command["kind"] == "overlay.show"
+        for bad in ({"version": 3, "id": []}, result({**command, "id": "other"}),
+                    result(command, session="stale-session")):
             runtime._result(bad)
         assert not task.done()
-        runtime._result({"version": 2, "id": command["id"], "status": "succeeded"})
+        runtime._result(result(command))
         await task
         assert not runtime.pending
         task = asyncio.create_task(runtime.send("", '{}', direct=True))
@@ -81,13 +103,14 @@ def test_direct_rejects_offline_and_second_client(runtime_module):
 
 def test_mqtt_creates_envelope_before_publish_and_ignores_retained_ack(runtime_module):
     async def exercise():
-        runtime = make_runtime(runtime_module, protocol={"command_topic": "v2/command", "result_topic": "v2/result", "routes": {"volume": {"kind": "audio.master.volume", "parser": "volume"}}})
+        runtime = make_runtime(runtime_module, protocol=protocol(
+            {"volume": {"kind": "audio.master.volume", "parser": "volume"}}))
         runtime.overlay_event_type = ""
         async def publish(hass, topic, payload, **kwargs):
             command = json.loads(payload)
             assert command["arguments"] == {"value": .42}
             assert command["id"] in runtime.pending and not kwargs["retain"]
-            ack = {"version": 2, "id": command["id"], "status": "succeeded"}
+            ack = result(command)
             runtime._mqtt_result(SimpleNamespace(retain=True, payload=json.dumps(ack)))
             assert not runtime.pending[command["id"]].done()
             runtime._mqtt_result(SimpleNamespace(retain=False, payload=json.dumps(ack)))
@@ -109,9 +132,9 @@ def test_wire_arguments_reject_malformed_values(runtime_module, parser, payload)
 
 def test_mqtt_computer_uses_direct_for_popup_but_keeps_audio_and_acks_independent(runtime_module):
     async def exercise():
-        runtime = make_runtime(runtime_module, protocol={"command_topic": "v2/command", "result_topic": "v2/result",
-            "routes": {"volume": {"kind": "audio.master.volume", "parser": "volume"},
-                       "pc/overlay": {"kind": "overlay.show", "parser": "json"}}})
+        runtime = make_runtime(runtime_module, protocol=protocol(
+            {"volume": {"kind": "audio.master.volume", "parser": "volume"},
+             "pc/overlay": {"kind": "overlay.show", "parser": "json"}}))
         runtime.overlay_event_type = ""
         owner, direct_sent = object(), []
         runtime.attach(owner, direct_sent.append)
@@ -128,7 +151,7 @@ def test_mqtt_computer_uses_direct_for_popup_but_keeps_audio_and_acks_independen
         with pytest.raises(RuntimeError, match="disconnected"):
             await popup
         assert not audio.done()  # Direct must never fail an independent MQTT ACK.
-        runtime._result({"version": 2, "id": audio_command["id"], "status": "succeeded"})
+        runtime._result(result(audio_command))
         await audio
         assert not runtime.pending and not runtime._direct_pending
         # With Direct gone, future popup commands use MQTT again.
@@ -137,7 +160,60 @@ def test_mqtt_computer_uses_direct_for_popup_but_keeps_audio_and_acks_independen
         command = json.loads(runtime_module.mqtt.async_publish.call_args.args[2])
         assert command["kind"] == "overlay.show"
         assert len(direct_sent) == 1
-        runtime._result({"version": 2, "id": command["id"], "status": "succeeded"})
+        runtime._result(result(command))
         await fallback
         runtime.close()
+    asyncio.run(exercise())
+
+
+def test_mqtt_retry_reuses_command_id_after_lost_result(runtime_module):
+    async def exercise():
+        runtime = make_runtime(runtime_module, protocol=protocol(
+            {"volume": {"kind": "audio.master.volume", "parser": "volume"}}))
+        runtime.overlay_event_type = ""
+        runtime.command_attempt_timeout = 0.001
+        sent = []
+
+        async def publish(_hass, _topic, payload, **_kwargs):
+            sent.append(json.loads(payload))
+            if len(sent) == 2:
+                runtime._result(result(sent[-1]))
+
+        runtime_module.mqtt.async_publish.side_effect = publish
+        await runtime.start()
+        await runtime.send("volume", "42")
+        assert len(sent) == 2
+        assert sent[0] == sent[1]
+        runtime.close()
+
+    asyncio.run(exercise())
+
+
+def test_ha_runtime_accepts_current_capabilities_and_monotonic_snapshot(runtime_module):
+    async def exercise():
+        runtime = make_runtime(runtime_module, protocol=protocol({}))
+        runtime.overlay_event_type = ""
+        await runtime.start()
+        capability = runtime_module.CapabilitiesMessage(
+            "capabilities-new", "new-session", "pc", 2,
+            (sys.modules["bridge_runtime_test.protocol"].Capability(
+                "overlay.show", ("mqtt", "direct")
+            ),),
+        )
+        runtime._mqtt_capabilities(SimpleNamespace(payload=capability.encode(), retain=True))
+        assert runtime.protocol["session"] == "new-session"
+        current = runtime_module.SnapshotMessage(
+            "snapshot-4", "new-session", "pc", 4, 10.0,
+            {"master_audio": {"volume": 0.7, "muted": False}}, {},
+        )
+        runtime._mqtt_snapshot(SimpleNamespace(payload=current.encode(), retain=True))
+        stale = runtime_module.SnapshotMessage(
+            "snapshot-3", "new-session", "pc", 3, 9.0,
+            {"master_audio": {"volume": 0.2, "muted": False}}, {},
+        )
+        runtime._mqtt_snapshot(SimpleNamespace(payload=stale.encode(), retain=True))
+        assert runtime.snapshot.revision == 4
+        assert runtime.snapshot.state["master_audio"]["volume"] == 0.7
+        runtime.close()
+
     asyncio.run(exercise())

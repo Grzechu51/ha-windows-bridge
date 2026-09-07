@@ -27,9 +27,14 @@ class Execution:
 
 class CommandRouter:
     def __init__(self, *, logger: logging.Logger | None = None, capacity: int = 1024,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time,
+                 monotonic_clock: Callable[[], float] | None = None):
         self.log = logger or logging.getLogger("bridge.commands")
         self._clock, self._capacity = clock, capacity
+        self._monotonic_clock = (
+            (time.monotonic if clock is time.time else clock)
+            if monotonic_clock is None else monotonic_clock
+        )
         self._handlers: dict[str, Handler] = {}
         self._executions: OrderedDict[str, Execution] = OrderedDict()
         self._worker = SerialWorker("bridge-commands", self.log, capacity=64)
@@ -58,7 +63,7 @@ class CommandRouter:
                     return CommandResult(command.id, "rejected", "id_conflict")
                 return previous.result or CommandResult(command.id, "pending")
             now = self._clock()
-            if command.expires_at <= now:
+            if command.is_expired(now, self._monotonic_clock()):
                 return CommandResult(command.id, "rejected", "expired")
             # Do not evict in-flight or recent results: saturated dedup cache rejects new work.
             for identifier, execution in tuple(self._executions.items()):
@@ -79,11 +84,11 @@ class CommandRouter:
                 return
             execution.started = True
         try:
-            if command.expires_at <= self._clock():
+            if command.is_expired(self._clock(), self._monotonic_clock()):
                 raise CommandError("expired")
             data = self._handlers[command.kind](command) or {}
             # Windows operations cannot safely be killed halfway through an OS API.
-            if command.expires_at <= self._clock():
+            if command.is_expired(self._clock(), self._monotonic_clock()):
                 result = CommandResult(command.id, "failed", "deadline_exceeded", {"may_have_completed": True})
             else:
                 result = CommandResult(command.id, "succeeded", data=data)

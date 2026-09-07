@@ -112,4 +112,4 @@ def test_sensor_aggregation_and_v2_inventory_are_separate_from_transport():
     service.publish_discovery()
     announcements = [json.loads(call.args[1]) for call in publisher.publish.call_args_list if str(call.args[1]).startswith('{')]
     assert announcements[0]["schema"] == 3
-    assert announcements[0]["protocol"]["version"] == 2
+    assert announcements[0]["protocol"]["version"] == 3

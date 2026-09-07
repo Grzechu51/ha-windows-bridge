@@ -107,6 +107,25 @@ class StatePublisher:
         return self.flush()
 
     def flush(self):
+        if getattr(self.transport, "supports_delivery_ack", False) is True:
+            def send_confirmed(item: OutboxItem, acknowledge) -> bool:
+                try:
+                    return self.transport.publish(
+                        item.key,
+                        item.payload,
+                        qos=item.qos,
+                        retain=item.retain,
+                        on_delivery=acknowledge,
+                    )
+                except Exception:
+                    self.log.exception("State send failed; observation remains pending")
+                    return False
+
+            return self.outbox.flush_confirmed(
+                send_confirmed,
+                lambda item: self.events.emit("telemetry.published", item.key),
+            )
+
         def send(item: OutboxItem) -> bool:
             try:
                 return self.transport.publish(

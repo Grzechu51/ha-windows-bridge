@@ -1,16 +1,31 @@
-"""Decode wire messages into application commands; all route permissions are explicit."""
+"""Protocol v3 routing plus the deliberately isolated legacy compatibility edge."""
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import threading
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from .. import discovery as topics
 from ..config import AppConfig
-from ..core.commands import MAX_COMMAND_BYTES, Command, CommandError, reject_constant
+from ..core.commands import Command, CommandError, CommandResult, reject_constant
 from ..media_protocol import media_topics
+from .schema import (
+    CapabilitiesMessage,
+    Capability,
+    CommandMessage,
+    ProtocolError,
+    ResultMessage,
+    SnapshotMessage,
+    legacy_arguments,
+)
+
+LEGACY_PROTOCOL_VERSION = 2
+LEGACY_COMMAND_BYTES = 768 * 1024
 
 
 @dataclass(frozen=True)
@@ -38,15 +53,109 @@ def legacy_volume(text: str) -> float:
     return value if fraction else value / 100
 
 
+class LegacyProtocolAdapter:
+    """Translate v2/entity commands at the edge; never expose legacy internally."""
+
+    def __init__(self, command_topic: str, routes: dict[str, Route], *, clock=time.time,
+                 monotonic_clock=time.monotonic):
+        self.command_topic, self.routes, self._clock = command_topic, routes, clock
+        self._monotonic_clock = monotonic_clock
+        self._lock = threading.Lock()
+        self._recent: OrderedDict[str, tuple[str, float]] = OrderedDict()
+
+    def decode(self, topic: str, payload: bytes, retained: bool) -> Command:
+        if retained:
+            raise CommandError("retained_command")
+        if topic == self.command_topic:
+            return self._envelope(payload)
+        route = self.routes.get(topic)
+        if route is None:
+            raise CommandError("not_allowed")
+        limit = LEGACY_COMMAND_BYTES if route.kind == "overlay.show" else 8192
+        if not payload or len(payload) > limit:
+            raise CommandError("payload_size")
+        arguments = self._arguments(route.parser, payload)
+        now = self._clock()
+        digest = hashlib.sha256(topic.encode() + b"\0" + payload).hexdigest()
+        with self._lock:
+            for key, (_identifier, expires) in tuple(self._recent.items()):
+                if expires <= now:
+                    self._recent.pop(key)
+            cached = self._recent.get(digest)
+            identifier = cached[0] if cached else "legacy-" + uuid.uuid4().hex
+            self._recent[digest] = (identifier, now + 10)
+            while len(self._recent) > 1024:
+                self._recent.popitem(last=False)
+        return Command(identifier, route.kind, route.target, arguments, now + 10,
+                       session="legacy-v2", monotonic_expires_at=self._monotonic_clock() + 10)
+
+    def _envelope(self, payload: bytes) -> Command:
+        if not payload or len(payload) > LEGACY_COMMAND_BYTES:
+            raise CommandError("payload_size")
+        try:
+            value = json.loads(payload.decode("utf-8"), parse_constant=reject_constant)
+        except (UnicodeError, ValueError, RecursionError):
+            raise CommandError("invalid_json") from None
+        allowed = {"version", "id", "kind", "target", "arguments", "issued_at", "ttl_ms"}
+        if not isinstance(value, dict) or value.get("version") != LEGACY_PROTOCOL_VERSION:
+            raise CommandError("protocol_version")
+        if set(value) - allowed:
+            raise CommandError("unknown_field")
+        identifier, kind = value.get("id"), value.get("kind")
+        target, arguments = value.get("target", ""), value.get("arguments", {})
+        from ..core.commands import COMMAND_KIND, IDENTIFIER
+        if not isinstance(identifier, str) or IDENTIFIER.fullmatch(identifier) is None:
+            raise CommandError("command_id")
+        if not isinstance(kind, str) or COMMAND_KIND.fullmatch(kind) is None:
+            raise CommandError("command_kind")
+        if not isinstance(target, str) or (target and IDENTIFIER.fullmatch(target) is None):
+            raise CommandError("command_target")
+        if not isinstance(arguments, dict):
+            raise CommandError("command_arguments")
+        issued, ttl = value.get("issued_at"), value.get("ttl_ms", 10_000)
+        if type(issued) not in {int, float} or not math.isfinite(issued):
+            raise CommandError("issued_at")
+        if type(ttl) is not int or not 100 <= ttl <= 60_000:
+            raise CommandError("ttl")
+        now, deadline = self._clock(), issued + ttl / 1000
+        if issued > now + 30:
+            raise CommandError("clock_skew")
+        if deadline <= now:
+            raise CommandError("expired")
+        return Command(identifier, kind, target, arguments, deadline, session="legacy-v2",
+                       monotonic_expires_at=self._monotonic_clock() + deadline - now)
+
+    @staticmethod
+    def _arguments(parser: str, payload: bytes) -> dict:
+        try:
+            text = payload.decode("utf-8").strip()
+            return legacy_arguments(parser, text)
+        except (UnicodeError, ProtocolError) as exc:
+            raise CommandError(exc.code if isinstance(exc, ProtocolError) else "invalid_payload") from None
+
+
 class TopicProtocol:
-    def __init__(self, config: AppConfig):
-        self.command_topic = f"{config.mqtt.base_topic}/v2/command"
-        self.result_topic = f"{config.mqtt.base_topic}/v2/result"
+    """Device/session-scoped v3 contract with explicit transport capabilities."""
+
+    def __init__(self, config: AppConfig, *, session: str | None = None, clock=time.time,
+                 monotonic_clock=time.monotonic):
+        prefix = config.mqtt.base_topic
+        self.device_id = config.device_id
+        self.session = session or uuid.uuid4().hex
+        self.command_topic = f"{prefix}/v3/command"
+        self.result_topic = f"{prefix}/v3/result"
+        self.capabilities_topic = f"{prefix}/v3/capabilities"
+        self.snapshot_topic = f"{prefix}/v3/snapshot"
+        self.legacy_command_topic = f"{prefix}/v2/command"
         self.birth_topic = f"{config.mqtt.discovery_prefix}/status"
+        self._clock = clock
+        self._monotonic_clock = monotonic_clock
         self.routes: dict[str, Route] = {}
+
         def add(topic_pair, kind, parser="value", target=""):
             topic = topic_pair[0] if isinstance(topic_pair, tuple) else topic_pair
             self.routes[topic] = Route(kind, target, parser)
+
         if config.control_master_volume:
             add(topics.master_volume_topics(config), "audio.master.volume", "volume")
             add(topics.master_mute_topics(config), "audio.master.mute", "switch")
@@ -78,42 +187,71 @@ class TopicProtocol:
             add(topics.overlay_monitor_topics(config), "overlay.monitor")
         if config.enable_windows_notifications:
             add(topics.windows_notification_topic(config), "notification.show", "json")
+        self.legacy = LegacyProtocolAdapter(
+            self.legacy_command_topic,
+            self.routes,
+            clock=clock,
+            monotonic_clock=monotonic_clock,
+        )
 
     @property
     def subscriptions(self) -> set[str]:
-        return {*self.routes, self.command_topic, self.birth_topic}
+        return {*self.routes, self.command_topic, self.legacy_command_topic, self.birth_topic}
 
     def decode(self, topic: str, payload: bytes, retained: bool = False) -> Command:
-        if topic == self.command_topic:
-            return Command.parse(payload, retained=retained)
-        if retained:
-            raise CommandError("retained_command")
-        route = self.routes.get(topic)
-        if route is None:
-            raise CommandError("not_allowed")
-        limit = MAX_COMMAND_BYTES if route.kind == "overlay.show" else 8192
-        if len(payload) > limit:
-            raise CommandError("payload_size")
+        if topic != self.command_topic:
+            return self.legacy.decode(topic, payload, retained)
         try:
-            text = payload.decode("utf-8").strip()
-            if route.parser == "json":
-                arguments = json.loads(text, parse_constant=reject_constant)
-                if not isinstance(arguments, dict):
-                    raise CommandError("command_arguments")
-            elif route.parser == "volume":
-                arguments = {"value": legacy_volume(text)}
-            elif route.parser == "balance":
-                arguments = {"value": number(text, -100, 100) / 100}
-            elif route.parser == "switch":
-                if text.lower() not in {"on", "off", "1", "0", "true", "false", "yes", "no"}:
-                    raise CommandError("invalid_switch")
-                arguments = {"value": text.lower() in {"on", "1", "true", "yes"}}
-            elif route.parser == "button":
-                if text != "PRESS":
-                    raise CommandError("invalid_button")
-                arguments = {}
-            else:
-                arguments = {"value": text}
-        except (UnicodeError, ValueError, RecursionError) as exc:
-            raise CommandError(exc.code if isinstance(exc, CommandError) else "invalid_payload") from None
-        return Command(uuid.uuid4().hex, route.kind, route.target, arguments, time.time() + 10)
+            message = CommandMessage.decode(payload, retained=retained)
+        except ProtocolError as exc:
+            raise CommandError(exc.code) from None
+        if message.device_id != self.device_id:
+            raise CommandError("wrong_device")
+        if message.session != self.session:
+            raise CommandError("stale_session")
+        now = self._clock()
+        deadline = message.issued_at + message.ttl_ms / 1000
+        if message.issued_at > now + 30:
+            raise CommandError("clock_skew")
+        if deadline <= now:
+            raise CommandError("expired")
+        return Command(message.id, message.kind, message.target, message.arguments,
+                       deadline, session=message.session, device_id=message.device_id,
+                       monotonic_expires_at=self._monotonic_clock() + deadline - now)
+
+    def capabilities(self) -> CapabilitiesMessage:
+        grouped: dict[str, dict] = {}
+        for route in self.routes.values():
+            item = grouped.setdefault(route.kind, {"targets": set(), "parsers": set()})
+            if route.target:
+                item["targets"].add(route.target)
+            item["parsers"].add(route.parser)
+        capabilities = []
+        for kind, options in sorted(grouped.items()):
+            transports = ("mqtt", "direct") if kind == "overlay.show" else ("mqtt",)
+            capabilities.append(Capability(kind, transports, options={
+                "targets": sorted(options["targets"]), "parsers": sorted(options["parsers"])
+            }))
+        return CapabilitiesMessage("capabilities-" + self.session, self.session,
+                                   self.device_id, 1, tuple(capabilities))
+
+    def snapshot(self, state) -> SnapshotMessage:
+        master = state.master_audio
+        values = {}
+        if master is not None:
+            values["master_audio"] = {
+                "volume": master.volume, "muted": master.muted,
+                "observed_at": master.observed_at,
+            }
+        quality = {
+            item.source: {"quality": item.quality.value, "checked_at": item.checked_at,
+                          "last_success_at": item.last_success_at, "detail": item.detail}
+            for item in state.health
+        }
+        return SnapshotMessage("snapshot-" + str(state.revision), self.session,
+                               self.device_id, state.revision, state.updated_at,
+                               values, quality)
+
+    def result(self, result: CommandResult) -> ResultMessage:
+        return ResultMessage(result.id, self.session, self.device_id,
+                             result.status, result.code, result.data)

@@ -1,0 +1,65 @@
+{
+  "messages": [
+    {
+      "version": 3,
+      "type": "capabilities",
+      "id": "capabilities-session-a",
+      "session": "session-a",
+      "device_id": "desktop",
+      "revision": 1,
+      "protocol": {"min": 3, "max": 3},
+      "capabilities": [
+        {"name": "audio.master.volume", "transports": ["mqtt"], "permission": "control", "options": {}},
+        {"name": "overlay.show", "transports": ["mqtt", "direct"], "permission": "control", "options": {}}
+      ],
+      "future_field": {"preserved": true}
+    },
+    {
+      "version": 3,
+      "type": "snapshot",
+      "id": "snapshot-7",
+      "session": "session-a",
+      "device_id": "desktop",
+      "revision": 7,
+      "observed_at": 1770000000.25,
+      "state": {"master_audio": {"volume": 0.42, "muted": false, "observed_at": 1770000000.25}},
+      "quality": {"master_audio": {"quality": "good", "checked_at": 1770000000.25}}
+    },
+    {
+      "version": 3,
+      "type": "command",
+      "id": "command-1",
+      "session": "session-a",
+      "device_id": "desktop",
+      "kind": "audio.master.volume",
+      "target": "",
+      "arguments": {"value": 0.42},
+      "issued_at": 1770000000.0,
+      "ttl_ms": 10000
+    },
+    {
+      "version": 3,
+      "type": "result",
+      "id": "command-1",
+      "session": "session-a",
+      "device_id": "desktop",
+      "status": "succeeded",
+      "code": "",
+      "data": {"confirmed": true}
+    }
+  ],
+  "malformed": [
+    "[]",
+    "{\"version\":3,\"type\":\"command\"}",
+    "{\"version\":4,\"type\":\"result\",\"id\":\"x\",\"session\":\"s\",\"device_id\":\"d\",\"status\":\"succeeded\"}",
+    "{\"version\":3,\"type\":\"snapshot\",\"id\":\"x\",\"session\":\"s\",\"device_id\":\"d\",\"revision\":-1,\"observed_at\":1,\"state\":{}}"
+  ],
+  "legacy_commands": [
+    {"parser": "volume", "payload": "42", "arguments": {"value": 0.42}},
+    {"parser": "volume", "payload": "0.5", "arguments": {"value": 0.5}},
+    {"parser": "balance", "payload": "-25", "arguments": {"value": -0.25}},
+    {"parser": "switch", "payload": "ON", "arguments": {"value": true}},
+    {"parser": "button", "payload": "PRESS", "arguments": {}},
+    {"parser": "json", "payload": "{\"message\":\"hello\"}", "arguments": {"message": "hello"}}
+  ]
+}

@@ -62,7 +62,7 @@ def integration_announcement_payload(
     }
 
 
-# Keep these v2 wire limits aligned with the HA decoder (contract-tested).
+# Keep these inventory limits aligned with the HA decoder (contract-tested).
 MAX_ENTITIES = 256
 MAX_ANNOUNCEMENT_PAYLOAD = 256 * 1024
 MAX_ROUTES = 512
@@ -75,8 +75,16 @@ def inventory_budget_errors(config: AppConfig) -> list[str]:
     payload = integration_announcement_payload(config)
     protocol = TopicProtocol(config)
     routes = {topic: asdict(route) for topic, route in protocol.routes.items()}
-    payload.update(schema=3, protocol={"version": 2, "command_topic": protocol.command_topic,
-                                      "result_topic": protocol.result_topic, "routes": routes})
+    payload.update(schema=3, protocol={
+        "version": 3,
+        "session": protocol.session,
+        "command_topic": protocol.command_topic,
+        "result_topic": protocol.result_topic,
+        "capabilities_topic": protocol.capabilities_topic,
+        "snapshot_topic": protocol.snapshot_topic,
+        "legacy_command_topic": protocol.legacy_command_topic,
+        "routes": routes,
+    })
     errors = []
     if len(payload["entities"]) > MAX_ENTITIES:
         errors.append(f"Inventory exceeds the Home Assistant limit of {MAX_ENTITIES} entities.")

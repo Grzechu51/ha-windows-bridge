@@ -118,8 +118,8 @@ def test_reference_profile_reproduces_linux_ha_announcement_fixture():
     config = parse_settings(json.loads((root / "profile-settings-v2.json").read_text()))
     payload = integration_announcement_payload(config, ["Speakers"], overlay_monitors=["Monitor"])
     protocol = TopicProtocol(config)
-    payload.update(schema=3, protocol={"version": 2, "command_topic": protocol.command_topic,
-                                      "result_topic": protocol.result_topic,
+    payload.update(schema=3, protocol={"version": 2, "command_topic": protocol.legacy_command_topic,
+                                      "result_topic": f"{config.mqtt.base_topic}/v2/result",
                                       "routes": {topic: asdict(route) for topic, route in protocol.routes.items()}})
     assert payload == json.loads((root / "announcement-v2.json").read_text())
     assert decoder().parse_discovery_announcement(json.dumps(payload)) is not None

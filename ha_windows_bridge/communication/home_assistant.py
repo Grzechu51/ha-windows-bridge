@@ -12,6 +12,8 @@ from urllib.parse import urlparse, urlunparse
 import websocket
 
 from ..core.commands import Command, CommandError
+from .protocol import TopicProtocol
+from .schema import CommandMessage, ProtocolError
 from .state import Backoff, ConnectionMachine, ConnectionState
 
 
@@ -56,8 +58,9 @@ def response_error(response):
 
 
 class HomeAssistantTransport:
-    def __init__(self, config, events, receive, *, socket_factory=None):
+    def __init__(self, config, events, receive, *, protocol=None, socket_factory=None):
         self.config, self.receive = config, receive
+        self.protocol = protocol or TopicProtocol(config)
         self.machine = ConnectionMachine("home_assistant", events)
         self.log = logging.getLogger("bridge.ha")
         self._socket_factory = socket_factory or websocket.create_connection
@@ -107,11 +110,14 @@ class HomeAssistantTransport:
         with self._lock:
             if self._stop.is_set() or self._socket is None:
                 raise ConnectionError("HA disconnected")
+            connection = self._socket
             if numbered:
                 self._sequence += 1
                 payload = {**payload, "id": self._sequence}
-            self._socket.send(json.dumps(payload, separators=(",", ":"), allow_nan=False))
-            return self._sequence
+            sequence = self._sequence
+        # WebSocket I/O must never run while the transport ownership lock is held.
+        connection.send(json.dumps(payload, separators=(",", ":"), allow_nan=False))
+        return sequence
 
     def _connect(self):
         settings = self.config.home_assistant
@@ -132,14 +138,21 @@ class HomeAssistantTransport:
                 raise HomeAssistantConnectionError("authentication", authentication=True)
             if auth != "auth_ok":
                 raise ConnectionError("HA authentication handshake")
-            subscription = self._send({"type": "ha_windows_bridge/connect", "device_id": self.config.device_id})
+            manifest = self.protocol.capabilities()
+            subscription = self._send({
+                "type": "ha_windows_bridge/connect",
+                "device_id": self.config.device_id,
+                "protocol": 3,
+                "session": self.protocol.session,
+                "capabilities": [item.to_dict() for item in manifest.capabilities],
+            })
             response = self._read(connection)
             if response.get("type") != "result" or response.get("id") != subscription:
                 raise ConnectionError("Invalid HA subscription response")
             if not response.get("success"):
                 raise response_error(response)
             result = response.get("result")
-            if isinstance(result, dict) and result.get("protocol") != 2:
+            if not isinstance(result, dict) or result.get("protocol") != 3:
                 raise HomeAssistantConnectionError("protocol_mismatch", configuration=True)
             connection.settimeout(1)
             return connection, subscription
@@ -204,8 +217,9 @@ class HomeAssistantTransport:
         if self.machine.status.state != ConnectionState.CONNECTED or result.status in {"accepted", "pending"}:
             return
         try:
+            message = self.protocol.result(result)
             self._send({"type": "ha_windows_bridge/result", "device_id": self.config.device_id,
-                        "result": json.loads(result.encode())})
+                        "result": message.to_dict()})
         except Exception:
             self.log.warning("HA command result could not be delivered")
 
@@ -213,7 +227,8 @@ class HomeAssistantTransport:
 class HomeAssistantGateway:
     def __init__(self, config, router, events):
         self.router = router
-        self.transport = HomeAssistantTransport(config, events, self.receive)
+        self.protocol = TopicProtocol(config)
+        self.transport = HomeAssistantTransport(config, events, self.receive, protocol=self.protocol)
 
     def start(self):
         self.transport.start()
@@ -223,10 +238,21 @@ class HomeAssistantGateway:
 
     def receive(self, value):
         try:
-            command = Command.parse(json.dumps(value, allow_nan=False).encode())
-            if command.kind != "overlay.show":
+            message = CommandMessage.decode(json.dumps(value, allow_nan=False))
+            if message.device_id != self.protocol.device_id:
+                raise CommandError("wrong_device")
+            if message.session != self.protocol.session:
+                raise CommandError("stale_session")
+            if message.kind != "overlay.show":
                 raise CommandError("direct_scope")
-        except (CommandError, ValueError, RecursionError):
+            now = time.time()
+            deadline = message.issued_at + message.ttl_ms / 1000
+            if message.issued_at > now + 30 or deadline <= now:
+                raise CommandError("expired")
+            command = Command(message.id, message.kind, message.target, message.arguments,
+                              deadline, message.session, message.device_id,
+                              time.monotonic() + deadline - now)
+        except (ProtocolError, CommandError, ValueError, RecursionError):
             self.transport.log.warning("Direct overlay command rejected")
             return
         result = self.router.submit(command, self.transport.acknowledge)

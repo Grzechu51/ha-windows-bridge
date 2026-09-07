@@ -81,6 +81,8 @@ def test_p06_gateway_reconnect_and_publish_finish_in_controlled_interleaving(mon
             failures.append("connection callback blocked")
             return False
         result = gateway.transport.connected  # Actual ConnectionMachine lock acquisition.
+        if result and kwargs.get("on_delivery"):
+            kwargs["on_delivery"](True)
         sent.set()
         return result
 

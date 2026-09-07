@@ -399,6 +399,79 @@ def test_projection_revision_fences_delayed_start_snapshot():
         assert projection.stop()
 
 
+def _started_volume_projection():
+    events = EventBus()
+    state = ComputerStateStore(events)
+    state.begin_generation(1)
+    state.observe_master_audio(.2, False, generation=1)
+    config = AppConfig(mqtt=MqttConfig(host="broker"))
+    transport = FakeTransport()
+    publisher = StatePublisher(transport, events, generation=1)
+    projection = MasterAudioProjection(config, state, publisher, events, 1)
+    projection.start()
+    return state, config, transport, publisher, projection
+
+
+def test_volume_projection_accumulates_one_hundred_sub_threshold_changes():
+    state, config, transport, publisher, projection = _started_volume_projection()
+    try:
+        for step in range(1, 101):
+            state.observe_master_audio(.2 + step * .003, False, generation=1)
+
+        topic = master_volume_topics(config)[1]
+        observed = {item.key: item for item in publisher.outbox.observed()}
+        assert state.snapshot().master_audio.volume == pytest.approx(.5)
+        assert observed[topic].payload == "50"
+
+        transport.sent.clear()
+        publisher.request_replay()
+        assert publisher.flush()
+        assert [
+            payload
+            for sent_topic, payload, _kwargs in transport.sent
+            if sent_topic == topic
+        ] == ["50"]
+    finally:
+        assert projection.stop()
+
+
+def test_volume_projection_accumulates_small_changes_against_accepted_value():
+    state, config, transport, publisher, projection = _started_volume_projection()
+    try:
+        topic = master_volume_topics(config)[1]
+        for volume in (.202, .204, .206):
+            state.observe_master_audio(volume, False, generation=1)
+
+        observed = {item.key: item for item in publisher.outbox.observed()}
+        assert observed[topic].payload == "21"
+        assert observed[topic].revision == state.snapshot().revision
+        assert [
+            payload
+            for sent_topic, payload, _kwargs in transport.sent
+            if sent_topic == topic
+        ] == ["20", "21"]
+    finally:
+        assert projection.stop()
+
+
+def test_volume_projection_does_not_publish_one_sub_threshold_change():
+    state, config, transport, publisher, projection = _started_volume_projection()
+    try:
+        topic = master_volume_topics(config)[1]
+        initial = {item.key: item for item in publisher.outbox.observed()}[topic]
+        state.observe_master_audio(.203, False, generation=1)
+
+        observed = {item.key: item for item in publisher.outbox.observed()}[topic]
+        assert observed == initial
+        assert [
+            payload
+            for sent_topic, payload, _kwargs in transport.sent
+            if sent_topic == topic
+        ] == ["20"]
+    finally:
+        assert projection.stop()
+
+
 @pytest.mark.parametrize("sample_before_start", [True, False])
 def test_publish_initial_false_skips_first_good_sample_regardless_of_timing(
     sample_before_start,

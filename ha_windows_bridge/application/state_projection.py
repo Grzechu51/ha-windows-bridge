@@ -70,27 +70,26 @@ class MasterAudioProjection:
                 or abs(self._last_volume - master.volume) >= 0.005
             )
             mute_changed = self._last_mute is None or self._last_mute != master.muted
-            accepted = True
             if volume_changed:
                 _, topic = master_volume_topics(self.config)
-                accepted = self.publisher.publish_observation(
+                volume_accepted = self.publisher.publish_observation(
                     topic,
                     str(round(master.volume * 100)),
                     qos=1,
                     generation=state.generation,
                     revision=state.revision,
-                ) and accepted
+                )
+                if volume_accepted:
+                    self._last_volume = master.volume
             if mute_changed:
                 _, topic = master_mute_topics(self.config)
-                accepted = self.publisher.publish_observation(
+                mute_accepted = self.publisher.publish_observation(
                     topic,
                     "ON" if master.muted else "OFF",
                     qos=1,
                     generation=state.generation,
                     revision=state.revision,
-                ) and accepted
-            if not accepted:
-                return
-            self._last_volume = master.volume
-            self._last_mute = master.muted
+                )
+                if mute_accepted:
+                    self._last_mute = master.muted
             self._last_revision = state.revision

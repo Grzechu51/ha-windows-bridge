@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -14,35 +13,21 @@ from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_call_later
 
+from .protocol import (
+    CapabilitiesMessage,
+    CommandMessage,
+    ProtocolError,
+    ResultMessage,
+    SnapshotMessage,
+    legacy_arguments,
+)
+
 
 def command_arguments(parser: str, payload: str) -> dict:
-    if parser == "json":
-        try:
-            value = json.loads(payload)
-        except (ValueError, RecursionError):
-            raise HomeAssistantError("Invalid command JSON") from None
-        if not isinstance(value, dict):
-            raise HomeAssistantError("Command must be an object")
-        return value
-    if parser in {"volume", "balance"}:
-        try:
-            value = float(payload)
-        except (ValueError, OverflowError):
-            raise HomeAssistantError("Invalid command number") from None
-        if not math.isfinite(value):
-            raise HomeAssistantError("Command number is not finite")
-        if parser == "balance" or not (0 < value < 1 or (value == 1 and ("." in payload or "e" in payload.lower()))):
-            value /= 100
-        return {"value": value}
-    if parser == "switch":
-        if payload.lower() not in {"on", "off", "true", "false", "1", "0", "yes", "no"}:
-            raise HomeAssistantError("Invalid switch command")
-        return {"value": payload.lower() in {"on", "true", "1", "yes"}}
-    if parser == "button":
-        if payload != "PRESS":
-            raise HomeAssistantError("Invalid button command")
-        return {}
-    return {"value": payload}
+    try:
+        return legacy_arguments(parser, payload)
+    except ProtocolError:
+        raise HomeAssistantError("Invalid legacy command payload") from None
 
 
 @dataclass
@@ -63,22 +48,35 @@ class BridgeRuntime:
     _closed: bool = False
     owner: Any = None
     _direct_sender: Any = None
+    _direct_session: str = ""
+    capabilities: Any = None
+    snapshot: Any = None
+    _snapshot_revision: int = -1
+    _capabilities_revision: int = -1
+    command_attempt_timeout: float = 5.0
 
     async def start(self):
         if not self.overlay_event_type and self.protocol:
             self._unsubscribe.append(await mqtt.async_subscribe(self.hass, self.protocol["result_topic"], self._mqtt_result, qos=1))
+            if self.protocol.get("version") == 3:
+                self._unsubscribe.append(await mqtt.async_subscribe(
+                    self.hass, self.protocol["capabilities_topic"], self._mqtt_capabilities, qos=1))
+                self._unsubscribe.append(await mqtt.async_subscribe(
+                    self.hass, self.protocol["snapshot_topic"], self._mqtt_snapshot, qos=1))
 
     @callback
-    def attach(self, owner, sender):
+    def attach(self, owner, sender, session=""):
         if self._closed or self.owner is not None:
             raise HomeAssistantError("Windows Bridge is already connected or unloading")
         self.owner, self._direct_sender = owner, sender
+        self._direct_session = session or self.protocol.get("session", "") or uuid.uuid4().hex
         self.heartbeat()
 
     @callback
     def detach(self, owner):
         if self.owner is owner:
             self.owner, self._direct_sender = None, None
+            self._direct_session = ""
             self._expired(None)
 
     @callback
@@ -95,6 +93,7 @@ class BridgeRuntime:
             self._deadline_cancel()
         self.available = False
         self.owner, self._direct_sender = None, None
+        self._direct_session = ""
         self._deadline_cancel = None
         for identifier in tuple(self._direct_pending):
             future = self.pending.get(identifier)
@@ -111,19 +110,65 @@ class BridgeRuntime:
     def _mqtt_result(self, message):
         if message.retain or len(message.payload) > 8192:
             return
+        self._result(message.payload)
+
+    @callback
+    def _mqtt_capabilities(self, message):
         try:
-            value = json.loads(message.payload)
-        except (ValueError, UnicodeError):
+            value = CapabilitiesMessage.decode(message.payload)
+        except ProtocolError:
             return
-        self._result(value)
+        if value.device_id != self.device_id:
+            return
+        previous_session = self.protocol.get("session")
+        if value.session == previous_session and value.revision < self._capabilities_revision:
+            return
+        if value.session != previous_session:
+            self._snapshot_revision = -1
+            self.snapshot = None
+            for identifier, future in tuple(self.pending.items()):
+                if identifier not in self._direct_pending and not future.done():
+                    future.set_exception(HomeAssistantError("Windows Bridge session changed"))
+        # A retained capability manifest is the authoritative current MQTT session.
+        self.protocol["session"] = value.session
+        self._capabilities_revision = value.revision
+        self.capabilities = value
+
+    @callback
+    def _mqtt_snapshot(self, message):
+        try:
+            value = SnapshotMessage.decode(message.payload)
+        except ProtocolError:
+            return
+        if (value.device_id != self.device_id or value.session != self.protocol.get("session")
+                or value.revision < self._snapshot_revision):
+            return
+        self._snapshot_revision = value.revision
+        self.snapshot = value
+        self._notify()
 
     @callback
     def _result(self, value):
-        if not isinstance(value, dict) or value.get("version") != 2 or not isinstance(value.get("id"), str):
-            return
-        future = self.pending.get(value.get("id"))
-        status = value.get("status")
-        if future is not None and not future.done() and isinstance(status, str) and status in {"succeeded", "failed", "rejected", "cancelled"}:
+        if self.protocol.get("version") == 2:
+            try:
+                value = json.loads(value) if isinstance(value, (str, bytes)) else value
+            except (ValueError, UnicodeError):
+                return
+            if not isinstance(value, dict) or value.get("version") != 2 or not isinstance(value.get("id"), str):
+                return
+            identifier, status = value["id"], value.get("status")
+        else:
+            try:
+                raw = json.dumps(value, allow_nan=False) if isinstance(value, dict) else value
+                message = ResultMessage.decode(raw)
+            except (ProtocolError, ValueError, TypeError, RecursionError):
+                return
+            expected_session = self._direct_session if message.id in self._direct_pending else self.protocol.get("session")
+            if message.device_id != self.device_id or message.session != expected_session:
+                return
+            identifier, status, value = message.id, message.status, message.to_dict()
+        future = self.pending.get(identifier)
+        if future is not None and not future.done() and status in {"succeeded", "failed", "rejected", "cancelled"}:
             future.set_result(value)
 
     async def send(self, topic: str, payload: str, *, direct=False):
@@ -147,12 +192,31 @@ class BridgeRuntime:
             kind, target = route["kind"], route.get("target", "")
             arguments = command_arguments(route["parser"], payload)
         identifier = uuid.uuid4().hex
-        command = {"version": 2, "id": identifier, "kind": kind, "target": target,
-                   "arguments": arguments, "issued_at": time.time(), "ttl_ms": 10000}
-        try:
-            serialized = json.dumps(command, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        except (ValueError, TypeError, RecursionError):
-            raise HomeAssistantError("Invalid command content") from None
+        version = 3 if direct else self.protocol.get("version", 3)
+        if version == 3:
+            if self.capabilities is not None:
+                transport_name = "direct" if direct else "mqtt"
+                capability = next(
+                    (item for item in self.capabilities.capabilities if item.name == kind),
+                    None,
+                )
+                if capability is None or transport_name not in capability.transports:
+                    raise HomeAssistantError("Capability is not available on this transport")
+            session = self._direct_session if direct else self.protocol.get("session", "")
+            try:
+                message = CommandMessage(identifier, session, self.device_id, kind, target,
+                                         arguments, time.time(), 12000)
+                command = message.to_dict()
+                serialized = message.encode()
+            except ProtocolError:
+                raise HomeAssistantError("Invalid protocol session") from None
+        else:
+            command = {"version": 2, "id": identifier, "kind": kind, "target": target,
+                       "arguments": arguments, "issued_at": time.time(), "ttl_ms": 12000}
+            try:
+                serialized = json.dumps(command, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+            except (ValueError, TypeError, RecursionError):
+                raise HomeAssistantError("Invalid command content") from None
         if len(serialized.encode()) > 768 * 1024:
             raise HomeAssistantError("Command exceeds size limit")
         if len(self.pending) >= 64:
@@ -162,12 +226,20 @@ class BridgeRuntime:
         if direct:
             self._direct_pending.add(identifier)
         try:
-            if direct:
-                self._direct_sender(command)
-            else:
-                await mqtt.async_publish(self.hass, self.protocol["command_topic"], serialized, qos=1, retain=False)
-            async with asyncio.timeout(10):
-                result = await future
+            attempts = 1 if direct else 2
+            result = None
+            for attempt in range(attempts):
+                if direct:
+                    self._direct_sender(command)
+                else:
+                    await mqtt.async_publish(self.hass, self.protocol["command_topic"], serialized, qos=1, retain=False)
+                try:
+                    async with asyncio.timeout(self.command_attempt_timeout):
+                        result = await asyncio.shield(future)
+                    break
+                except TimeoutError:
+                    if attempt + 1 == attempts:
+                        raise
             if result.get("status") != "succeeded":
                 # Error codes only; never render arbitrary remote details.
                 raise HomeAssistantError("Windows Bridge rejected or failed the command")
@@ -194,3 +266,4 @@ class BridgeRuntime:
         self.listeners.clear()
         self.available = False
         self.owner, self._direct_sender = None, None
+        self._direct_session = ""

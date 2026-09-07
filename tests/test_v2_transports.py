@@ -40,7 +40,8 @@ def ha_transport(socket, receive=lambda value: None):
 
 
 def handshake():
-    return [{"type": "auth_required"}, {"type": "auth_ok"}, {"type": "result", "id": 1, "success": True}]
+    return [{"type": "auth_required"}, {"type": "auth_ok"},
+            {"type": "result", "id": 1, "success": True, "result": {"protocol": 3}}]
 
 
 def test_ha_authenticates_with_scoped_api_and_acks_without_event_bus():
@@ -51,9 +52,12 @@ def test_ha_authenticates_with_scoped_api_and_acks_without_event_bus():
     assert connection is socket and subscription == 1
     assert socket.sent[0] == {"type": "auth", "access_token": "private"}
     assert socket.sent[1]["type"] == "ha_windows_bridge/connect"
+    assert socket.sent[1]["protocol"] == 3
+    assert socket.sent[1]["session"] == transport.protocol.session
     transport.machine.connected(transport._epoch)
     transport.acknowledge(CommandResult("id", "succeeded"))
     assert socket.sent[-1]["type"] == "ha_windows_bridge/result"
+    assert socket.sent[-1]["result"]["version"] == 3
     assert transport.stop() and socket.closed
 
 
@@ -94,13 +98,13 @@ def test_ha_heartbeat_timeout_is_bounded_without_waiting_wall_clock(monkeypatch)
 
 
 def test_ha_delivers_only_subscription_events():
-    socket = Socket(handshake() + [{"type": "event", "id": 7, "event": {"wrong": True}}, {"type": "event", "id": 1, "event": {"version": 2}}])
+    socket = Socket(handshake() + [{"type": "event", "id": 7, "event": {"wrong": True}}, {"type": "event", "id": 1, "event": {"version": 3}}])
     values = []
     transport = ha_transport(socket)
     transport.receive = lambda value: (values.append(value), transport._stop.set())
     transport._connect()
     transport._read_events(socket, 1)
-    assert values == [{"version": 2}]
+    assert values == [{"version": 3}]
     transport.stop()
 
 

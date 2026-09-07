@@ -14,16 +14,19 @@ from ha_windows_bridge.core.state import ServiceState, StateStore
 
 
 def payload(**updates):
-    return json.dumps({"version": 2, "id": "test-1", "kind": "audio.volume", "issued_at": 100, **updates}).encode()
+    return json.dumps({"version": 3, "type": "command", "id": "test-1",
+                       "session": "session-1", "device_id": "desktop",
+                       "kind": "audio.volume", "issued_at": 100, **updates}).encode()
 
 
 def test_commands_validate_replay_and_unknown_fields():
     command = Command.parse(payload(), now=101)
     assert command.expires_at == 110
     for value in (payload(version=1), payload(id="../bad"), payload(ttl_ms=True),
-                  payload(issued_at=150), payload(arguments=[]), payload(shell="bad")):
+                  payload(issued_at=150), payload(arguments=[]), payload(session=[])):
         with pytest.raises(CommandError):
             Command.parse(value, now=101)
+    assert Command.parse(payload(future_field={"allowed": True}), now=101).id == "test-1"
     with pytest.raises(CommandError, match="retained"):
         Command.parse(payload(), retained=True, now=101)
     with pytest.raises(CommandError, match="expired"):
