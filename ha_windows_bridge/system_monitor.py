@@ -126,6 +126,8 @@ class WindowsSystemMonitor:
         self._pending_updates: int | None = None
         self._update_check_time = 0.0
         self._update_thread: threading.Thread | None = None
+        self._update_guard = threading.Lock()
+        self._closed = False
 
     def context_snapshot(self) -> PcContext:
         process_name = ""
@@ -291,17 +293,20 @@ class WindowsSystemMonitor:
     def _schedule_windows_update_check(self) -> None:
         """Refresh Windows Update in a daemon so monitoring never blocks on the service."""
         now = time.monotonic()
-        if self._update_thread is not None and self._update_thread.is_alive():
-            return
-        if now - self._update_check_time < 30 * 60:
-            return
-        self._update_check_time = now
-        self._update_thread = threading.Thread(
-            target=self._read_pending_windows_updates,
-            name="windows-update-check",
-            daemon=True,
-        )
-        self._update_thread.start()
+        with self._update_guard:
+            if self._closed:
+                return
+            if self._update_thread is not None and self._update_thread.is_alive():
+                return
+            if now - self._update_check_time < 30 * 60:
+                return
+            self._update_check_time = now
+            self._update_thread = threading.Thread(
+                target=self._read_pending_windows_updates,
+                name="windows-update-check",
+                daemon=True,
+            )
+            self._update_thread.start()
 
     def _read_pending_windows_updates(self) -> None:
         import win32com.client
@@ -321,6 +326,20 @@ class WindowsSystemMonitor:
             self._pending_updates = None
             self._update_error = True
             logging.getLogger("bridge.providers").exception("Windows Update unavailable")
+        finally:
+            with self._update_guard:
+                if self._update_thread is threading.current_thread():
+                    self._update_thread = None
+
+    def close(self, timeout: float = 3.0) -> bool:
+        """Fence new checks and report whether the active WUA call completed."""
+
+        with self._update_guard:
+            self._closed = True
+            thread = self._update_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=timeout)
+        return thread is None or not thread.is_alive()
 
     @staticmethod
     def list_disk_volumes() -> list[DiskVolume]:

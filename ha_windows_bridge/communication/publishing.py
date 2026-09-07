@@ -40,8 +40,53 @@ class StatePublisher:
     ):
         if not retain:
             return self.transport.publish(topic, payload, qos=qos, retain=False)
+        observed = self._observe_retained(
+            topic,
+            payload,
+            qos=qos,
+            generation=generation,
+            revision=revision,
+        )
+        if not observed:
+            return False
+        if not self.outbox.is_dirty(topic):
+            return True
+        self.flush()
+        return not self.outbox.is_dirty(topic)
+
+    def publish_observation(
+        self,
+        topic,
+        payload,
+        *,
+        qos=1,
+        generation: int | None = None,
+        revision: int | None = None,
+    ) -> bool:
+        """Accept a retained observation independently of transport delivery."""
+
+        observed = self._observe_retained(
+            topic,
+            payload,
+            qos=qos,
+            generation=generation,
+            revision=revision,
+        )
+        if observed and self.outbox.is_dirty(topic):
+            self.flush()
+        return observed
+
+    def _observe_retained(
+        self,
+        topic,
+        payload,
+        *,
+        qos: int,
+        generation: int | None,
+        revision: int | None,
+    ) -> bool:
         try:
-            observed = self.outbox.observe(
+            return self.outbox.observe(
                 topic,
                 payload,
                 qos=qos,
@@ -52,12 +97,6 @@ class StatePublisher:
         except OverflowError:
             self.log.error("State outbox is full; rejected new key: %s", topic)
             return False
-        if not observed:
-            return False
-        if not self.outbox.is_dirty(topic):
-            return True
-        self.flush()
-        return not self.outbox.is_dirty(topic)
 
     def request_replay(self):
         """Network callbacks only schedule work; the publishing owner drains it."""

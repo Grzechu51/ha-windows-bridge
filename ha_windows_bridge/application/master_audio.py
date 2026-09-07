@@ -50,6 +50,7 @@ class MasterAudioProvider:
         self._stopping = True
         self._paused = False
         self._sample_requested = False
+        self._sample_epoch = 0
 
     def start(self) -> None:
         with self._condition:
@@ -58,6 +59,7 @@ class MasterAudioProvider:
             self._stopping = False
             self._paused = False
             self._sample_requested = True
+            self._sample_epoch += 1
             self._thread = threading.Thread(
                 target=self._run,
                 name=f"master-audio-{self.generation}",
@@ -68,6 +70,7 @@ class MasterAudioProvider:
     def stop(self) -> bool:
         with self._condition:
             self._stopping = True
+            self._sample_epoch += 1
             while self._pending:
                 request = self._pending.popleft()
                 request.cancelled = True
@@ -88,15 +91,16 @@ class MasterAudioProvider:
     def pause(self, enabled: bool) -> None:
         with self._condition:
             self._paused = enabled
+            self._sample_epoch += 1
             if not enabled:
                 self._sample_requested = True
             self._condition.notify_all()
-        if enabled:
-            self.state.fail_master_audio(
-                StateQuality.PAUSED,
-                "sampling_paused",
-                generation=self.generation,
-            )
+            if enabled:
+                self.state.fail_master_audio(
+                    StateQuality.PAUSED,
+                    "sampling_paused",
+                    generation=self.generation,
+                )
 
     def set_master_volume(self, volume: float) -> bool:
         def command() -> bool:
@@ -194,25 +198,36 @@ class MasterAudioProvider:
                 next_sample = self._clock() + self.poll_interval
 
     def _sample(self) -> bool:
+        with self._condition:
+            sample_epoch = self._sample_epoch
+            if self._stopping or self._paused:
+                return False
         try:
             snapshot = self.adapter.get_master_snapshot()
         except Exception:
             self.log.exception("Master audio sample failed")
-            self.state.fail_master_audio(
-                StateQuality.ERROR,
-                "provider_error",
+            quality = StateQuality.ERROR
+            detail = "provider_error"
+            snapshot = None
+        else:
+            quality = StateQuality.UNAVAILABLE
+            detail = "endpoint_unavailable"
+        with self._condition:
+            if (
+                sample_epoch != self._sample_epoch
+                or self._stopping
+                or self._paused
+            ):
+                return False
+            if snapshot is None:
+                self.state.fail_master_audio(
+                    quality,
+                    detail,
+                    generation=self.generation,
+                )
+                return False
+            return self.state.observe_master_audio(
+                snapshot.volume,
+                snapshot.muted,
                 generation=self.generation,
             )
-            return False
-        if snapshot is None:
-            self.state.fail_master_audio(
-                StateQuality.UNAVAILABLE,
-                "endpoint_unavailable",
-                generation=self.generation,
-            )
-            return False
-        return self.state.observe_master_audio(
-            snapshot.volume,
-            snapshot.muted,
-            generation=self.generation,
-        )

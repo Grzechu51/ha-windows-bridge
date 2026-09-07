@@ -14,7 +14,7 @@ from importlib.metadata import version
 from .. import __version__
 from ..communication.status import CONNECTION_NAMES, connection_text
 from ..config import AppConfig
-from ..core.commands import Command
+from ..core.commands import Command, CommandResult
 from ..core.events import EventBus
 from ..core.observability import DiagnosticBuffer
 from ..core.state import ComputerStateStore, StateStore
@@ -31,6 +31,10 @@ from .lifecycle import (
 from .master_audio import MasterAudioProvider
 from .state_projection import MasterAudioProjection
 from .windows_commands import WindowsCommands
+
+
+class _StaleLifecycleOperation(RuntimeError):
+    """A queued lifecycle action was fenced by final shutdown."""
 
 
 class Application:
@@ -53,6 +57,9 @@ class Application:
         self._operations = SerialWorker("application-lifecycle", self.log)
         self._queries = SerialWorker("application-queries", self.log, capacity=8)
         self._guard = threading.RLock()
+        self._teardown_guard = threading.Lock()
+        self._operation_context = threading.local()
+        self._lifecycle_epoch = 0
         self._closed = False
         self._desired_running = False
         self._suspended = False
@@ -93,7 +100,28 @@ class Application:
             return False
         return self._queries.submit(lambda: self.events.emit("updates.checked", GitHubUpdateChecker().check(__version__)))
 
+    def _operation_is_current_locked(self) -> bool:
+        operation_epoch = getattr(
+            self._operation_context,
+            "epoch",
+            self._lifecycle_epoch,
+        )
+        return not self._closed and operation_epoch == self._lifecycle_epoch
+
+    def _ensure_operation_current_locked(self) -> None:
+        if not self._operation_is_current_locked():
+            raise _StaleLifecycleOperation("Lifecycle operation was fenced by shutdown")
+
+    def _ensure_operation_current(self) -> None:
+        with self._guard:
+            self._ensure_operation_current_locked()
+
     def _build_services(self):
+        with self._guard:
+            self._ensure_operation_current_locked()
+            self._build_services_locked()
+
+    def _build_services_locked(self):
         from ..communication.gateway import MqttGateway
         from .telemetry import TelemetryService
         if self.supervisor.active:
@@ -106,6 +134,14 @@ class Application:
             self._connections.clear()
         self.supervisor = ServiceSupervisor(self.states, self.log)
         self.router = CommandRouter(logger=self.log)
+        needs_master_audio = (
+            self.config.control_master_volume
+            or self.config.media_player_enabled
+            or (
+                self.config.audio_enhancements_enabled
+                and self.config.control_channel_balance
+            )
+        )
         self._master_audio = (
             MasterAudioProvider(
                 self.audio,
@@ -114,7 +150,7 @@ class Application:
                 poll_interval=self.config.poll_interval,
                 logger=self.log,
             )
-            if self.config.control_master_volume
+            if needs_master_audio
             else None
         )
         WindowsCommands(self.config, self.audio, self.system, self.media, self.power,
@@ -129,7 +165,7 @@ class Application:
             if hasattr(gateway.publisher, "begin_generation"):
                 gateway.publisher.begin_generation(self._generation)
             self.supervisor.register("mqtt", gateway)
-            if self._master_audio is not None:
+            if self.config.control_master_volume and self._master_audio is not None:
                 self._state_projection = MasterAudioProjection(
                     self.config,
                     self.computer_state,
@@ -157,17 +193,35 @@ class Application:
         with self._guard:
             if self._closed:
                 return False
-            return self._operations.submit(lambda: self._run_operation(action))
+            operation_epoch = self._lifecycle_epoch
+            return self._operations.submit(
+                lambda: self._run_operation(action, operation_epoch)
+            )
 
-    def _run_operation(self, action):
+    def _run_operation(self, action, operation_epoch=None):
+        if operation_epoch is None:
+            with self._guard:
+                operation_epoch = self._lifecycle_epoch
+        had_previous = hasattr(self._operation_context, "epoch")
+        previous = getattr(self._operation_context, "epoch", None)
+        self._operation_context.epoch = operation_epoch
         try:
             action()
+        except _StaleLifecycleOperation:
+            self.log.info("Discarded stale lifecycle operation after shutdown")
         except Exception:
             self.log.exception("Application operation failed")
             self.events.emit("application.error", "operation_failed")
+        finally:
+            if had_previous:
+                self._operation_context.epoch = previous
+            else:
+                del self._operation_context.epoch
 
     def start(self):
         with self._guard:
+            if self._closed:
+                return False
             self._desired_running = True
         return self._schedule(self._start)
 
@@ -175,6 +229,7 @@ class Application:
         # Serialize the short startup transition with synchronous stop intent.
         # Service start methods only create their owned workers and return.
         with self._guard:
+            self._ensure_operation_current_locked()
             if self._suspended or not self._desired_running:
                 return
             if self._restart_blocked:
@@ -216,6 +271,10 @@ class Application:
         )
 
     def _stop(self):
+        with self._teardown_guard:
+            return self._stop_owned()
+
+    def _stop_owned(self):
         self._begin_stop("stopping")
         results = []
         try:
@@ -276,6 +335,8 @@ class Application:
 
     def reconnect(self):
         with self._guard:
+            if self._closed:
+                return False
             self._desired_running = True
         self._begin_stop("reconnecting")
         def reconnect():
@@ -299,31 +360,45 @@ class Application:
             # Read before stopping anything; a read failure leaves runtime intact.
             previous_startup = self.startup.is_enabled()
             saved = startup_attempted = False
+            self._ensure_operation_current()
             self._stop()
+            self._ensure_operation_current()
             try:
                 self.store.save(candidate)
                 saved = True
+                self._ensure_operation_current()
                 startup_attempted = True
                 self.startup.set_enabled(candidate.start_with_windows)
-                self.config = candidate
+                self._ensure_operation_current()
+                with self._guard:
+                    self._ensure_operation_current_locked()
+                    self.config = candidate
                 self._build_services()
                 self._start()
+                self._ensure_operation_current()
                 if any(status.state.value == "error" for status in self.states.snapshot()):
                     raise RuntimeError("Configuration service startup failed")
             except Exception:
                 # Cover every stage after stop, including registry, build and start.
                 # A rollback failure is explicit and never reported as applied.
+                with self._guard:
+                    operation_current = self._operation_is_current_locked()
                 try:
-                    self._stop()
+                    if operation_current:
+                        self._stop()
                     if saved:
                         self.store.save(previous)
                     if startup_attempted:
                         self.startup.set_enabled(previous_startup)
-                    self.config = previous
-                    self._build_services()
-                    self._start()
-                    if any(status.state.value == "error" for status in self.states.snapshot()):
-                        raise RuntimeError("Previous configuration service startup failed")
+                    with self._guard:
+                        self.config = previous
+                        operation_current = self._operation_is_current_locked()
+                    if operation_current:
+                        self._build_services()
+                        self._start()
+                        self._ensure_operation_current()
+                        if any(status.state.value == "error" for status in self.states.snapshot()):
+                            raise RuntimeError("Previous configuration service startup failed")
                 except Exception:
                     self.log.exception("Configuration rollback failed; recovery required")
                     self.events.emit("application.error", "configuration_rollback_failed")
@@ -420,7 +495,7 @@ class Application:
 
     def resume(self):
         with self._guard:
-            if not self._suspended:
+            if self._closed or not self._suspended:
                 return False
             self._suspended = False
         def resume():
@@ -431,7 +506,14 @@ class Application:
 
     def command(self, kind: str, arguments: dict, target=""):
         command = Command(uuid.uuid4().hex, kind, target, copy.deepcopy(arguments), time.time() + 10)
-        result = self.router.submit(command, lambda result: self.events.emit("command.result", result))
+        with self._guard:
+            if self._closed:
+                result = CommandResult(command.id, "rejected", "stopping")
+            else:
+                result = self.router.submit(
+                    command,
+                    lambda reply: self.events.emit("command.result", reply),
+                )
         if result.status != "accepted":
             self.events.emit("command.result", result)
         return result
@@ -459,12 +541,31 @@ class Application:
         report = self.diagnostic_report()
         path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _close_system_owner(self) -> LifecycleResult | None:
+        closer = getattr(self.system, "close", None)
+        if not callable(closer):
+            return None
+        try:
+            return self._stop_result(
+                "windows_update",
+                closer(),
+                "windows_update_worker_timeout",
+            )
+        except Exception:
+            self.log.exception("Windows Update worker shutdown failed")
+            return LifecycleResult(
+                "windows_update",
+                LifecycleOutcome.FAILED,
+                "windows_update_worker_shutdown_failed",
+            )
+
     def shutdown(self) -> bool:
         with self._guard:
             if self._shutdown_finalized:
                 return bool(self.last_shutdown_report)
             self._closed = True
             self._desired_running = False
+            self._lifecycle_epoch += 1
         self._begin_stop("shutdown")
         self._operations.close(timeout=4)
         self._queries.close(timeout=4)
@@ -480,11 +581,30 @@ class Application:
                 "query_worker_timeout",
             ),
         ]
-        try:
-            self._stop()
-        except Exception:
-            self.log.exception("Shutdown has unfinished resources")
-        results.extend(self.last_stop_report.results)
+        if self._teardown_guard.acquire(blocking=False):
+            try:
+                try:
+                    self._stop_owned()
+                except Exception:
+                    self.log.exception("Shutdown has unfinished resources")
+                stop_report = self.last_stop_report
+            finally:
+                self._teardown_guard.release()
+        else:
+            stop_report = LifecycleReport(
+                "stop",
+                (
+                    LifecycleResult(
+                        "services",
+                        LifecycleOutcome.BLOCKED,
+                        "teardown_in_progress",
+                    ),
+                ),
+            )
+        results.extend(stop_report.results)
+        system_result = self._close_system_owner()
+        if system_result is not None:
+            results.append(system_result)
         self.last_shutdown_report = LifecycleReport("shutdown", tuple(results))
         if not self.last_shutdown_report:
             self.log.error(

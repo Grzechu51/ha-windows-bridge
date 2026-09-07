@@ -87,8 +87,8 @@ def main(argv=None):
         window._force_close = True
         window.close()
         native_events.close()
-        overlays.close()
-        return 0 if runtime.shutdown() else 1
+        overlays_stopped = overlays.close()
+        return 0 if runtime.shutdown() and overlays_stopped else 1
     if not args.minimized and not (args.autostart and config.start_minimized):
         window.show()
     if config.auto_connect:
@@ -97,11 +97,13 @@ def main(argv=None):
         QTimer.singleShot(10000, runtime.check_updates)
     result = qt.exec()
     native_events.close()
-    overlays.close()
+    overlays_stopped = overlays.close()
     window.dispose()
     stopped = runtime.shutdown()
     instance.close()
-    return result if stopped else 1
+    if not overlays_stopped:
+        logging.getLogger("bridge").error("Overlay shutdown incomplete")
+    return result if stopped and overlays_stopped else 1
 
 
 if __name__ == "__main__":

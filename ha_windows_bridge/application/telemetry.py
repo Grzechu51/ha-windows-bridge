@@ -271,8 +271,9 @@ class TelemetryService:
 
     def _monitor_master_enhancements(self) -> None:
         if self.config.audio_enhancements_enabled and self.config.control_channel_balance:
-            owner = self.master_audio or self.audio
-            balance = owner.get_master_balance()
+            if self.master_audio is None:
+                return
+            balance = self.master_audio.get_master_balance()
             if balance is not None and (
                 self._last_master_balance is None
                 or abs(self._last_master_balance - balance) >= 0.01

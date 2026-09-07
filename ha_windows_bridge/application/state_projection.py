@@ -1,6 +1,8 @@
 """HA state projections fed exclusively by ComputerState."""
 from __future__ import annotations
 
+import threading
+
 from ..core.state import ComputerState, ComputerStateStore, StateQuality
 from ..discovery import master_mute_topics, master_volume_topics
 
@@ -22,6 +24,9 @@ class MasterAudioProjection:
         self.events = events
         self.generation = generation
         self._unsubscribe = None
+        self._lock = threading.RLock()
+        self._last_revision = -1
+        self._first_sample_seen = False
         self._last_volume: float | None = None
         self._last_mute: bool | None = None
 
@@ -32,12 +37,7 @@ class MasterAudioProjection:
             "computer_state.changed",
             lambda event: self._project(event.data),
         )
-        current = self.state.snapshot()
-        if self.config.publish_initial_state:
-            self._project(current)
-        elif current.master_audio is not None:
-            self._last_volume = current.master_audio.volume
-            self._last_mute = current.master_audio.muted
+        self._project(self.state.snapshot())
 
     def stop(self) -> bool:
         if self._unsubscribe is not None:
@@ -46,35 +46,51 @@ class MasterAudioProjection:
         return True
 
     def _project(self, state: ComputerState) -> None:
-        master = state.master_audio
-        if (
-            state.generation != self.generation
-            or master is None
-            or master.quality != StateQuality.GOOD
-        ):
-            return
-        if (
-            self._last_volume is None
-            or abs(self._last_volume - master.volume) >= 0.005
-        ):
+        with self._lock:
+            if (
+                state.generation != self.generation
+                or state.revision <= self._last_revision
+            ):
+                return
+            master = state.master_audio
+            if master is None or master.quality != StateQuality.GOOD:
+                # Degraded/newer state still fences delayed good callbacks.
+                self._last_revision = state.revision
+                return
+            if not self._first_sample_seen:
+                self._first_sample_seen = True
+                if not self.config.publish_initial_state:
+                    self._last_volume = master.volume
+                    self._last_mute = master.muted
+                    self._last_revision = state.revision
+                    return
+
+            volume_changed = (
+                self._last_volume is None
+                or abs(self._last_volume - master.volume) >= 0.005
+            )
+            mute_changed = self._last_mute is None or self._last_mute != master.muted
+            accepted = True
+            if volume_changed:
+                _, topic = master_volume_topics(self.config)
+                accepted = self.publisher.publish_observation(
+                    topic,
+                    str(round(master.volume * 100)),
+                    qos=1,
+                    generation=state.generation,
+                    revision=state.revision,
+                ) and accepted
+            if mute_changed:
+                _, topic = master_mute_topics(self.config)
+                accepted = self.publisher.publish_observation(
+                    topic,
+                    "ON" if master.muted else "OFF",
+                    qos=1,
+                    generation=state.generation,
+                    revision=state.revision,
+                ) and accepted
+            if not accepted:
+                return
             self._last_volume = master.volume
-            _, topic = master_volume_topics(self.config)
-            self.publisher.publish(
-                topic,
-                str(round(master.volume * 100)),
-                qos=1,
-                retain=True,
-                generation=state.generation,
-                revision=state.revision,
-            )
-        if self._last_mute is None or self._last_mute != master.muted:
             self._last_mute = master.muted
-            _, topic = master_mute_topics(self.config)
-            self.publisher.publish(
-                topic,
-                "ON" if master.muted else "OFF",
-                qos=1,
-                retain=True,
-                generation=state.generation,
-                revision=state.revision,
-            )
+            self._last_revision = state.revision

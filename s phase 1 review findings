@@ -1,0 +1,25 @@
+warning: in the working copy of 'ha_windows_bridge/application/application.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/application/master_audio.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/application/state_projection.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/application/telemetry.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/application/windows_commands.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/communication/publishing.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/desktop.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/overlays/glass.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/overlays/service.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ha_windows_bridge/system_monitor.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_phase1_core.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_v2_windows_commands.py', LF will be replaced by CRLF the next time Git touches it
+ ha_windows_bridge/application/application.py      | 158 [32m+++++++++++++[m[31m--[m
+ ha_windows_bridge/application/master_audio.py     |  59 [32m++++[m[31m--[m
+ ha_windows_bridge/application/state_projection.py |  88 [32m++++[m[31m----[m
+ ha_windows_bridge/application/telemetry.py        |   5 [32m+[m[31m-[m
+ ha_windows_bridge/application/windows_commands.py |  17 [32m+[m[31m-[m
+ ha_windows_bridge/communication/publishing.py     |  53 [32m++++[m[31m-[m
+ ha_windows_bridge/desktop.py                      |  10 [32m+[m[31m-[m
+ ha_windows_bridge/overlays/glass.py               |  13 [32m+[m[31m-[m
+ ha_windows_bridge/overlays/service.py             |   5 [32m+[m[31m-[m
+ ha_windows_bridge/system_monitor.py               |  41 [32m+++[m[31m-[m
+ tests/test_phase1_core.py                         | 233 [32m+++++++++++++++++++++[m[31m-[m
+ tests/test_v2_windows_commands.py                 |  11 [32m+[m[31m-[m
+ 12 files changed, 575 insertions(+), 118 deletions(-)

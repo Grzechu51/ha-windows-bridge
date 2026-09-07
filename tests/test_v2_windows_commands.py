@@ -44,7 +44,16 @@ def test_remote_actions_are_allowlisted_and_target_bound():
     audio, system = Mock(), Mock()
     events = EventBus()
     router = CommandRouter()
-    WindowsCommands(config, audio, system, Mock(), Mock(), events, ["Monitor"]).install(router)
+    WindowsCommands(
+        config,
+        audio,
+        system,
+        Mock(),
+        Mock(),
+        events,
+        ["Monitor"],
+        master_audio=audio,
+    ).install(router)
     results = []
     def execute(kind, arguments, target=""):
         complete = threading.Event()

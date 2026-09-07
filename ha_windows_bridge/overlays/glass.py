@@ -142,11 +142,18 @@ class GlassRenderer(QObject):
         self._generation += 1
         self.worker.submit(self.capture.invalidate)
 
-    def close(self):
+    def close(self) -> bool:
+        if self.closed:
+            return not self.worker.is_alive
         self.closed = True
         self.timer.stop()
         released = threading.Event()
+        release_completed = True
         if self.worker.is_alive:
-            self.worker.submit(lambda: (self._release(), released.set()))
-            released.wait(2)
+            release_completed = self.worker.submit(
+                lambda: (self._release(), released.set())
+            )
+            if release_completed:
+                release_completed = released.wait(2)
         self.worker.close(timeout=2)
+        return release_completed and not self.worker.is_alive

@@ -9,12 +9,15 @@ import pytest
 
 from ha_windows_bridge.application.application import Application
 from ha_windows_bridge.application.master_audio import MasterAudioProvider
+from ha_windows_bridge.application.state_projection import MasterAudioProjection
 from ha_windows_bridge.communication.publishing import StatePublisher
 from ha_windows_bridge.communication.state_outbox import StateOutbox
 from ha_windows_bridge.config import AppConfig, MqttConfig
 from ha_windows_bridge.core.events import EventBus
 from ha_windows_bridge.core.state import ComputerStateStore, StateQuality
 from ha_windows_bridge.discovery import master_volume_topics
+from ha_windows_bridge.media import MediaSnapshot
+from ha_windows_bridge.system_monitor import WindowsSystemMonitor
 
 
 def wait_until(predicate, timeout=2.0):
@@ -181,6 +184,36 @@ def test_master_audio_provider_owns_reads_commands_and_confirming_sample():
     assert not provider.is_alive
 
 
+def test_master_audio_pause_fences_an_in_flight_sample():
+    class BlockingAudio(FakeAudio):
+        def __init__(self):
+            super().__init__()
+            self.sample_entered = threading.Event()
+            self.release_sample = threading.Event()
+
+        def get_master_snapshot(self):
+            self._record()
+            self.sample_entered.set()
+            assert self.release_sample.wait(2)
+            return SimpleNamespace(volume=self.volume, muted=self.muted)
+
+    adapter = BlockingAudio()
+    state = ComputerStateStore(EventBus())
+    state.begin_generation(1)
+    provider = MasterAudioProvider(adapter, state, 1, poll_interval=10)
+    provider.start()
+    try:
+        assert adapter.sample_entered.wait(1)
+        provider.pause(True)
+        adapter.release_sample.set()
+        # A queued owner-thread call proves the delayed sample has returned.
+        assert provider.get_master_balance() == 0.0
+        assert state.snapshot().health_for("master_audio").quality == StateQuality.PAUSED
+    finally:
+        adapter.release_sample.set()
+        assert provider.stop()
+
+
 class FakeTransport:
     def __init__(self):
         self.connected = True
@@ -221,9 +254,12 @@ class FakeMedia:
         self.running = False
         return True
 
+    def snapshot(self):
+        return MediaSnapshot()
 
-def application(gateway=FakeGateway):
-    config = AppConfig(
+
+def application(gateway=FakeGateway, *, config=None, audio=None, system=None, media=None):
+    config = config or AppConfig(
         mqtt=MqttConfig(host="broker"),
         control_master_volume=True,
         poll_interval=.2,
@@ -239,9 +275,9 @@ def application(gateway=FakeGateway):
         config,
         store,
         startup,
-        FakeAudio(),
-        object(),
-        FakeMedia(),
+        audio or FakeAudio(),
+        system or object(),
+        media or FakeMedia(),
         object(),
         mqtt_factory=gateway,
         events=EventBus(),
@@ -313,6 +349,193 @@ def test_master_audio_command_confirms_computer_state_and_ha_projection():
         )
     finally:
         assert app.shutdown()
+
+
+def test_projection_revision_fences_delayed_start_snapshot():
+    events = EventBus()
+    state = ComputerStateStore(events)
+    state.begin_generation(1)
+    state.observe_master_audio(.2, False, generation=1)
+    snapshot_entered = threading.Event()
+    release_snapshot = threading.Event()
+
+    class DelayedState:
+        def snapshot(self):
+            captured = state.snapshot()
+            snapshot_entered.set()
+            assert release_snapshot.wait(2)
+            return captured
+
+    config = AppConfig(mqtt=MqttConfig(host="broker"))
+    transport = FakeTransport()
+    publisher = StatePublisher(transport, events, generation=1)
+    projection = MasterAudioProjection(
+        config,
+        DelayedState(),
+        publisher,
+        events,
+        1,
+    )
+    starter = threading.Thread(target=projection.start, daemon=True)
+    starter.start()
+    try:
+        assert snapshot_entered.wait(1)
+        assert state.observe_master_audio(.8, False, generation=1)
+        release_snapshot.set()
+        starter.join(1)
+        assert not starter.is_alive()
+        assert state.observe_master_audio(.2, False, generation=1)
+
+        topic = master_volume_topics(config)[1]
+        observed = {item.key: item for item in publisher.outbox.observed()}
+        assert observed[topic].payload == "20"
+        assert observed[topic].revision == state.snapshot().revision
+        publisher.request_replay()
+        assert publisher.flush()
+        assert transport.sent[-1][0:2] == (topic, "20")
+    finally:
+        release_snapshot.set()
+        starter.join(1)
+        assert projection.stop()
+
+
+@pytest.mark.parametrize("sample_before_start", [True, False])
+def test_publish_initial_false_skips_first_good_sample_regardless_of_timing(
+    sample_before_start,
+):
+    events = EventBus()
+    state = ComputerStateStore(events)
+    state.begin_generation(1)
+    if sample_before_start:
+        state.observe_master_audio(.2, False, generation=1)
+    config = AppConfig(
+        mqtt=MqttConfig(host="broker"),
+        publish_initial_state=False,
+    )
+    transport = FakeTransport()
+    publisher = StatePublisher(transport, events, generation=1)
+    projection = MasterAudioProjection(config, state, publisher, events, 1)
+    projection.start()
+    try:
+        if not sample_before_start:
+            state.observe_master_audio(.2, False, generation=1)
+        topic = master_volume_topics(config)[1]
+        assert not any(sent_topic == topic for sent_topic, _payload, _ in transport.sent)
+
+        state.observe_master_audio(.3, False, generation=1)
+        assert [
+            payload
+            for sent_topic, payload, _kwargs in transport.sent
+            if sent_topic == topic
+        ] == ["30"]
+    finally:
+        assert projection.stop()
+
+
+def test_media_player_without_master_control_still_uses_master_audio_owner():
+    FakeGateway.instances.clear()
+    audio = FakeAudio()
+    config = AppConfig(
+        mqtt=MqttConfig(host="broker"),
+        control_master_volume=False,
+        media_player_enabled=True,
+        poll_interval=.2,
+    )
+    app = application(config=config, audio=audio)
+    try:
+        assert app._master_audio is not None
+        assert app._state_projection is None
+        assert app.start()
+        assert wait_until(lambda: app.computer_snapshot().master_audio is not None)
+        result = app.command(
+            "media.control",
+            {"action": "set_volume", "value": .64},
+        )
+        assert result.status == "accepted"
+        assert wait_until(lambda: app.computer_snapshot().master_audio.volume == .64)
+        assert set(audio.threads) == {app._master_audio.thread_ident}
+    finally:
+        assert app.shutdown()
+
+
+def test_shutdown_fences_blocked_apply_without_service_resurrection():
+    FakeGateway.instances.clear()
+    audio = FakeAudio()
+    app = application(audio=audio)
+    previous = copy.deepcopy(app.config)
+    save_entered = threading.Event()
+    release_save = threading.Event()
+    writes = []
+
+    def blocking_save(config):
+        save_entered.set()
+        assert release_save.wait(2)
+        writes.append(copy.deepcopy(config))
+
+    app.store.save = blocking_save
+    close_operations = app._operations.close
+    app._operations.close = lambda timeout=1: close_operations(timeout=.05)
+    try:
+        assert app.start()
+        assert wait_until(lambda: bool(app.supervisor.active))
+        initial_gateways = len(FakeGateway.instances)
+        initial_router = app.router
+        candidate = copy.deepcopy(app.config)
+        candidate.mqtt.host = "new-broker"
+        assert app.apply_configuration(candidate)
+        assert save_entered.wait(1)
+
+        assert not app.shutdown()
+        assert "application-lifecycle-worker" in app.last_shutdown_report.unfinished
+        release_save.set()
+        assert wait_until(lambda: not app._operations.is_alive)
+
+        assert len(FakeGateway.instances) == initial_gateways
+        assert app.router is initial_router
+        assert not app.supervisor.active
+        assert app.router.closed
+        assert app.config == previous
+        assert writes[-1] == previous
+        volume = audio.volume
+        result = app.command("audio.master.volume", {"value": .9})
+        assert result.status == "rejected" and result.code == "stopping"
+        assert audio.volume == volume
+    finally:
+        release_save.set()
+        wait_until(lambda: not app._operations.is_alive)
+
+
+def test_shutdown_reports_a_running_windows_update_worker():
+    class FastClosingSystem(WindowsSystemMonitor):
+        def close(self, timeout=.05):
+            return super().close(timeout=timeout)
+
+    monitor = FastClosingSystem()
+    update_entered = threading.Event()
+    release_update = threading.Event()
+
+    def blocked_update():
+        update_entered.set()
+        assert release_update.wait(2)
+
+    monitor._read_pending_windows_updates = blocked_update
+    monitor._update_check_time = -1801
+    monitor._schedule_windows_update_check()
+    assert update_entered.wait(1)
+    app = application(system=monitor)
+    try:
+        assert not app.shutdown()
+        assert "windows_update" in app.last_shutdown_report.unfinished
+        result = next(
+            item
+            for item in app.last_shutdown_report.results
+            if item.owner == "windows_update"
+        )
+        assert result.outcome.value == "timeout"
+    finally:
+        release_update.set()
+        monitor._update_thread.join(1)
+        assert not monitor._update_thread.is_alive()
 
 
 def test_shutdown_report_names_owner_that_did_not_stop():

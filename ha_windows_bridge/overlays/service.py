@@ -207,13 +207,13 @@ class OverlayService(QObject):
                 window.set_media_position(self.engine.media_position(identifier), duration)
         self._clock_state()
 
-    def close(self):
+    def close(self) -> bool:
         self._closed = True
         self._media_request += 1
         self._unsubscribe()
         self.timer.stop()
         self.media_timer.stop()
-        self.glass.close()
+        glass_stopped = self.glass.close()
         for connection in self._connections:
             with suppress(RuntimeError):
                 QObject.disconnect(connection)
@@ -226,3 +226,4 @@ class OverlayService(QObject):
         self._retiring.clear()
         self.engine.visible.clear()
         self.engine.pending.clear()
+        return glass_stopped
