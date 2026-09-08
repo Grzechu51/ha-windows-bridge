@@ -45,6 +45,7 @@ class SystemMetrics:
     cpu_temperature: float | None = None
     cpu_power_watts: float | None = None
     gpu_clock_mhz: float | None = None
+    gpu_fan_percent: float | None = None
     gpu_fan_rpm: float | None = None
     cpu_vendor: str = ""
     gpu_vendor: str = ""
@@ -241,6 +242,7 @@ class WindowsSystemMonitor:
             cpu_temperature=optional.get("cpu_temperature") if include_cpu else None,
             cpu_power_watts=optional.get("cpu_power_watts") if include_cpu else None,
             gpu_clock_mhz=gpu.get("gpu_clock_mhz"),
+            gpu_fan_percent=gpu.get("gpu_fan_percent"),
             gpu_fan_rpm=gpu.get("gpu_fan_rpm"),
             cpu_vendor=cpu_vendor if include_cpu else "",
             gpu_vendor=gpu_vendor if include_gpu and gpu_vendor in {"NVIDIA", "AMD"} else "",
@@ -251,8 +253,78 @@ class WindowsSystemMonitor:
             ram_total_gb=float(memory.total) / gibibyte if memory is not None else None,
         )
 
+    def cpu_ram_metrics(self) -> SystemMetrics:
+        """Fast psutil-only metrics; never enters WMI or a vendor subprocess."""
+
+        memory = psutil.virtual_memory()
+        frequency = psutil.cpu_freq()
+        gibibyte = 1024**3
+        return SystemMetrics(
+            cpu_percent=float(psutil.cpu_percent(interval=None)),
+            ram_percent=float(memory.percent),
+            uptime_seconds=max(0, int(time.time() - psutil.boot_time())),
+            cpu_frequency_mhz=float(frequency.current) if frequency else None,
+            ram_used_gb=float(memory.used) / gibibyte,
+            ram_available_gb=float(memory.available) / gibibyte,
+            ram_total_gb=float(memory.total) / gibibyte,
+        )
+
+    def gpu_metrics_snapshot(self, *, include_cpu_hardware: bool = False) -> SystemMetrics:
+        """Slow/vendor metrics isolated from the CPU/RAM provider."""
+
+        errors: list[str] = []
+        try:
+            gpu = self._gpu_metrics()
+        except ProviderUnavailable:
+            gpu = {}
+            errors.append("gpu")
+        try:
+            optional = self._hardware_monitor_metrics()
+        except ProviderUnavailable:
+            optional = {}
+            errors.append("hardware_monitor")
+        gpu.update(
+            {
+                key: value
+                for key, value in optional.items()
+                if key.startswith("gpu_") and value is not None
+            }
+        )
+        try:
+            cpu_vendor, gpu_vendor = self._hardware_identity()
+        except ProviderUnavailable:
+            cpu_vendor = gpu_vendor = ""
+            errors.append("hardware_identity")
+        return SystemMetrics(
+            cpu_percent=0.0,
+            ram_percent=0.0,
+            uptime_seconds=max(0, int(time.time() - psutil.boot_time())),
+            gpu_percent=gpu.get("gpu_percent"),
+            gpu_temperature=gpu.get("gpu_temperature"),
+            gpu_power_watts=gpu.get("gpu_power_watts"),
+            gpu_memory_used_mb=gpu.get("gpu_memory_used_mb"),
+            gpu_memory_total_mb=gpu.get("gpu_memory_total_mb"),
+            gpu_clock_mhz=gpu.get("gpu_clock_mhz"),
+            gpu_fan_percent=gpu.get("gpu_fan_percent"),
+            gpu_fan_rpm=gpu.get("gpu_fan_rpm"),
+            cpu_temperature=(
+                optional.get("cpu_temperature") if include_cpu_hardware else None
+            ),
+            cpu_power_watts=(
+                optional.get("cpu_power_watts") if include_cpu_hardware else None
+            ),
+            cpu_vendor=cpu_vendor if include_cpu_hardware else "",
+            gpu_vendor=gpu_vendor,
+            provider_errors=tuple(dict.fromkeys(errors)),
+        )
+
     def windows_health(self) -> WindowsHealth:
         self._schedule_windows_update_check()
+        return self.windows_health_snapshot()
+
+    def windows_health_snapshot(self) -> WindowsHealth:
+        """Power/restart state without starting or waiting for a WUA search."""
+
         try:
             battery = psutil.sensors_battery()
         except (AttributeError, OSError, RuntimeError):
@@ -289,6 +361,27 @@ class WindowsSystemMonitor:
             windows_update_status=update_status,
             uptime_seconds=max(0, int(time.time() - psutil.boot_time())),
         )
+
+    @staticmethod
+    def pending_windows_updates() -> int:
+        """Run one WUA search in the dedicated Windows Update provider owner."""
+
+        import win32com.client
+
+        try:
+            with com_apartment():
+                session = searcher = result = None
+                try:
+                    session = win32com.client.Dispatch("Microsoft.Update.Session")
+                    searcher = session.CreateUpdateSearcher()
+                    result = searcher.Search(
+                        "IsInstalled=0 and IsHidden=0 and Type='Software'"
+                    )
+                    return max(0, int(result.Updates.Count))
+                finally:
+                    result = searcher = session = None
+        except Exception as exc:
+            raise ProviderUnavailable("Windows Update unavailable") from exc
 
     def _schedule_windows_update_check(self) -> None:
         """Refresh Windows Update in a daemon so monitoring never blocks on the service."""
@@ -370,8 +463,13 @@ class WindowsSystemMonitor:
             )
         return sorted(volumes, key=lambda item: item.mountpoint.casefold())
 
-    def disk_metrics(self, mounts: list[str] | None = None) -> DiskMetrics:
-        volumes = self.list_disk_volumes()
+    def disk_metrics(
+        self,
+        mounts: list[str] | None = None,
+        *,
+        volumes: list[DiskVolume] | None = None,
+    ) -> DiskMetrics:
+        volumes = self.list_disk_volumes() if volumes is None else list(volumes)
         selected = {os.path.normcase(os.path.normpath(mount)) for mount in (mounts or []) if mount}
         if selected:
             volumes = [
@@ -897,7 +995,7 @@ class WindowsSystemMonitor:
                 "gpu_memory_used_mb",
                 "gpu_memory_total_mb",
                 "gpu_clock_mhz",
-                "gpu_fan_rpm",
+                "gpu_fan_percent",
             )
             if len(raw_values) != len(keys):
                 raise ProviderUnavailable("NVIDIA returned an invalid metrics row")

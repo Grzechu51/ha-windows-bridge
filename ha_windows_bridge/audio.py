@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +10,11 @@ import comtypes
 import psutil
 import win32gui
 import win32process
+from pycaw.callbacks import (
+    AudioEndpointVolumeCallback,
+    AudioSessionNotification,
+    MMNotificationClient,
+)
 from pycaw.constants import DEVICE_STATE, EDataFlow, ERole
 from pycaw.pycaw import (
     AudioUtilities,
@@ -17,6 +22,8 @@ from pycaw.pycaw import (
     IAudioMeterInformation,
     ISimpleAudioVolume,
 )
+
+from .windows.com import com_apartment
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +33,7 @@ class AudioApplication:
     executable_path: str = ""
     volume: float | None = None
     muted: bool | None = None
+    session_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +41,7 @@ class AudioSessionSnapshot:
     volume: float
     muted: bool
     session_count: int = 1
+    session_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,16 +59,310 @@ class AudioOutputDevice:
     is_default: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class AudioProviderSnapshot:
+    """One complete, stable-identity observation from the Core Audio owner."""
+
+    endpoint_id: str = ""
+    master: AudioSessionSnapshot | None = None
+    balance: float | None = None
+    sessions: tuple[tuple[str, AudioSessionSnapshot], ...] = ()
+    applications: tuple[AudioApplication, ...] = ()
+    microphone: MicrophoneSnapshot | None = None
+    outputs: tuple[AudioOutputDevice, ...] = ()
+    active_process: str = ""
+    errors: tuple[str, ...] = ()
+
+    def session_map(self) -> dict[str, AudioSessionSnapshot]:
+        return dict(self.sessions)
+
+
+class _DeviceEvents(MMNotificationClient):
+    def __init__(self, changed: Callable[..., None]) -> None:
+        super().__init__()
+        self.changed = changed
+
+    def on_default_device_changed(self, *_args) -> None:
+        self.changed()
+
+    def on_device_added(self, *_args) -> None:
+        self.changed()
+
+    def on_device_removed(self, *_args) -> None:
+        self.changed()
+
+    def on_device_state_changed(self, *_args) -> None:
+        self.changed()
+
+    def on_property_value_changed(self, *_args) -> None:
+        self.changed()
+
+
+class _VolumeEvents(AudioEndpointVolumeCallback):
+    def __init__(self, changed: Callable[..., None]) -> None:
+        super().__init__()
+        self.changed = changed
+
+    def on_notify(self, *_args) -> None:
+        self.changed()
+
+
+class _SessionEvents(AudioSessionNotification):
+    def __init__(self, changed: Callable[..., None]) -> None:
+        super().__init__()
+        self.changed = changed
+
+    def on_session_created(self, _new_session) -> None:
+        self.changed()
+
+
+class _AudioEventSubscription:
+    """Core Audio callback lifetime owned by the provider COM apartment."""
+
+    def __init__(self, changed: Callable[..., None]) -> None:
+        self.changed = changed
+        self.enumerator = AudioUtilities.GetDeviceEnumerator()
+        self.device_callback = _DeviceEvents(changed)
+        self.enumerator.RegisterEndpointNotificationCallback(self.device_callback)
+        self.session_manager = AudioUtilities.GetAudioSessionManager()
+        self.session_callback = _SessionEvents(changed)
+        self.session_manager.RegisterSessionNotification(self.session_callback)
+        # Windows only starts session-created callbacks after first enumeration.
+        self.session_manager.GetSessionEnumerator()
+        self.endpoint_id = ""
+        self.endpoint = None
+        self.volume_callback = _VolumeEvents(changed)
+        self.refresh_endpoint()
+
+    def refresh_endpoint(self) -> None:
+        try:
+            device = AudioUtilities.GetSpeakers()
+            endpoint_id = str(device.id)
+            if endpoint_id == self.endpoint_id:
+                return
+            if self.endpoint is not None:
+                self.endpoint.UnregisterControlChangeNotify(self.volume_callback)
+            self.endpoint = device.EndpointVolume
+            self.endpoint.RegisterControlChangeNotify(self.volume_callback)
+            self.endpoint_id = endpoint_id
+        except Exception:
+            self.endpoint = None
+            self.endpoint_id = ""
+
+    def close(self) -> None:
+        if self.endpoint is not None:
+            with suppress(Exception):
+                self.endpoint.UnregisterControlChangeNotify(self.volume_callback)
+        with suppress(Exception):
+            self.session_manager.UnregisterSessionNotification(self.session_callback)
+        with suppress(Exception):
+            self.enumerator.UnregisterEndpointNotificationCallback(self.device_callback)
+        self.endpoint = None
+
+
 @contextmanager
 def com_scope() -> Iterator[None]:
-    comtypes.CoInitialize()
-    try:
+    # Session-created callbacks require MTA. The shared helper balances a
+    # newly-owned MTA and safely borrows an existing Qt STA when necessary.
+    with com_apartment():
         yield
-    finally:
-        comtypes.CoUninitialize()
 
 
 class WindowsAudioService:
+    def subscribe(self, changed: Callable[..., None]) -> Callable[[], None]:
+        subscription = _AudioEventSubscription(changed)
+
+        def unsubscribe() -> None:
+            subscription.close()
+
+        # Provider refreshes this after a default endpoint event so volume
+        # notifications move from the old endpoint to the new endpoint.
+        unsubscribe.refresh = subscription.refresh_endpoint  # type: ignore[attr-defined]
+        return unsubscribe
+
+    def provider_snapshot(
+        self,
+        *,
+        include_processes: tuple[str, ...] = (),
+        include_sessions: bool = False,
+        include_microphone: bool = False,
+        include_outputs: bool = False,
+    ) -> AudioProviderSnapshot:
+        """Enumerate every requested audio capability once in one COM apartment."""
+
+        errors: list[str] = []
+        endpoint_id = ""
+        master = None
+        balance = None
+        sessions: dict[str, list[AudioSessionSnapshot]] = {}
+        applications: dict[str, AudioApplication] = {}
+        microphone = None
+        outputs: tuple[AudioOutputDevice, ...] = ()
+        with com_scope():
+            try:
+                speakers = AudioUtilities.GetSpeakers()
+                endpoint_id = str(speakers.id)
+                endpoint = speakers.EndpointVolume
+                master = AudioSessionSnapshot(
+                    float(endpoint.GetMasterVolumeLevelScalar()),
+                    bool(endpoint.GetMute()),
+                )
+                if int(endpoint.GetChannelCount()) >= 2:
+                    left = float(endpoint.GetChannelVolumeLevelScalar(0))
+                    right = float(endpoint.GetChannelVolumeLevelScalar(1))
+                    peak = max(left, right)
+                    balance = (
+                        0.0
+                        if peak <= 0.0001
+                        else max(-1.0, min(1.0, (right - left) / peak))
+                    )
+            except Exception:
+                errors.append("master")
+
+            if include_sessions or include_processes:
+                try:
+                    enumerated = AudioUtilities.GetAllSessions()
+                except Exception as exc:
+                    raise RuntimeError("Core Audio session enumeration failed") from exc
+                for index, session in enumerate(enumerated):
+                    process = session.Process
+                    if process is None:
+                        continue
+                    try:
+                        process_name = process.name()
+                        key = process_name.casefold()
+                        state = self._read_session_state(session)
+                        if state is None:
+                            continue
+                        stable_id = str(
+                            getattr(session, "InstanceIdentifier", "")
+                            or getattr(session, "Identifier", "")
+                            or f"{int(getattr(session, 'ProcessId', 0) or 0)}:{index}"
+                        )
+                        state = AudioSessionSnapshot(
+                            state.volume,
+                            state.muted,
+                            session_ids=(stable_id,),
+                        )
+                        sessions.setdefault(key, []).append(state)
+                        try:
+                            executable = process.exe()
+                        except (psutil.Error, OSError):
+                            executable = ""
+                        applications.setdefault(
+                            key,
+                            AudioApplication(
+                                process_name,
+                                Path(executable).stem
+                                or process_name.removesuffix(".exe"),
+                                executable,
+                            ),
+                        )
+                    except (psutil.Error, OSError):
+                        continue
+
+            grouped = {
+                key: AudioSessionSnapshot(
+                    volume=max(item.volume for item in values),
+                    muted=all(item.muted for item in values),
+                    session_count=len(values),
+                    session_ids=tuple(
+                        stable_id
+                        for item in values
+                        for stable_id in item.session_ids
+                    ),
+                )
+                for key, values in sessions.items()
+            }
+            for key, state in grouped.items():
+                item = applications[key]
+                applications[key] = AudioApplication(
+                    item.process_name,
+                    item.display_name,
+                    item.executable_path,
+                    state.volume,
+                    state.muted,
+                    state.session_ids,
+                )
+
+            missing = {
+                name.casefold()
+                for name in include_processes
+                if name.casefold() not in applications
+            }
+            if missing:
+                for process in psutil.process_iter(["name", "exe"], ad_value=None):
+                    info = process.info
+                    name, executable = info.get("name") or "", info.get("exe") or ""
+                    key = name.casefold()
+                    if key in missing and executable:
+                        applications[key] = AudioApplication(
+                            name,
+                            Path(executable).stem,
+                            executable,
+                        )
+                        missing.remove(key)
+                        if not missing:
+                            break
+
+            if include_microphone:
+                try:
+                    device = AudioUtilities.GetMicrophone()
+                    endpoint_interface = device.Activate(
+                        IAudioEndpointVolume._iid_, comtypes.CLSCTX_ALL, None
+                    )
+                    endpoint = endpoint_interface.QueryInterface(IAudioEndpointVolume)
+                    meter_interface = device.Activate(
+                        IAudioMeterInformation._iid_, comtypes.CLSCTX_ALL, None
+                    )
+                    meter = meter_interface.QueryInterface(IAudioMeterInformation)
+                    muted = bool(endpoint.GetMute())
+                    peaks = [float(meter.GetPeakValue())]
+                    microphone = MicrophoneSnapshot(
+                        float(endpoint.GetMasterVolumeLevelScalar()),
+                        muted,
+                        self._microphone_signal_active(peaks, muted),
+                        max(peaks, default=0.0),
+                    )
+                except Exception:
+                    errors.append("microphone")
+
+            if include_outputs:
+                try:
+                    devices = AudioUtilities.GetAllDevices(
+                        EDataFlow.eRender.value,
+                        DEVICE_STATE.ACTIVE.value,
+                    )
+                    outputs = tuple(
+                        sorted(
+                            (
+                                AudioOutputDevice(
+                                    device.id,
+                                    device.FriendlyName or device.id,
+                                    device.id == endpoint_id,
+                                )
+                                for device in devices
+                            ),
+                            key=lambda item: item.name.casefold(),
+                        )
+                    )
+                except Exception:
+                    errors.append("outputs")
+
+        return AudioProviderSnapshot(
+            endpoint_id=endpoint_id,
+            master=master,
+            balance=balance,
+            sessions=tuple(sorted(grouped.items())),
+            applications=tuple(
+                sorted(applications.values(), key=lambda item: item.display_name.casefold())
+            ),
+            microphone=microphone,
+            outputs=outputs,
+            active_process=self.get_active_process_name() or "",
+            errors=tuple(errors),
+        )
+
     def get_master_snapshot(self) -> AudioSessionSnapshot | None:
         with com_scope():
             try:

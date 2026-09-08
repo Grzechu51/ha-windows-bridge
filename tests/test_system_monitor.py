@@ -101,7 +101,7 @@ def test_nvidia_metrics_are_parsed(monkeypatch) -> None:
     monkeypatch.setattr(monitor, "_hardware_identity", lambda: ("Intel", "NVIDIA"))
     monkeypatch.setattr(
         "ha_windows_bridge.system_monitor.subprocess.run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout="97, 71, 238.5, 6800, 8192, 2100, 1450\n"),
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="97, 71, 238.5, 6800, 8192, 2100, 73\n"),
     )
 
     metrics = monitor._gpu_metrics()
@@ -111,7 +111,7 @@ def test_nvidia_metrics_are_parsed(monkeypatch) -> None:
     assert metrics["gpu_power_watts"] == 238.5
     assert metrics["gpu_memory_used_mb"] == 6800
     assert metrics["gpu_clock_mhz"] == 2100
-    assert metrics["gpu_fan_rpm"] == 1450
+    assert metrics["gpu_fan_percent"] == 73
 
 
 def test_nvidia_metrics_keep_supported_values_when_one_field_is_unavailable(monkeypatch) -> None:

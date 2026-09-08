@@ -41,13 +41,21 @@ class WindowsEventBridge(QAbstractNativeEventFilter):
             return False, 0
         if record.message == 0x0218:
             if record.wParam == 4:
+                self.application.events.emit("windows.power_changed", "suspend")
                 self.application.suspend()
             elif record.wParam in {7, 18}:
+                self.application.events.emit("windows.power_changed", "resume")
+                self.application.events.emit("windows.network_changed")
                 self.application.resume()
         elif record.message == 0x02B1 and record.wParam in {7, 8}:
             self.application.events.emit("windows.locked", record.wParam == 7)
         elif record.message == 0x007E:
             self.application.events.emit("windows.display_changed")
+        elif record.message == 0x0219:
+            # DBT_* arrival/removal notifications are only wake signals. The
+            # provider owner performs the actual PnP/storage/audio enumeration.
+            self.application.events.emit("windows.device_changed")
+            self.application.events.emit("windows.network_changed")
         elif record.message in {0x001A, 0x0320}:
             self.application.events.emit("windows.theme_changed")
         elif record.message == self._taskbar_message:

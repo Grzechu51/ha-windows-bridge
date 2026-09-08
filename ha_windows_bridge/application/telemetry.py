@@ -72,6 +72,7 @@ class TelemetryService:
         self.overlay_monitors = monitors or ["1: Monitor"]
         _, self._overlay_monitor_state = overlay_monitor_topics(config)
         self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
         self._paused = threading.Event()
         self._thread = None
         self._inventory_requested = threading.Event()
@@ -98,12 +99,14 @@ class TelemetryService:
         if self._thread is not None and self._thread.is_alive():
             raise RuntimeError("Sensors are still running")
         self._stop_event.clear()
+        self._wake_event.clear()
         self._unsubscribe = self.events.subscribe("*", self._connection_changed)
         self._thread = threading.Thread(target=self._monitor_loop, name="sensor-scheduler", daemon=True)
         self._thread.start()
 
     def stop(self):
         self._stop_event.set()
+        self._wake_event.set()
         if self._unsubscribe:
             self._unsubscribe()
             self._unsubscribe = None
@@ -116,10 +119,13 @@ class TelemetryService:
         self.events.emit("sensors.paused", enabled)
 
     def _connection_changed(self, event):
+        if event.topic == "computer_state.changed":
+            self._wake_event.set()
         if event.topic == "inventory.requested" or (
             event.topic == "connection.changed" and event.data.transport == "mqtt" and event.data.state == "connected"
         ):
             self._inventory_requested.set()
+            self._wake_event.set()
 
     def _publish_number_state(self, topic: str, value: float) -> None:
         self.publisher.publish(topic, str(round(value * 100)), qos=1, retain=True)
@@ -169,7 +175,8 @@ class TelemetryService:
                         "gpu_power": metrics.gpu_power_watts,
                         "gpu_memory": metrics.gpu_memory_used_mb,
                         "gpu_clock": metrics.gpu_clock_mhz,
-                        "gpu_fan": metrics.gpu_fan_rpm,
+                        "gpu_fan": metrics.gpu_fan_percent,
+                        "gpu_fan_rpm": metrics.gpu_fan_rpm,
                         "gpu_vendor": metrics.gpu_vendor,
                     }
                 )
@@ -245,7 +252,11 @@ class TelemetryService:
         enabled = [app for app in self.config.apps if app.enabled]
         names = [app.process_name for app in enabled]
         scheduler = PollScheduler(self.log)
-        while not self._stop_event.wait(self.config.poll_interval):
+        while not self._stop_event.is_set():
+            self._wake_event.wait(self.config.poll_interval)
+            self._wake_event.clear()
+            if self._stop_event.is_set():
+                break
             self.publisher.flush()
             if self._paused.is_set():
                 continue
@@ -282,7 +293,12 @@ class TelemetryService:
         if self.config.audio_enhancements_enabled and self.config.control_channel_balance:
             if self.master_audio is None:
                 return
-            balance = self.master_audio.get_master_balance()
+            cached_balance = getattr(
+                self.master_audio,
+                "master_balance_snapshot",
+                self.master_audio.get_master_balance,
+            )
+            balance = cached_balance()
             if balance is not None and (
                 self._last_master_balance is None
                 or abs(self._last_master_balance - balance) >= 0.01
@@ -472,7 +488,8 @@ class TelemetryService:
                     "gpu_power": metrics.gpu_power_watts,
                     "gpu_memory": metrics.gpu_memory_used_mb,
                     "gpu_clock": metrics.gpu_clock_mhz,
-                    "gpu_fan": metrics.gpu_fan_rpm,
+                    "gpu_fan": metrics.gpu_fan_percent,
+                    "gpu_fan_rpm": metrics.gpu_fan_rpm,
                     "gpu_vendor": metrics.gpu_vendor,
                 }
             )

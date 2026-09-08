@@ -25,7 +25,7 @@ def media_state_payload(
     snapshot: MediaSnapshot,
     master: AudioSessionSnapshot | None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "state": snapshot.state,
         "title": snapshot.title or None,
         "artist": snapshot.artist or None,
@@ -39,6 +39,9 @@ def media_state_payload(
         "capabilities": snapshot.capabilities.enabled_names(),
         "supported": snapshot.supported,
     }
+    if snapshot.session_id:
+        payload["session_id"] = snapshot.session_id
+    return payload
 
 
 def media_artwork_payload(snapshot: MediaSnapshot) -> dict[str, str] | None:

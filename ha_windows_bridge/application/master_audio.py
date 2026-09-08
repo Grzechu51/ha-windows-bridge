@@ -9,7 +9,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..audio import (
+    AudioApplication,
+    AudioOutputDevice,
+    AudioProviderSnapshot,
+    AudioSessionSnapshot,
+    MicrophoneSnapshot,
+)
 from ..core.state import ComputerStateStore, StateQuality
+from ..windows.com import com_apartment
 
 
 @dataclass(slots=True)
@@ -31,6 +39,10 @@ class MasterAudioProvider:
         generation: int,
         *,
         poll_interval: float,
+        process_names: tuple[str, ...] = (),
+        include_sessions: bool = False,
+        include_microphone: bool = False,
+        include_outputs: bool = False,
         command_timeout: float = 3.0,
         capacity: int = 32,
         logger: logging.Logger | None = None,
@@ -40,6 +52,11 @@ class MasterAudioProvider:
         self.state = state
         self.generation = generation
         self.poll_interval = poll_interval
+        self.maximum_poll_interval = max(5.0, poll_interval * 10)
+        self.process_names = tuple(process_names)
+        self.include_sessions = include_sessions
+        self.include_microphone = include_microphone
+        self.include_outputs = include_outputs
         self.command_timeout = command_timeout
         self.capacity = capacity
         self.log = logger or logging.getLogger("bridge.master_audio")
@@ -51,6 +68,9 @@ class MasterAudioProvider:
         self._paused = False
         self._sample_requested = False
         self._sample_epoch = 0
+        self._last_snapshot = AudioProviderSnapshot()
+        self._subscription = None
+        self._current_poll_interval = self.poll_interval
 
     def start(self) -> None:
         with self._condition:
@@ -60,6 +80,7 @@ class MasterAudioProvider:
             self._paused = False
             self._sample_requested = True
             self._sample_epoch += 1
+            self._current_poll_interval = self.poll_interval
             self._thread = threading.Thread(
                 target=self._run,
                 name=f"master-audio-{self.generation}",
@@ -86,6 +107,12 @@ class MasterAudioProvider:
                 "provider_stopped",
                 generation=self.generation,
             )
+            self.state.fail_provider(
+                "audio",
+                StateQuality.STOPPED,
+                "provider_stopped",
+                generation=self.generation,
+            )
         return stopped
 
     def pause(self, enabled: bool) -> None:
@@ -95,12 +122,27 @@ class MasterAudioProvider:
             if not enabled:
                 self._sample_requested = True
             self._condition.notify_all()
-            if enabled:
-                self.state.fail_master_audio(
-                    StateQuality.PAUSED,
-                    "sampling_paused",
-                    generation=self.generation,
-                )
+        if enabled:
+            self.state.fail_master_audio(
+                StateQuality.PAUSED,
+                "sampling_paused",
+                generation=self.generation,
+            )
+            self.state.fail_provider(
+                "audio",
+                StateQuality.PAUSED,
+                "sampling_paused",
+                generation=self.generation,
+            )
+
+    def request_refresh(self, *_args: object) -> bool:
+        with self._condition:
+            if self._stopping:
+                return False
+            self._sample_requested = True
+            self._current_poll_interval = self.poll_interval
+            self._condition.notify_all()
+            return True
 
     def set_master_volume(self, volume: float) -> bool:
         def command() -> bool:
@@ -124,8 +166,90 @@ class MasterAudioProvider:
         result = self._call(self.adapter.get_master_balance)
         return float(result) if result is not None and result is not False else None
 
+    def master_balance_snapshot(self) -> float | None:
+        with self._condition:
+            return self._last_snapshot.balance
+
     def set_master_balance(self, balance: float) -> bool:
-        return bool(self._call(lambda: self.adapter.set_master_balance(balance)))
+        return bool(self._call(lambda: self.adapter.set_master_balance(balance), refresh=True))
+
+    def session_snapshot(self, process_names: list[str]) -> dict[str, AudioSessionSnapshot]:
+        requested = {name.casefold() for name in process_names}
+        with self._condition:
+            snapshot = self._last_snapshot
+        return {
+            name: value
+            for name, value in snapshot.sessions
+            if name in requested
+        }
+
+    def volume_snapshot(self, process_names: list[str]) -> dict[str, float]:
+        return {
+            name: value.volume
+            for name, value in self.session_snapshot(process_names).items()
+        }
+
+    def get_volume(self, process_name: str) -> float | None:
+        item = self.session_snapshot([process_name]).get(process_name.casefold())
+        return item.volume if item is not None else None
+
+    def get_mute(self, process_name: str) -> bool | None:
+        item = self.session_snapshot([process_name]).get(process_name.casefold())
+        return item.muted if item is not None else None
+
+    def set_volume(self, process_name: str, volume: float) -> bool:
+        return bool(
+            self._call(
+                lambda: self.adapter.set_volume(process_name, volume),
+                refresh=True,
+            )
+        )
+
+    def set_mute(self, process_name: str, muted: bool) -> bool:
+        return bool(
+            self._call(
+                lambda: self.adapter.set_mute(process_name, muted),
+                refresh=True,
+            )
+        )
+
+    def get_microphone_snapshot(self) -> MicrophoneSnapshot | None:
+        with self._condition:
+            return self._last_snapshot.microphone
+
+    def set_microphone_volume(self, volume: float) -> bool:
+        return bool(
+            self._call(lambda: self.adapter.set_microphone_volume(volume), refresh=True)
+        )
+
+    def set_microphone_mute(self, muted: bool) -> bool:
+        return bool(
+            self._call(lambda: self.adapter.set_microphone_mute(muted), refresh=True)
+        )
+
+    def list_output_devices(self) -> list[AudioOutputDevice]:
+        with self._condition:
+            return list(self._last_snapshot.outputs)
+
+    def set_output_device(self, device_name_or_id: str) -> bool:
+        return bool(
+            self._call(
+                lambda: self.adapter.set_output_device(device_name_or_id),
+                refresh=True,
+            )
+        )
+
+    def list_audio_applications(self, **_kwargs) -> list[AudioApplication]:
+        with self._condition:
+            return list(self._last_snapshot.applications)
+
+    def count_audio_sessions(self) -> int:
+        with self._condition:
+            return sum(item.session_count for _name, item in self._last_snapshot.sessions)
+
+    def get_active_process_name(self) -> str | None:
+        with self._condition:
+            return self._last_snapshot.active_process or None
 
     def sample_now(self) -> bool:
         return bool(self._call(self._sample))
@@ -140,9 +264,12 @@ class MasterAudioProvider:
         with self._condition:
             return self._thread.ident if self._thread is not None else None
 
-    def _call(self, callback: Callable[[], Any]) -> Any:
+    def _call(self, callback: Callable[[], Any], *, refresh: bool = False) -> Any:
         if self._thread is threading.current_thread():
-            return callback()
+            result = callback()
+            if refresh and result is not False:
+                self.request_refresh()
+            return result
         request = _Request(callback)
         with self._condition:
             if self._stopping or self._thread is None or not self._thread.is_alive():
@@ -158,9 +285,44 @@ class MasterAudioProvider:
         if request.error is not None:
             self.log.warning("Master audio command failed", exc_info=request.error)
             return False
+        if refresh and request.result is not False:
+            self.request_refresh()
         return request.result
 
     def _run(self) -> None:
+        subscription = None
+        try:
+            with com_apartment():
+                try:
+                    subscribe = getattr(self.adapter, "subscribe", None)
+                    if callable(subscribe):
+                        try:
+                            subscription = subscribe(self.request_refresh)
+                            with self._condition:
+                                self._subscription = subscription
+                        except Exception:
+                            # Core Audio callbacks are an optimization. Controlled
+                            # polling remains the fallback on unsupported drivers.
+                            self.log.warning(
+                                "Core Audio callbacks unavailable; using polling fallback",
+                                exc_info=True,
+                            )
+                    self._run_owned()
+                finally:
+                    if subscription is not None:
+                        subscription()
+                    with self._condition:
+                        self._subscription = None
+        except Exception:
+            self.log.exception("Audio provider owner failed")
+            self.state.fail_provider(
+                "audio",
+                StateQuality.ERROR,
+                "owner_failed",
+                generation=self.generation,
+            )
+
+    def _run_owned(self) -> None:
         next_sample = self._clock()
         while True:
             request = None
@@ -192,10 +354,10 @@ class MasterAudioProvider:
                     request.error = exc
                 finally:
                     request.completed.set()
-                next_sample = self._clock() + self.poll_interval
+                next_sample = self._clock() + self._current_poll_interval
             elif should_sample:
                 self._sample()
-                next_sample = self._clock() + self.poll_interval
+                next_sample = self._clock() + self._current_poll_interval
 
     def _sample(self) -> bool:
         with self._condition:
@@ -203,12 +365,24 @@ class MasterAudioProvider:
             if self._stopping or self._paused:
                 return False
         try:
-            snapshot = self.adapter.get_master_snapshot()
+            reader = getattr(self.adapter, "provider_snapshot", None)
+            if callable(reader):
+                audio_snapshot = reader(
+                    include_processes=self.process_names,
+                    include_sessions=self.include_sessions,
+                    include_microphone=self.include_microphone,
+                    include_outputs=self.include_outputs,
+                )
+            else:
+                master = self.adapter.get_master_snapshot()
+                balance_reader = getattr(self.adapter, "get_master_balance", None)
+                balance = balance_reader() if callable(balance_reader) else None
+                audio_snapshot = AudioProviderSnapshot(master=master, balance=balance)
         except Exception:
-            self.log.exception("Master audio sample failed")
+            self.log.exception("Audio provider sample failed")
             quality = StateQuality.ERROR
             detail = "provider_error"
-            snapshot = None
+            audio_snapshot = None
         else:
             quality = StateQuality.UNAVAILABLE
             detail = "endpoint_unavailable"
@@ -219,15 +393,60 @@ class MasterAudioProvider:
                 or self._paused
             ):
                 return False
-            if snapshot is None:
-                self.state.fail_master_audio(
-                    quality,
-                    detail,
-                    generation=self.generation,
+            previous = self._last_snapshot
+            if audio_snapshot is not None:
+                self._last_snapshot = audio_snapshot
+                self._current_poll_interval = (
+                    self.poll_interval
+                    if audio_snapshot != previous
+                    else min(
+                        self.maximum_poll_interval,
+                        self._current_poll_interval * 1.5,
+                    )
                 )
-                return False
-            return self.state.observe_master_audio(
-                snapshot.volume,
-                snapshot.muted,
+            subscription = self._subscription
+        if audio_snapshot is None:
+            self.state.fail_provider(
+                "audio",
+                quality,
+                detail,
                 generation=self.generation,
             )
+            self.state.fail_master_audio(
+                quality,
+                detail,
+                generation=self.generation,
+            )
+            return False
+        accepted = self.state.observe_provider(
+            "audio",
+            audio_snapshot,
+            generation=self.generation,
+        )
+        master = audio_snapshot.master
+        if master is None:
+            self.state.fail_master_audio(
+                StateQuality.UNAVAILABLE,
+                "endpoint_unavailable",
+                generation=self.generation,
+            )
+        else:
+            accepted = self.state.observe_master_audio(
+                master.volume,
+                master.muted,
+                generation=self.generation,
+            ) and accepted
+        if audio_snapshot.errors:
+            self.state.fail_provider(
+                "audio",
+                StateQuality.UNAVAILABLE,
+                ",".join(audio_snapshot.errors),
+                generation=self.generation,
+            )
+        refresh = getattr(subscription, "refresh", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:
+                self.log.debug("Audio endpoint callback rebind failed", exc_info=True)
+        return accepted

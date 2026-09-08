@@ -12,6 +12,7 @@ from dataclasses import asdict
 from importlib.metadata import version
 
 from .. import __version__
+from ..audio import AudioProviderSnapshot
 from ..communication.status import CONNECTION_NAMES, connection_text
 from ..config import AppConfig
 from ..core.commands import Command, CommandResult
@@ -20,6 +21,7 @@ from ..core.observability import DiagnosticBuffer
 from ..core.state import ComputerStateStore, StateStore
 from ..runtime.worker import SerialWorker
 from ..security import redact_data
+from ..system_monitor import DiskMetrics
 from ..windows.resources import ProcessResources
 from .commands import CommandRouter
 from .lifecycle import (
@@ -30,6 +32,13 @@ from .lifecycle import (
 )
 from .master_audio import MasterAudioProvider
 from .protocol_projection import ProtocolStateProjection
+from .providers import (
+    AdaptiveProvider,
+    DeviceSnapshot,
+    MediaProvider,
+    StorageSnapshot,
+    SystemProviderView,
+)
 from .state_projection import MasterAudioProjection
 from .windows_commands import WindowsCommands
 
@@ -66,6 +75,9 @@ class Application:
         self._suspended = False
         self._telemetry = None
         self._master_audio = None
+        self._media_provider = None
+        self._system_providers = []
+        self._system_view = SystemProviderView(self.system, self.computer_state)
         self._state_projection = None
         self._protocol_projection = None
         self._generation = 0
@@ -136,12 +148,20 @@ class Application:
             self._connections.clear()
         self.supervisor = ServiceSupervisor(self.states, self.log)
         self.router = CommandRouter(logger=self.log)
-        needs_master_audio = (
+        enabled_apps = tuple(app.process_name for app in self.config.apps if app.enabled)
+        needs_audio = (
             self.config.control_master_volume
             or self.config.media_player_enabled
+            or bool(enabled_apps)
+            or self.config.control_active_app
+            or self.config.control_microphone
+            or self.config.control_audio_output
             or (
                 self.config.audio_enhancements_enabled
-                and self.config.control_channel_balance
+                and (
+                    self.config.control_channel_balance
+                    or self.config.publish_audio_sessions
+                )
             )
         )
         self._master_audio = (
@@ -150,19 +170,50 @@ class Application:
                 self.computer_state,
                 self._generation,
                 poll_interval=self.config.poll_interval,
+                process_names=enabled_apps,
+                include_sessions=bool(enabled_apps)
+                or self.config.control_active_app
+                or self.config.publish_audio_sessions,
+                include_microphone=self.config.control_microphone,
+                include_outputs=self.config.control_audio_output,
                 logger=self.log,
             )
-            if needs_master_audio
+            if needs_audio
             else None
         )
-        WindowsCommands(self.config, self.audio, self.system, self.media, self.power,
+        self._media_provider = (
+            MediaProvider(
+                self.media,
+                self.computer_state,
+                self._generation,
+                interval=max(0.25, self.config.poll_interval),
+                logger=self.log,
+            )
+            if (
+                (self.config.media_player_enabled or self.config.overlay_enabled)
+                and callable(getattr(self.media, "snapshot", None))
+            )
+            else None
+        )
+        self._system_providers = self._create_system_providers(enabled_apps)
+        self._system_view = SystemProviderView(self.system, self.computer_state)
+        audio_view = self._master_audio or self.audio
+        media_view = self._media_provider or self.media
+        WindowsCommands(self.config, audio_view, self._system_view, media_view, self.power,
                         self.events, self.monitors,
                         master_audio=self._master_audio).install(self.router)
         self._telemetry = None
         self._state_projection = None
         self._protocol_projection = None
         if self._master_audio is not None:
-            self.supervisor.register("master_audio", self._master_audio)
+            self.supervisor.register("audio", self._master_audio)
+        if self._media_provider is not None:
+            self.supervisor.register("media", self._media_provider)
+        provider_names = []
+        for provider in self._system_providers:
+            name = f"provider_{provider.source}"
+            provider_names.append(name)
+            self.supervisor.register(name, provider)
         if self.config.mqtt.host:
             gateway = (self._mqtt_factory or MqttGateway)(self.config, self.router, self.events)
             if hasattr(gateway.publisher, "begin_generation"):
@@ -188,19 +239,185 @@ class Application:
                 self.supervisor.register(
                     "master_audio_projection",
                     self._state_projection,
-                    "master_audio",
+                    "audio",
                     "mqtt",
                 )
-            self._telemetry = TelemetryService(self.config, self.audio, self.system, self.media,
+            self._telemetry = TelemetryService(self.config, audio_view, self._system_view, media_view,
                                               gateway.publisher, self.events, self.monitors,
                                               self.computer_state, self._master_audio,
                                               getattr(gateway, "protocol", None))
-            self.supervisor.register("sensors", self._telemetry, "mqtt")
+            telemetry_dependencies = ["mqtt", *provider_names]
+            if self._master_audio is not None:
+                telemetry_dependencies.append("audio")
+            if self._media_provider is not None:
+                telemetry_dependencies.append("media")
+            self.supervisor.register(
+                "sensors",
+                self._telemetry,
+                *telemetry_dependencies,
+            )
         if self.config.home_assistant.enabled and self.config.overlay_enabled:
             if self._direct_factory is None:
                 from ..communication.home_assistant import HomeAssistantGateway
                 self._direct_factory = HomeAssistantGateway
             self.supervisor.register("home_assistant", self._direct_factory(self.config, self.router, self.events))
+
+    def _event_subscription(self, *topics: str):
+        def subscribe(changed):
+            subscriptions = [
+                self.events.subscribe(topic, lambda event, wake=changed: wake(event))
+                for topic in topics
+            ]
+
+            def unsubscribe():
+                for callback in subscriptions:
+                    callback()
+
+            return unsubscribe
+
+        return subscribe
+
+    def _create_system_providers(self, enabled_apps):
+        providers = []
+        interval = max(0.1, self.config.poll_interval)
+
+        def add(
+            source,
+            enabled,
+            read,
+            *,
+            minimum,
+            maximum,
+            events=(),
+            owns_com=False,
+            stop_timeout=3.0,
+            read_timeout=None,
+        ):
+            if not enabled or not callable(read):
+                return
+            providers.append(
+                AdaptiveProvider(
+                    source,
+                    read,
+                    self.computer_state,
+                    self._generation,
+                    interval=minimum,
+                    maximum_interval=maximum,
+                    subscribe=self._event_subscription(*events) if events else None,
+                    owns_com=owns_com,
+                    stop_timeout=stop_timeout,
+                    read_timeout=read_timeout,
+                    logger=self.log,
+                )
+            )
+
+        add(
+            "desktop_context",
+            (
+                self.config.publish_activity
+                or self.config.publish_idle
+                or self.config.publish_session_lock
+                or self.config.overlay_enabled
+            ),
+            getattr(self.system, "context_snapshot", None),
+            minimum=interval,
+            maximum=max(2.0, interval * 5),
+            events=("windows.locked", "windows.display_changed"),
+        )
+        add(
+            "processes",
+            bool(enabled_apps),
+            (
+                lambda: frozenset(self.system.running_process_names(list(enabled_apps)))
+                if hasattr(self.system, "running_process_names")
+                else frozenset()
+            ),
+            minimum=max(0.5, interval),
+            maximum=max(5.0, interval * 10),
+        )
+        add(
+            "cpu_ram",
+            self.config.publish_cpu_stats or self.config.publish_ram_stats,
+            getattr(self.system, "cpu_ram_metrics", None),
+            minimum=max(0.5, interval),
+            maximum=max(5.0, interval * 10),
+        )
+        add(
+            "gpu",
+            self.config.publish_gpu_stats or self.config.publish_cpu_stats,
+            (
+                lambda: self.system.gpu_metrics_snapshot(
+                    include_cpu_hardware=self.config.publish_cpu_stats
+                )
+                if hasattr(self.system, "gpu_metrics_snapshot")
+                else self.system.system_metrics(
+                    include_cpu=self.config.publish_cpu_stats,
+                    include_gpu=self.config.publish_gpu_stats,
+                    include_ram=False,
+                )
+            ),
+            minimum=5.0,
+            maximum=30.0,
+            owns_com=True,
+            stop_timeout=4.0,
+        )
+        add(
+            "windows_health",
+            self.config.publish_windows_health,
+            (
+                getattr(self.system, "windows_health_snapshot", None)
+                or getattr(self.system, "windows_health", None)
+            ),
+            minimum=30.0,
+            maximum=300.0,
+            events=("windows.power_changed",),
+        )
+        add(
+            "windows_update",
+            self.config.publish_windows_health,
+            getattr(self.system, "pending_windows_updates", None),
+            minimum=30 * 60.0,
+            maximum=30 * 60.0,
+            stop_timeout=4.0,
+            read_timeout=15.0,
+        )
+
+        def storage_snapshot():
+            volumes = list(self.system.list_disk_volumes())
+            try:
+                metrics = self.system.disk_metrics(
+                    self.config.disk_mounts,
+                    volumes=volumes,
+                )
+            except TypeError:
+                metrics = self.system.disk_metrics(self.config.disk_mounts)
+            return StorageSnapshot(tuple(volumes), metrics)
+
+        add(
+            "storage",
+            self.config.publish_disk_stats,
+            storage_snapshot,
+            minimum=5.0,
+            maximum=60.0,
+            events=("windows.device_changed",),
+            owns_com=True,
+            stop_timeout=4.0,
+        )
+        add(
+            "pnp",
+            self.config.publish_devices,
+            (
+                lambda: DeviceSnapshot(tuple(self.system.list_pnp_devices()))
+                if hasattr(self.system, "list_pnp_devices")
+                else DeviceSnapshot()
+            ),
+            minimum=10.0,
+            maximum=120.0,
+            events=("windows.device_changed",),
+            owns_com=True,
+            stop_timeout=4.0,
+        )
+        return providers
 
     def _schedule(self, action):
         with self._guard:
@@ -254,7 +471,6 @@ class Application:
                 self.log.warning("Nie uruchomiono usług: %s", "; ".join(errors))
                 self.events.emit("application.error", "\n".join(errors))
                 return
-            self.media.reopen()
             self.last_start_report = self.supervisor.start()
             self.events.emit("application.start_report", self.last_start_report)
             self.events.emit("application.running", bool(self.supervisor.active))
@@ -316,23 +532,6 @@ class Application:
                     "services",
                     LifecycleOutcome.FAILED,
                     "supervisor_shutdown_failed",
-                )
-            )
-        try:
-            results.append(
-                self._stop_result(
-                    "media",
-                    self.media.close(),
-                    "media_shutdown_timeout",
-                )
-            )
-        except Exception:
-            self.log.exception("Media shutdown failed")
-            results.append(
-                LifecycleResult(
-                    "media",
-                    LifecycleOutcome.FAILED,
-                    "media_shutdown_failed",
                 )
             )
         self.events.emit("application.running", False)
@@ -426,6 +625,10 @@ class Application:
             self._telemetry.pause(paused)
         if self._master_audio:
             self._master_audio.pause(paused)
+        if self._media_provider:
+            self._media_provider.pause(paused)
+        for provider in self._system_providers:
+            provider.pause(paused)
 
     def request_inventory(self, kind):
         if kind not in {"disks", "devices", "applications"} or self._closed:
@@ -433,9 +636,47 @@ class Application:
         def query():
             try:
                 if kind == "applications":
-                    items = self.audio.list_audio_applications(include_processes=[app.process_name for app in self.config.apps])
+                    if self._master_audio is not None and self._master_audio.is_alive:
+                        items = self._master_audio.list_audio_applications()
+                    else:
+                        items = self.audio.list_audio_applications(
+                            include_processes=[
+                                app.process_name for app in self.config.apps
+                            ]
+                        )
+                        generation = self._services_generation
+                        if generation is not None:
+                            self.computer_state.observe_provider(
+                                "audio",
+                                AudioProviderSnapshot(applications=tuple(items)),
+                                generation=generation,
+                            )
                 else:
-                    items = self.system.list_disk_volumes() if kind == "disks" else self.system.list_pnp_devices()
+                    source = "storage" if kind == "disks" else "pnp"
+                    sample = self.computer_state.snapshot().provider(source)
+                    if sample is None:
+                        generation = self._services_generation
+                        if kind == "disks":
+                            items = self.system.list_disk_volumes()
+                            snapshot = StorageSnapshot(
+                                tuple(items),
+                                DiskMetrics(0.0, 0.0, 0.0, 0.0),
+                            )
+                        else:
+                            items = self.system.list_pnp_devices()
+                            snapshot = DeviceSnapshot(tuple(items))
+                        if generation is not None:
+                            self.computer_state.observe_provider(
+                                source,
+                                snapshot,
+                                generation=generation,
+                            )
+                    else:
+                        items = (
+                            list(sample.value.volumes)
+                            if kind == "disks"
+                            else list(sample.value.devices)
+                        )
                 self.events.emit("inventory." + kind, items)
             except Exception:
                 self.log.exception("Device inventory unavailable")
@@ -465,8 +706,15 @@ class Application:
     def request_media_example(self, request_id):
         def query():
             try:
-                self.media.reopen()
-                snapshot = self.media.snapshot()
+                media = self._media_provider
+                if media is None:
+                    self.media.reopen()
+                    try:
+                        snapshot = self.media.snapshot()
+                    finally:
+                        self.media.close()
+                else:
+                    snapshot = media.snapshot()
                 if not snapshot.supported:
                     raise RuntimeError("Windows Media unavailable")
                 if not snapshot.source_app and not snapshot.title:
@@ -490,8 +738,10 @@ class Application:
         def query():
             if self._closed or self._suspended:
                 return
-            self.media.reopen()
-            snapshot = self.media.snapshot()
+            media = self._media_provider
+            if media is None:
+                return
+            snapshot = media.snapshot()
             if snapshot.supported:
                 from ..overlays.windows_media import windows_media_payload
                 payload = windows_media_payload(snapshot, controls=self.config.media_player_enabled and not self.router.closed)

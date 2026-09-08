@@ -6,7 +6,7 @@ import hashlib
 import logging
 import threading
 import time
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -49,6 +49,7 @@ class MediaSnapshot:
     album_title: str = ""
     album_artist: str = ""
     source_app: str = ""
+    session_id: str = ""
     duration: float = 0.0
     position: float = 0.0
     capabilities: MediaCapabilities = MediaCapabilities()
@@ -223,6 +224,10 @@ class WindowsMediaService:
         self._artwork_key: tuple[str, ...] | None = None
         self._artwork_checked_at = 0.0
         self._artwork = MediaArtwork()
+        self._change_callbacks: set[Callable[..., None]] = set()
+        self._manager_event_tokens: list[tuple[str, object]] = []
+        self._session_event_tokens: list[tuple[str, object]] = []
+        self._event_session: Any = None
 
     def _ensure_runner(self) -> _AsyncRunner | None:
         with self._runner_lock:
@@ -251,6 +256,103 @@ class WindowsMediaService:
             self._manager = await GlobalSystemMediaTransportControlsSessionManager.request_async()
         return self._manager
 
+    def subscribe(self, changed: Callable[..., None]) -> Callable[[], None]:
+        runner = self._ensure_runner()
+        if runner is None:
+            return lambda: None
+        runner.call(self._subscribe_async(changed))
+
+        def unsubscribe() -> None:
+            current = self._ensure_runner()
+            if current is None:
+                return
+            with suppress(Exception):
+                current.call(self._unsubscribe_async(changed))
+
+        return unsubscribe
+
+    async def _subscribe_async(self, changed: Callable[..., None]) -> None:
+        self._change_callbacks.add(changed)
+        manager = await self._manager_async()
+        if not self._manager_event_tokens:
+            self._manager_event_tokens = [
+                (
+                    "current",
+                    manager.add_current_session_changed(self._manager_changed),
+                ),
+                ("sessions", manager.add_sessions_changed(self._manager_changed)),
+            ]
+        self._rebind_session_events(manager.get_current_session())
+
+    async def _unsubscribe_async(self, changed: Callable[..., None]) -> None:
+        self._change_callbacks.discard(changed)
+        if not self._change_callbacks:
+            self._remove_event_handlers()
+
+    def _manager_changed(self, sender, _args) -> None:
+        self._rebind_session_events(sender.get_current_session())
+        self._notify_changed()
+
+    def _session_changed(self, _sender, _args) -> None:
+        self._notify_changed()
+
+    def _notify_changed(self) -> None:
+        for callback in tuple(self._change_callbacks):
+            try:
+                callback()
+            except Exception:
+                self.log.debug("GSMTC change callback failed", exc_info=True)
+
+    def _rebind_session_events(self, session: Any) -> None:
+        if session is self._event_session:
+            return
+        self._remove_session_handlers()
+        self._event_session = session
+        if session is None:
+            return
+        self._session_event_tokens = [
+            (
+                "media",
+                session.add_media_properties_changed(self._session_changed),
+            ),
+            (
+                "playback",
+                session.add_playback_info_changed(self._session_changed),
+            ),
+            (
+                "timeline",
+                session.add_timeline_properties_changed(self._session_changed),
+            ),
+        ]
+
+    def _remove_session_handlers(self) -> None:
+        session = self._event_session
+        for kind, token in self._session_event_tokens:
+            if session is None:
+                break
+            with suppress(Exception):
+                if kind == "media":
+                    session.remove_media_properties_changed(token)
+                elif kind == "playback":
+                    session.remove_playback_info_changed(token)
+                else:
+                    session.remove_timeline_properties_changed(token)
+        self._session_event_tokens.clear()
+        self._event_session = None
+
+    def _remove_event_handlers(self) -> None:
+        self._remove_session_handlers()
+        manager = self._manager
+        for kind, token in self._manager_event_tokens:
+            if manager is None:
+                break
+            with suppress(Exception):
+                if kind == "current":
+                    manager.remove_current_session_changed(token)
+                else:
+                    manager.remove_sessions_changed(token)
+        self._manager_event_tokens.clear()
+
     async def _snapshot_async(self) -> MediaSnapshot:
         manager = await self._manager_async()
         session = manager.get_current_session()
@@ -277,6 +379,7 @@ class WindowsMediaService:
             album_title=str(getattr(properties, "album_title", "") or ""),
             album_artist=str(getattr(properties, "album_artist", "") or ""),
             source_app=friendly_media_source(source_identifier),
+            session_id=source_identifier,
             duration=round(duration, 3),
             position=round(position, 3),
             capabilities=MediaCapabilities(
@@ -321,10 +424,18 @@ class WindowsMediaService:
             self.log.debug("Nie można odczytać sesji multimedialnej Windows", exc_info=True)
             return MediaSnapshot(supported=False, error=str(exc))
 
-    async def _execute_async(self, action: str, value: float | None = None) -> bool:
+    async def _execute_async(
+        self,
+        action: str,
+        value: float | None = None,
+        session_id: str = "",
+    ) -> bool:
         manager = await self._manager_async()
         session = manager.get_current_session()
         if session is None:
+            return False
+        current_id = str(session.source_app_user_model_id or "")
+        if session_id and current_id != session_id:
             return False
         actions = {
             "play": session.try_play_async,
@@ -340,12 +451,18 @@ class WindowsMediaService:
         callback = actions.get(action)
         return bool(await callback()) if callback else False
 
-    def execute(self, action: str, value: float | None = None) -> bool:
+    def execute(
+        self,
+        action: str,
+        value: float | None = None,
+        *,
+        session_id: str = "",
+    ) -> bool:
         runner = self._ensure_runner()
         if runner is None:
             return False
         try:
-            return bool(runner.call(self._execute_async(action, value)))
+            return bool(runner.call(self._execute_async(action, value, session_id)))
         except Exception:
             self._manager = None
             self.log.debug("Nie można wykonać komendy multimedialnej %s", action, exc_info=True)
@@ -356,11 +473,17 @@ class WindowsMediaService:
             self._closed = True
             stopped = True
             if self._runner is not None:
+                with suppress(Exception):
+                    self._runner.call(self._close_async(), timeout=1.0)
                 stopped = self._runner.close()
                 if not self._runner._thread.is_alive():
                     self._runner = None
                 self._manager = None
             return stopped
+
+    async def _close_async(self) -> None:
+        self._change_callbacks.clear()
+        self._remove_event_handlers()
 
     def reopen(self) -> None:
         with self._runner_lock:
