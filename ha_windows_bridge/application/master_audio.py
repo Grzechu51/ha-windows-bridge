@@ -6,7 +6,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..audio import (
@@ -71,6 +71,7 @@ class MasterAudioProvider:
         self._last_snapshot = AudioProviderSnapshot()
         self._subscription = None
         self._current_poll_interval = self.poll_interval
+        self._cleanup_ok = True
 
     def start(self) -> None:
         with self._condition:
@@ -81,6 +82,7 @@ class MasterAudioProvider:
             self._sample_requested = True
             self._sample_epoch += 1
             self._current_poll_interval = self.poll_interval
+            self._cleanup_ok = True
             self._thread = threading.Thread(
                 target=self._run,
                 name=f"master-audio-{self.generation}",
@@ -100,19 +102,14 @@ class MasterAudioProvider:
             thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=3)
-        stopped = thread is None or not thread.is_alive()
-        if stopped:
-            self.state.fail_master_audio(
-                StateQuality.STOPPED,
-                "provider_stopped",
-                generation=self.generation,
-            )
-            self.state.fail_provider(
-                "audio",
-                StateQuality.STOPPED,
-                "provider_stopped",
-                generation=self.generation,
-            )
+        stopped = (thread is None or not thread.is_alive()) and self._cleanup_ok
+        quality = StateQuality.STOPPED if stopped else StateQuality.ERROR
+        detail = "provider_stopped" if stopped else "shutdown_or_cleanup_failed"
+        self.state.fail_audio_provider(
+            quality,
+            detail,
+            generation=self.generation,
+        )
         return stopped
 
     def pause(self, enabled: bool) -> None:
@@ -123,13 +120,7 @@ class MasterAudioProvider:
                 self._sample_requested = True
             self._condition.notify_all()
         if enabled:
-            self.state.fail_master_audio(
-                StateQuality.PAUSED,
-                "sampling_paused",
-                generation=self.generation,
-            )
-            self.state.fail_provider(
-                "audio",
+            self.state.fail_audio_provider(
                 StateQuality.PAUSED,
                 "sampling_paused",
                 generation=self.generation,
@@ -163,20 +154,17 @@ class MasterAudioProvider:
         return bool(self._call(command))
 
     def get_master_balance(self) -> float | None:
-        result = self._call(self.adapter.get_master_balance)
-        return float(result) if result is not None and result is not False else None
+        return self._accepted_snapshot().balance
 
     def master_balance_snapshot(self) -> float | None:
-        with self._condition:
-            return self._last_snapshot.balance
+        return self._accepted_snapshot().balance
 
     def set_master_balance(self, balance: float) -> bool:
         return bool(self._call(lambda: self.adapter.set_master_balance(balance), refresh=True))
 
     def session_snapshot(self, process_names: list[str]) -> dict[str, AudioSessionSnapshot]:
         requested = {name.casefold() for name in process_names}
-        with self._condition:
-            snapshot = self._last_snapshot
+        snapshot = self._accepted_snapshot()
         return {
             name: value
             for name, value in snapshot.sessions
@@ -214,8 +202,7 @@ class MasterAudioProvider:
         )
 
     def get_microphone_snapshot(self) -> MicrophoneSnapshot | None:
-        with self._condition:
-            return self._last_snapshot.microphone
+        return self._accepted_snapshot().microphone
 
     def set_microphone_volume(self, volume: float) -> bool:
         return bool(
@@ -228,8 +215,7 @@ class MasterAudioProvider:
         )
 
     def list_output_devices(self) -> list[AudioOutputDevice]:
-        with self._condition:
-            return list(self._last_snapshot.outputs)
+        return list(self._accepted_snapshot().outputs)
 
     def set_output_device(self, device_name_or_id: str) -> bool:
         return bool(
@@ -240,16 +226,22 @@ class MasterAudioProvider:
         )
 
     def list_audio_applications(self, **_kwargs) -> list[AudioApplication]:
-        with self._condition:
-            return list(self._last_snapshot.applications)
+        return list(self._accepted_snapshot().applications)
 
     def count_audio_sessions(self) -> int:
-        with self._condition:
-            return sum(item.session_count for _name, item in self._last_snapshot.sessions)
+        return sum(
+            item.session_count
+            for _name, item in self._accepted_snapshot().sessions
+        )
 
     def get_active_process_name(self) -> str | None:
-        with self._condition:
-            return self._last_snapshot.active_process or None
+        return self._accepted_snapshot().active_process or None
+
+    def _accepted_snapshot(self) -> AudioProviderSnapshot:
+        sample = self.state.snapshot().provider("audio")
+        if sample is not None and isinstance(sample.value, AudioProviderSnapshot):
+            return sample.value
+        return AudioProviderSnapshot()
 
     def sample_now(self) -> bool:
         return bool(self._call(self._sample))
@@ -310,13 +302,17 @@ class MasterAudioProvider:
                     self._run_owned()
                 finally:
                     if subscription is not None:
-                        subscription()
+                        try:
+                            if subscription() is False:
+                                self._cleanup_ok = False
+                        except Exception:
+                            self._cleanup_ok = False
+                            self.log.exception("Core Audio callback cleanup failed")
                     with self._condition:
                         self._subscription = None
         except Exception:
             self.log.exception("Audio provider owner failed")
-            self.state.fail_provider(
-                "audio",
+            self.state.fail_audio_provider(
                 StateQuality.ERROR,
                 "owner_failed",
                 generation=self.generation,
@@ -387,66 +383,120 @@ class MasterAudioProvider:
             quality = StateQuality.UNAVAILABLE
             detail = "endpoint_unavailable"
         with self._condition:
-            if (
-                sample_epoch != self._sample_epoch
-                or self._stopping
-                or self._paused
-            ):
-                return False
             previous = self._last_snapshot
-            if audio_snapshot is not None:
-                self._last_snapshot = audio_snapshot
-                self._current_poll_interval = (
-                    self.poll_interval
-                    if audio_snapshot != previous
-                    else min(
-                        self.maximum_poll_interval,
-                        self._current_poll_interval * 1.5,
-                    )
-                )
             subscription = self._subscription
         if audio_snapshot is None:
-            self.state.fail_provider(
-                "audio",
+            self.state.fail_audio_provider(
                 quality,
                 detail,
                 generation=self.generation,
-            )
-            self.state.fail_master_audio(
-                quality,
-                detail,
-                generation=self.generation,
+                accept_if=lambda: self._sample_is_current(sample_epoch),
             )
             return False
-        accepted = self.state.observe_provider(
-            "audio",
+        audio_snapshot = self._preserve_partial_snapshot(
             audio_snapshot,
-            generation=self.generation,
+            previous,
+        )
+        detail = ",".join(audio_snapshot.errors)
+        provider_quality = (
+            StateQuality.UNAVAILABLE
+            if audio_snapshot.errors
+            else StateQuality.GOOD
         )
         master = audio_snapshot.master
-        if master is None:
-            self.state.fail_master_audio(
-                StateQuality.UNAVAILABLE,
-                "endpoint_unavailable",
-                generation=self.generation,
-            )
-        else:
-            accepted = self.state.observe_master_audio(
-                master.volume,
-                master.muted,
-                generation=self.generation,
-            ) and accepted
-        if audio_snapshot.errors:
-            self.state.fail_provider(
-                "audio",
-                StateQuality.UNAVAILABLE,
-                ",".join(audio_snapshot.errors),
-                generation=self.generation,
+        master_unavailable = master is None or "master" in audio_snapshot.errors
+        accepted = self.state.observe_audio_provider(
+            audio_snapshot,
+            None if master is None else (master.volume, master.muted),
+            generation=self.generation,
+            provider_quality=provider_quality,
+            provider_detail=detail,
+            master_quality=(
+                StateQuality.UNAVAILABLE
+                if master_unavailable
+                else StateQuality.GOOD
+            ),
+            master_detail=(
+                "endpoint_unavailable"
+                if master_unavailable
+                else ""
+            ),
+            accept_if=lambda: self._sample_is_current(sample_epoch),
+        )
+        if not accepted:
+            return False
+        with self._condition:
+            self._last_snapshot = audio_snapshot
+            self._current_poll_interval = (
+                self.poll_interval
+                if audio_snapshot != previous
+                else min(
+                    self.maximum_poll_interval,
+                    self._current_poll_interval * 1.5,
+                )
             )
         refresh = getattr(subscription, "refresh", None)
         if callable(refresh):
             try:
                 refresh()
             except Exception:
-                self.log.debug("Audio endpoint callback rebind failed", exc_info=True)
+                self.log.exception("Audio callback rebind failed")
+                self.state.fail_audio_provider(
+                    StateQuality.ERROR,
+                    "callback_rebind_failed",
+                    generation=self.generation,
+                    accept_if=lambda: self._sample_is_current(sample_epoch),
+                )
+                return False
         return accepted
+
+    def _sample_is_current(self, sample_epoch: int) -> bool:
+        return (
+            not self._stopping
+            and not self._paused
+            and sample_epoch == self._sample_epoch
+        )
+
+    @staticmethod
+    def _preserve_partial_snapshot(
+        current: AudioProviderSnapshot,
+        previous: AudioProviderSnapshot,
+    ) -> AudioProviderSnapshot:
+        replacements: dict[str, object] = {}
+        errors = set(current.errors)
+        if "master" in errors and current.master is None:
+            replacements["master"] = previous.master
+            replacements["balance"] = previous.balance
+        if "microphone" in errors and current.microphone is None:
+            replacements["microphone"] = previous.microphone
+        if "outputs" in errors and not current.outputs:
+            replacements["outputs"] = previous.outputs
+        failed_processes = {
+            process.casefold()
+            for process, _session_id in current.session_failures
+        }
+        if failed_processes:
+            current_sessions = dict(current.sessions)
+            previous_sessions = dict(previous.sessions)
+            for process in failed_processes:
+                if process in previous_sessions:
+                    current_sessions[process] = previous_sessions[process]
+            current_apps = {
+                item.process_name.casefold(): item
+                for item in current.applications
+            }
+            previous_apps = {
+                item.process_name.casefold(): item
+                for item in previous.applications
+            }
+            for process in failed_processes:
+                if process in previous_apps:
+                    current_apps[process] = previous_apps[process]
+            replacements["sessions"] = tuple(sorted(current_sessions.items()))
+            replacements["applications"] = tuple(
+                sorted(
+                    current_apps.values(),
+                    key=lambda item: item.display_name.casefold(),
+                )
+            )
+        return replace(current, **replacements) if replacements else current

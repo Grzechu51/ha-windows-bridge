@@ -481,6 +481,7 @@ def test_gsmtc_registers_and_releases_manager_and_session_events():
         changed.append("changed")
 
     asyncio.run(service._subscribe_async(callback))
+    service._runner = SimpleNamespace(schedule=lambda action: action())
     manager.session.playback_changed(None, None)
     manager.current_changed(manager, None)
     assert changed == ["changed", "changed"]
@@ -601,7 +602,7 @@ def test_native_windows_callbacks_only_emit_wake_events_for_provider_owners():
     dispatch(0x0218, 4)  # PBT_APMSUSPEND
 
     assert ("windows.device_changed", None) in received
-    assert ("windows.network_changed", None) in received
+    assert ("windows.network_changed", None) not in received
     assert ("windows.display_changed", None) in received
     assert ("windows.locked", True) in received
     assert ("windows.power_changed", "suspend") in received

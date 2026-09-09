@@ -28,12 +28,13 @@ sample-epoch guards discard callbacks and I/O results from an old runtime.
 | Desktop/session | desktop_context provider | WTS lock/unlock and display change | configured interval, backing off to 5x / at least 2 s | no worker |
 | Processes | processes provider | none | 0.5 s minimum, backing off to 10x / at least 5 s | no worker |
 | CPU/RAM | cpu_ram provider | none | 0.5 s minimum, backing off to 10x / at least 5 s | no worker |
-| GPU/hardware sensors | gpu provider | none | 5–30 s | no worker |
+| CPU hardware sensors | cpu_hardware provider | none | 5–30 s | no worker |
+| GPU/vendor sensors | gpu provider | none | 5–30 s | no worker and zero GPU/vendor calls |
 | Power/restart health | windows_health provider | suspend/resume | 30–300 s | no worker |
 | Windows Update | windows_update provider and one tracked WUA I/O | none | 30 minutes, 15 s read deadline | no worker |
 | Storage | storage provider | WM_DEVICECHANGE | 5–60 s | no worker; inventory is one-shot |
 | PnP | pnp provider | WM_DEVICECHANGE | 10–120 s | no worker; inventory is one-shot |
-| Network wake-up | transport lifecycle remains separate | device change and resume emit windows.network_changed | transport-owned reconnect only | no sensor poller |
+| Network wake-up | MQTT and Direct lifecycle remain separate | NotifyIpInterfaceChange and resume emit windows.network_changed | coalesced jitter, then transport-owned reconnect/backoff | no sensor poller |
 
 Callback bodies only signal/coalesce refresh work. They do not enumerate
 Windows, mutate ComputerState under a provider lock, publish to the network, or
@@ -45,23 +46,26 @@ failures.
 
 - Audio endpoints use the Core Audio device ID. Application session aggregates
   retain every Core Audio InstanceIdentifier (Identifier/PID fallback).
-- GSMTC state includes the Windows source_app_user_model_id as session_id.
-  Commands use the observed ID as a compare-before-execute guard, so a newly
-  selected player cannot receive a command intended for a disappeared session.
+- GSMTC state keeps source_app_user_model_id as the display source and uses a
+  lifecycle-scoped identity of the concrete WinRT session as session_id.
+  Commands bind that identity before CommandRouter queuing and compare it again
+  on the owner, so another instance with the same AUMID cannot receive them.
 - Disk health comes from MSFT_PhysicalDisk.HealthStatus. Temperature is queried
-  separately from MSFT_StorageReliabilityCounter.Temperature; legacy SMART is a
-  health fallback only.
-- NVIDIA nvidia-smi fan.speed is published as gpu_fan in percent. Actual RPM
-  from Libre/OpenHardwareMonitor is a separate gpu_fan_rpm metric.
-- The existing gpu_fan entity keeps its stable unique ID and topic. Its discovery
-  unit changes from rpm to percent, allowing Home Assistant to update the entity
-  in place; no registry deletion is performed.
+  separately from MSFT_StorageReliabilityCounter.Temperature after mapping the
+  selected logical volume through its partition to a physical DeviceId. The
+  mapping cache is invalidated on hotplug.
+- NVIDIA rows are selected by stable UUID, not output order.
+- The existing gpu_fan entity keeps its RPM meaning, unique ID, and topic.
+  NVIDIA fan.speed percentage uses the new gpu_fan_percent identity and topic,
+  so Home Assistant long-term statistics never mix RPM with percent.
 
 ## Compatibility and deferred work
 
 The low-level WindowsAudioService and WindowsSystemMonitor methods remain as
 compatibility adapter seams and for one-shot configuration inventory. Production
-telemetry and commands receive state-backed facades/owners. Existing MQTT entity
+telemetry and commands receive state-backed facades/owners. One-shot direct
+inventory is used only while no corresponding provider owner is active.
+Existing MQTT entity
 topics and Protocol v3 remain unchanged; session_id is an optional additive
 media-state field. MQTT and Direct HA retain their independent lifecycle.
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,14 +12,17 @@ import win32gui
 import win32process
 from pycaw.callbacks import (
     AudioEndpointVolumeCallback,
+    AudioSessionEvents,
     AudioSessionNotification,
     MMNotificationClient,
 )
 from pycaw.constants import DEVICE_STATE, EDataFlow, ERole
 from pycaw.pycaw import (
+    AudioSession,
     AudioUtilities,
     IAudioEndpointVolume,
     IAudioMeterInformation,
+    IAudioSessionControl2,
     ISimpleAudioVolume,
 )
 
@@ -72,6 +75,7 @@ class AudioProviderSnapshot:
     outputs: tuple[AudioOutputDevice, ...] = ()
     active_process: str = ""
     errors: tuple[str, ...] = ()
+    session_failures: tuple[tuple[str, str], ...] = ()
 
     def session_map(self) -> dict[str, AudioSessionSnapshot]:
         return dict(self.sessions)
@@ -116,48 +120,213 @@ class _SessionEvents(AudioSessionNotification):
         self.changed()
 
 
+class _ExistingSessionEvents(AudioSessionEvents):
+    def __init__(self, changed: Callable[..., None]) -> None:
+        super().__init__()
+        self.changed = changed
+
+    def on_simple_volume_changed(self, *_args) -> None:
+        self.changed()
+
+    def on_state_changed(self, *_args) -> None:
+        self.changed()
+
+    def on_session_disconnected(self, *_args) -> None:
+        self.changed()
+
+
 class _AudioEventSubscription:
     """Core Audio callback lifetime owned by the provider COM apartment."""
 
     def __init__(self, changed: Callable[..., None]) -> None:
         self.changed = changed
-        self.enumerator = AudioUtilities.GetDeviceEnumerator()
+        self.enumerator = None
         self.device_callback = _DeviceEvents(changed)
-        self.enumerator.RegisterEndpointNotificationCallback(self.device_callback)
-        self.session_manager = AudioUtilities.GetAudioSessionManager()
+        self.session_manager = None
         self.session_callback = _SessionEvents(changed)
-        self.session_manager.RegisterSessionNotification(self.session_callback)
-        # Windows only starts session-created callbacks after first enumeration.
-        self.session_manager.GetSessionEnumerator()
         self.endpoint_id = ""
         self.endpoint = None
         self.volume_callback = _VolumeEvents(changed)
-        self.refresh_endpoint()
+        self._session_events: dict[str, tuple[AudioSession, _ExistingSessionEvents]] = {}
+        try:
+            self.enumerator = AudioUtilities.GetDeviceEnumerator()
+            self.enumerator.RegisterEndpointNotificationCallback(self.device_callback)
+            self.refresh_endpoint()
+        except Exception:
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                raise RuntimeError(
+                    "Core Audio callback setup rollback failed"
+                ) from cleanup_error
+            raise
 
     def refresh_endpoint(self) -> None:
-        try:
-            device = AudioUtilities.GetSpeakers()
-            endpoint_id = str(device.id)
-            if endpoint_id == self.endpoint_id:
-                return
-            if self.endpoint is not None:
-                self.endpoint.UnregisterControlChangeNotify(self.volume_callback)
-            self.endpoint = device.EndpointVolume
-            self.endpoint.RegisterControlChangeNotify(self.volume_callback)
-            self.endpoint_id = endpoint_id
-        except Exception:
-            self.endpoint = None
-            self.endpoint_id = ""
+        device = AudioUtilities.GetSpeakers()
+        endpoint_id = str(device.id)
+        if endpoint_id == self.endpoint_id:
+            self._refresh_existing_sessions()
+            return
 
-    def close(self) -> None:
+        new_endpoint = device.EndpointVolume
+        new_manager = device.AudioSessionManager
+        registered_volume = False
+        registered_manager = False
+        new_sessions: dict[str, tuple[AudioSession, _ExistingSessionEvents]] = {}
+        try:
+            new_endpoint.RegisterControlChangeNotify(self.volume_callback)
+            registered_volume = True
+            new_manager.RegisterSessionNotification(self.session_callback)
+            registered_manager = True
+            new_sessions = self._register_existing_sessions(new_manager)
+        except Exception as setup_error:
+            cleanup_errors: list[BaseException] = []
+            for session, _callback in new_sessions.values():
+                try:
+                    session.unregister_notification()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+            if registered_manager:
+                try:
+                    new_manager.UnregisterSessionNotification(self.session_callback)
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+            if registered_volume:
+                try:
+                    new_endpoint.UnregisterControlChangeNotify(self.volume_callback)
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+            if cleanup_errors:
+                raise RuntimeError(
+                    "Core Audio callback setup and rollback failed"
+                ) from setup_error
+            raise
+
+        cleanup_errors = self._detach_endpoint()
+        self.endpoint = new_endpoint
+        self.session_manager = new_manager
+        self.endpoint_id = endpoint_id
+        self._session_events = new_sessions
+        if cleanup_errors:
+            raise RuntimeError("Core Audio old endpoint cleanup failed")
+
+    def _enumerate_sessions(self, manager) -> list[AudioSession]:
+        enumerator = manager.GetSessionEnumerator()
+        sessions: list[AudioSession] = []
+        for index in range(int(enumerator.GetCount())):
+            control = enumerator.GetSession(index)
+            if control is None:
+                continue
+            control2 = control.QueryInterface(IAudioSessionControl2)
+            if control2 is not None:
+                sessions.append(AudioSession(control2))
+        return sessions
+
+    @staticmethod
+    def _session_identity(session: AudioSession, index: int) -> str:
+        try:
+            return str(
+                session.InstanceIdentifier
+                or session.Identifier
+                or f"{session.ProcessId}:{index}"
+            )
+        except Exception:
+            return f"unknown:{index}"
+
+    def _register_existing_sessions(
+        self,
+        manager,
+    ) -> dict[str, tuple[AudioSession, _ExistingSessionEvents]]:
+        registered: dict[str, tuple[AudioSession, _ExistingSessionEvents]] = {}
+        try:
+            for index, session in enumerate(self._enumerate_sessions(manager)):
+                identity = self._session_identity(session, index)
+                callback = _ExistingSessionEvents(self.changed)
+                session.register_notification(callback)
+                registered[identity] = (session, callback)
+        except Exception as setup_error:
+            cleanup_errors: list[BaseException] = []
+            for session, _callback in registered.values():
+                try:
+                    session.unregister_notification()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+            if cleanup_errors:
+                raise RuntimeError(
+                    "Core Audio session callback rollback failed"
+                ) from setup_error
+            raise
+        return registered
+
+    def _refresh_existing_sessions(self) -> None:
+        if self.session_manager is None:
+            return
+        current = {
+            self._session_identity(session, index): session
+            for index, session in enumerate(
+                self._enumerate_sessions(self.session_manager)
+            )
+        }
+        errors: list[BaseException] = []
+        for identity in tuple(self._session_events):
+            if identity in current:
+                continue
+            session, _callback = self._session_events.pop(identity)
+            try:
+                session.unregister_notification()
+            except Exception as exc:
+                errors.append(exc)
+        for identity, session in current.items():
+            if identity in self._session_events:
+                continue
+            callback = _ExistingSessionEvents(self.changed)
+            try:
+                session.register_notification(callback)
+            except Exception as exc:
+                errors.append(exc)
+                continue
+            self._session_events[identity] = (session, callback)
+        if errors:
+            raise RuntimeError("Core Audio session callback refresh failed")
+
+    def _detach_endpoint(self) -> list[BaseException]:
+        errors: list[BaseException] = []
+        for session, _callback in self._session_events.values():
+            try:
+                session.unregister_notification()
+            except Exception as exc:
+                errors.append(exc)
+        self._session_events.clear()
+        if self.session_manager is not None:
+            try:
+                self.session_manager.UnregisterSessionNotification(
+                    self.session_callback
+                )
+            except Exception as exc:
+                errors.append(exc)
         if self.endpoint is not None:
-            with suppress(Exception):
+            try:
                 self.endpoint.UnregisterControlChangeNotify(self.volume_callback)
-        with suppress(Exception):
-            self.session_manager.UnregisterSessionNotification(self.session_callback)
-        with suppress(Exception):
-            self.enumerator.UnregisterEndpointNotificationCallback(self.device_callback)
+            except Exception as exc:
+                errors.append(exc)
+        self.session_manager = None
         self.endpoint = None
+        self.endpoint_id = ""
+        return errors
+
+    def close(self) -> bool:
+        errors = self._detach_endpoint()
+        if self.enumerator is not None:
+            try:
+                self.enumerator.UnregisterEndpointNotificationCallback(
+                    self.device_callback
+                )
+            except Exception as exc:
+                errors.append(exc)
+        self.enumerator = None
+        if errors:
+            raise RuntimeError("Core Audio callback cleanup failed")
+        return True
 
 
 @contextmanager
@@ -172,8 +341,8 @@ class WindowsAudioService:
     def subscribe(self, changed: Callable[..., None]) -> Callable[[], None]:
         subscription = _AudioEventSubscription(changed)
 
-        def unsubscribe() -> None:
-            subscription.close()
+        def unsubscribe() -> bool:
+            return subscription.close()
 
         # Provider refreshes this after a default endpoint event so volume
         # notifications move from the old endpoint to the new endpoint.
@@ -191,6 +360,7 @@ class WindowsAudioService:
         """Enumerate every requested audio capability once in one COM apartment."""
 
         errors: list[str] = []
+        session_failures: list[tuple[str, str]] = []
         endpoint_id = ""
         master = None
         balance = None
@@ -231,14 +401,18 @@ class WindowsAudioService:
                     try:
                         process_name = process.name()
                         key = process_name.casefold()
-                        state = self._read_session_state(session)
-                        if state is None:
-                            continue
                         stable_id = str(
                             getattr(session, "InstanceIdentifier", "")
                             or getattr(session, "Identifier", "")
                             or f"{int(getattr(session, 'ProcessId', 0) or 0)}:{index}"
                         )
+                        try:
+                            state = self._read_session_state_strict(session)
+                        except Exception:
+                            session_failures.append((key, stable_id))
+                            if "sessions" not in errors:
+                                errors.append("sessions")
+                            continue
                         state = AudioSessionSnapshot(
                             state.volume,
                             state.muted,
@@ -361,6 +535,7 @@ class WindowsAudioService:
             outputs=outputs,
             active_process=self.get_active_process_name() or "",
             errors=tuple(errors),
+            session_failures=tuple(session_failures),
         )
 
     def get_master_snapshot(self) -> AudioSessionSnapshot | None:
@@ -696,13 +871,17 @@ class WindowsAudioService:
     @staticmethod
     def _read_session_state(session) -> AudioSessionSnapshot | None:
         try:
-            control = session._ctl.QueryInterface(ISimpleAudioVolume)
-            return AudioSessionSnapshot(
-                float(control.GetMasterVolume()),
-                bool(control.GetMute()),
-            )
+            return WindowsAudioService._read_session_state_strict(session)
         except Exception:
             return None
+
+    @staticmethod
+    def _read_session_state_strict(session) -> AudioSessionSnapshot:
+        control = session._ctl.QueryInterface(ISimpleAudioVolume)
+        return AudioSessionSnapshot(
+            float(control.GetMasterVolume()),
+            bool(control.GetMute()),
+        )
 
 
 try:

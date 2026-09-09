@@ -74,6 +74,7 @@ class AdaptiveProvider:
         command_timeout: float = 3.0,
         stop_timeout: float = 3.0,
         read_timeout: float | None = None,
+        comparison_key: Callable[[object], object] | None = None,
         monotonic_clock: Callable[[], float] = time.monotonic,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -95,6 +96,7 @@ class AdaptiveProvider:
         self.read_timeout = (
             None if read_timeout is None else max(0.01, float(read_timeout))
         )
+        self.comparison_key = comparison_key or (lambda value: value)
         self._clock = monotonic_clock
         self.log = logger or logging.getLogger("bridge.providers")
         self._condition = threading.Condition()
@@ -105,6 +107,7 @@ class AdaptiveProvider:
         self._refresh_requested = False
         self._epoch = 0
         self._last_value: object = _MISSING
+        self._last_comparison: object = _MISSING
         self._current_interval = self.interval
         self._cleanup_ok = True
         self._io_thread: threading.Thread | None = None
@@ -204,6 +207,18 @@ class AdaptiveProvider:
             self.log.warning("%s command failed: %s", self.source, request.error)
             return False
         return request.result
+
+    def refresh_now(self) -> bool:
+        """Queue a synchronous refresh on the provider owner."""
+
+        with self._condition:
+            sample_epoch = self._epoch
+        return bool(
+            self.call(
+                lambda: self._sample(sample_epoch),
+                refresh=False,
+            )
+        )
 
     @property
     def is_alive(self) -> bool:
@@ -308,13 +323,6 @@ class AdaptiveProvider:
             quality = StateQuality.ERROR
             detail = str(exc) or "provider_error"
         else:
-            with self._condition:
-                if (
-                    self._stopping
-                    or self._paused
-                    or sample_epoch != self._epoch
-                ):
-                    return False
             if getattr(value, "supported", True) is False:
                 detail = str(getattr(value, "error", "") or "provider_unavailable")
                 self._current_interval = min(
@@ -326,32 +334,37 @@ class AdaptiveProvider:
                     StateQuality.UNAVAILABLE,
                     detail,
                     generation=self.generation,
+                    accept_if=lambda: self._sample_is_current(sample_epoch),
                 )
-            changed = self._last_value is _MISSING or value != self._last_value
+            comparison = self.comparison_key(value)
+            changed = (
+                self._last_comparison is _MISSING
+                or comparison != self._last_comparison
+            )
+            provider_errors = tuple(getattr(value, "provider_errors", ()) or ())
+            quality = (
+                StateQuality.UNAVAILABLE
+                if provider_errors
+                else StateQuality.GOOD
+            )
+            detail = ",".join(str(item) for item in provider_errors)
             accepted = self.state.observe_provider(
                 self.source,
                 value,
                 generation=self.generation,
+                quality=quality,
+                detail=detail,
+                accept_if=lambda: self._sample_is_current(sample_epoch),
             )
             if accepted:
                 self._last_value = value
+                self._last_comparison = comparison
                 self._current_interval = (
                     self.interval
                     if changed
                     else min(self.maximum_interval, self._current_interval * 1.5)
                 )
-                provider_errors = tuple(getattr(value, "provider_errors", ()) or ())
-                if provider_errors:
-                    self.state.fail_provider(
-                        self.source,
-                        StateQuality.UNAVAILABLE,
-                        ",".join(str(item) for item in provider_errors),
-                        generation=self.generation,
-                    )
             return accepted
-        with self._condition:
-            if self._stopping or self._paused or sample_epoch != self._epoch:
-                return False
         self._current_interval = min(
             self.maximum_interval,
             max(self.interval, self._current_interval * 1.5),
@@ -361,6 +374,18 @@ class AdaptiveProvider:
             quality,
             detail,
             generation=self.generation,
+            accept_if=lambda: self._sample_is_current(sample_epoch),
+        )
+
+    def _sample_is_current(self, sample_epoch: int) -> bool:
+        # Called by ComputerStateStore while its own lock is held. Do not take
+        # the provider condition here: pause/stop advance the epoch before
+        # committing their health transition, and the store serializes the
+        # final predicate check with the state write.
+        return (
+            not self._stopping
+            and not self._paused
+            and sample_epoch == self._epoch
         )
 
     def _read_with_deadline(self) -> object:
@@ -404,6 +429,14 @@ class AdaptiveProvider:
 _MISSING = object()
 
 
+def stable_system_sample_key(value: object) -> object:
+    """Exclude clocks/counters that do not represent a semantic change."""
+
+    if isinstance(value, (SystemMetrics, WindowsHealth)):
+        return replace(value, uptime_seconds=0)
+    return value
+
+
 class MediaProvider(AdaptiveProvider):
     """State-backed façade for the single WinRT/GSMTC owner."""
 
@@ -442,7 +475,15 @@ class MediaProvider(AdaptiveProvider):
         current = self.state.snapshot()
         sample = current.provider("media")
         if sample is not None:
-            return sample.value
+            if sample.quality == StateQuality.GOOD:
+                return sample.value
+            value = sample.value
+            return replace(
+                value,
+                state="idle",
+                supported=False,
+                error=sample.detail or sample.quality.value,
+            )
         health = current.health_for("media")
         if health is not None and health.quality in {
             StateQuality.ERROR,
@@ -484,11 +525,33 @@ class SystemProviderView:
         self.raw = raw
         self.state = state
 
-    def _value(self, source: str, default: object) -> object:
+    def _sample(self, source: str):
         sample = self.state.snapshot().provider(source)
         if sample is None:
             raise ProviderUnavailable(f"{source} has no successful observation")
+        return sample
+
+    def _value(self, source: str, default: object) -> object:
+        sample = self._sample(source)
+        if sample.quality != StateQuality.GOOD:
+            raise ProviderUnavailable(
+                sample.detail or f"{source} is {sample.quality.value}"
+            )
         return sample.value
+
+    def _optional_value(
+        self,
+        source: str,
+    ) -> tuple[object | None, tuple[str, ...]]:
+        try:
+            sample = self._sample(source)
+        except ProviderUnavailable:
+            return None, (f"{source}:unavailable",)
+        if sample.quality != StateQuality.GOOD:
+            return sample.value, (
+                f"{source}:{sample.detail or sample.quality.value}",
+            )
+        return sample.value, ()
 
     def context_snapshot(self) -> PcContext:
         return self._value("desktop_context", PcContext())  # type: ignore[return-value]
@@ -504,8 +567,25 @@ class SystemProviderView:
         include_gpu: bool = True,
         include_ram: bool = True,
     ) -> SystemMetrics:
-        fast = self._value("cpu_ram", SystemMetrics(0.0, 0.0, 0))
-        gpu = self._value("gpu", SystemMetrics(0.0, 0.0, 0))
+        errors: list[str] = []
+        fast = SystemMetrics(0.0, 0.0, 0)
+        if include_cpu or include_ram:
+            candidate, provider_errors = self._optional_value("cpu_ram")
+            errors.extend(provider_errors)
+            if isinstance(candidate, SystemMetrics):
+                fast = candidate
+        cpu_hardware = SystemMetrics(0.0, 0.0, 0)
+        if include_cpu:
+            candidate, provider_errors = self._optional_value("cpu_hardware")
+            errors.extend(provider_errors)
+            if isinstance(candidate, SystemMetrics):
+                cpu_hardware = candidate
+        gpu = SystemMetrics(0.0, 0.0, 0)
+        if include_gpu:
+            candidate, provider_errors = self._optional_value("gpu")
+            errors.extend(provider_errors)
+            if isinstance(candidate, SystemMetrics):
+                gpu = candidate
         result = replace(
             fast,
             gpu_percent=gpu.gpu_percent if include_gpu else None,
@@ -516,12 +596,29 @@ class SystemProviderView:
             gpu_clock_mhz=gpu.gpu_clock_mhz if include_gpu else None,
             gpu_fan_percent=gpu.gpu_fan_percent if include_gpu else None,
             gpu_fan_rpm=gpu.gpu_fan_rpm if include_gpu else None,
-            cpu_temperature=gpu.cpu_temperature if include_cpu else None,
-            cpu_power_watts=gpu.cpu_power_watts if include_cpu else None,
-            cpu_vendor=gpu.cpu_vendor if include_cpu else "",
+            cpu_temperature=(
+                cpu_hardware.cpu_temperature if include_cpu else None
+            ),
+            cpu_power_watts=(
+                cpu_hardware.cpu_power_watts if include_cpu else None
+            ),
+            cpu_vendor=cpu_hardware.cpu_vendor if include_cpu else "",
             gpu_vendor=gpu.gpu_vendor if include_gpu else "",
             provider_errors=tuple(
-                dict.fromkeys((*fast.provider_errors, *gpu.provider_errors))
+                dict.fromkeys(
+                    (
+                        *errors,
+                        *(
+                            f"cpu_ram:{item}"
+                            for item in fast.provider_errors
+                        ),
+                        *(
+                            f"cpu_hardware:{item}"
+                            for item in cpu_hardware.provider_errors
+                        ),
+                        *(f"gpu:{item}" for item in gpu.provider_errors),
+                    )
+                )
             ),
         )
         if include_cpu and include_ram:
@@ -538,17 +635,16 @@ class SystemProviderView:
 
     def windows_health(self) -> WindowsHealth:
         health = self._value("windows_health", WindowsHealth())
-        updates = self._value("windows_update", None)
+        try:
+            update_sample = self._sample("windows_update")
+        except ProviderUnavailable:
+            return replace(health, windows_update_status="Unavailable")
+        if update_sample.quality != StateQuality.GOOD:
+            return replace(health, windows_update_status="Unavailable")
+        updates = update_sample.value
         if isinstance(updates, int):
             status = f"{updates} update(s) available" if updates else "Up to date"
             return replace(health, windows_update_status=status)
-        update_health = self.state.snapshot().health_for("windows_update")
-        if update_health is not None and update_health.quality in {
-            StateQuality.ERROR,
-            StateQuality.UNAVAILABLE,
-            StateQuality.STALE,
-        }:
-            return replace(health, windows_update_status="Unavailable")
         return health
 
     def list_disk_volumes(self) -> list[DiskVolume]:

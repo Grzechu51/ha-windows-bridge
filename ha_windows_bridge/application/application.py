@@ -12,16 +12,14 @@ from dataclasses import asdict
 from importlib.metadata import version
 
 from .. import __version__
-from ..audio import AudioProviderSnapshot
 from ..communication.status import CONNECTION_NAMES, connection_text
 from ..config import AppConfig
 from ..core.commands import Command, CommandResult
 from ..core.events import EventBus
 from ..core.observability import DiagnosticBuffer
-from ..core.state import ComputerStateStore, StateStore
+from ..core.state import ComputerStateStore, StateQuality, StateStore
 from ..runtime.worker import SerialWorker
 from ..security import redact_data
-from ..system_monitor import DiskMetrics
 from ..windows.resources import ProcessResources
 from .commands import CommandRouter
 from .lifecycle import (
@@ -38,6 +36,7 @@ from .providers import (
     MediaProvider,
     StorageSnapshot,
     SystemProviderView,
+    stable_system_sample_key,
 )
 from .state_projection import MasterAudioProjection
 from .windows_commands import WindowsCommands
@@ -262,10 +261,15 @@ class Application:
                 self._direct_factory = HomeAssistantGateway
             self.supervisor.register("home_assistant", self._direct_factory(self.config, self.router, self.events))
 
-    def _event_subscription(self, *topics: str):
+    def _event_subscription(self, *topics: str, before_wake=None):
         def subscribe(changed):
+            def wake(event):
+                if before_wake is not None:
+                    before_wake()
+                changed(event)
+
             subscriptions = [
-                self.events.subscribe(topic, lambda event, wake=changed: wake(event))
+                self.events.subscribe(topic, wake)
                 for topic in topics
             ]
 
@@ -292,6 +296,8 @@ class Application:
             owns_com=False,
             stop_timeout=3.0,
             read_timeout=None,
+            comparison_key=None,
+            subscribe=None,
         ):
             if not enabled or not callable(read):
                 return
@@ -303,10 +309,18 @@ class Application:
                     self._generation,
                     interval=minimum,
                     maximum_interval=maximum,
-                    subscribe=self._event_subscription(*events) if events else None,
+                    subscribe=(
+                        subscribe
+                        or (
+                            self._event_subscription(*events)
+                            if events
+                            else None
+                        )
+                    ),
                     owns_com=owns_com,
                     stop_timeout=stop_timeout,
                     read_timeout=read_timeout,
+                    comparison_key=comparison_key,
                     logger=self.log,
                 )
             )
@@ -341,13 +355,24 @@ class Application:
             getattr(self.system, "cpu_ram_metrics", None),
             minimum=max(0.5, interval),
             maximum=max(5.0, interval * 10),
+            comparison_key=stable_system_sample_key,
+        )
+        add(
+            "cpu_hardware",
+            self.config.publish_cpu_stats,
+            getattr(self.system, "cpu_hardware_snapshot", None),
+            minimum=5.0,
+            maximum=30.0,
+            owns_com=True,
+            stop_timeout=4.0,
+            comparison_key=stable_system_sample_key,
         )
         add(
             "gpu",
-            self.config.publish_gpu_stats or self.config.publish_cpu_stats,
+            self.config.publish_gpu_stats,
             (
                 lambda: self.system.gpu_metrics_snapshot(
-                    include_cpu_hardware=self.config.publish_cpu_stats
+                    include_cpu_hardware=False
                 )
                 if hasattr(self.system, "gpu_metrics_snapshot")
                 else self.system.system_metrics(
@@ -360,6 +385,7 @@ class Application:
             maximum=30.0,
             owns_com=True,
             stop_timeout=4.0,
+            comparison_key=stable_system_sample_key,
         )
         add(
             "windows_health",
@@ -371,6 +397,7 @@ class Application:
             minimum=30.0,
             maximum=300.0,
             events=("windows.power_changed",),
+            comparison_key=stable_system_sample_key,
         )
         add(
             "windows_update",
@@ -402,6 +429,14 @@ class Application:
             events=("windows.device_changed",),
             owns_com=True,
             stop_timeout=4.0,
+            subscribe=self._event_subscription(
+                "windows.device_changed",
+                before_wake=getattr(
+                    self.system,
+                    "invalidate_storage_mapping",
+                    None,
+                ),
+            ),
         )
         add(
             "pnp",
@@ -636,47 +671,56 @@ class Application:
         def query():
             try:
                 if kind == "applications":
-                    if self._master_audio is not None and self._master_audio.is_alive:
-                        items = self._master_audio.list_audio_applications()
+                    provider = self._master_audio
+                    if provider is not None and provider.is_alive:
+                        provider.sample_now()
+                        sample = self.computer_state.snapshot().provider("audio")
+                        if sample is None:
+                            raise RuntimeError("audio inventory pending")
+                        if sample.quality != StateQuality.GOOD:
+                            raise RuntimeError(
+                                sample.detail or "audio inventory unavailable"
+                            )
+                        items = list(sample.value.applications)
                     else:
                         items = self.audio.list_audio_applications(
                             include_processes=[
                                 app.process_name for app in self.config.apps
                             ]
                         )
-                        generation = self._services_generation
-                        if generation is not None:
-                            self.computer_state.observe_provider(
-                                "audio",
-                                AudioProviderSnapshot(applications=tuple(items)),
-                                generation=generation,
-                            )
                 else:
                     source = "storage" if kind == "disks" else "pnp"
+                    provider = next(
+                        (
+                            item
+                            for item in self._system_providers
+                            if item.source == source
+                        ),
+                        None,
+                    )
+                    active = provider is not None and provider.is_alive
+                    if active:
+                        provider.refresh_now()
                     sample = self.computer_state.snapshot().provider(source)
                     if sample is None:
-                        generation = self._services_generation
-                        if kind == "disks":
-                            items = self.system.list_disk_volumes()
-                            snapshot = StorageSnapshot(
-                                tuple(items),
-                                DiskMetrics(0.0, 0.0, 0.0, 0.0),
-                            )
-                        else:
-                            items = self.system.list_pnp_devices()
-                            snapshot = DeviceSnapshot(tuple(items))
-                        if generation is not None:
-                            self.computer_state.observe_provider(
-                                source,
-                                snapshot,
-                                generation=generation,
-                            )
-                    else:
+                        if active:
+                            raise RuntimeError(f"{source} inventory pending")
                         items = (
-                            list(sample.value.volumes)
+                            self.system.list_disk_volumes()
                             if kind == "disks"
-                            else list(sample.value.devices)
+                            else self.system.list_pnp_devices()
                         )
+                        self.events.emit("inventory." + kind, items)
+                        return
+                    if sample.quality != StateQuality.GOOD:
+                        raise RuntimeError(
+                            sample.detail or f"{source} inventory unavailable"
+                        )
+                    items = (
+                        list(sample.value.volumes)
+                        if kind == "disks"
+                        else list(sample.value.devices)
+                    )
                 self.events.emit("inventory." + kind, items)
             except Exception:
                 self.log.exception("Device inventory unavailable")

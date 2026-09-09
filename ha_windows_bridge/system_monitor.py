@@ -120,9 +120,14 @@ class WindowsSystemMonitor:
         self._gpu_cache: dict[str, float] = {}
         self._gpu_cache_time = 0.0
         self._hardware_identity_cache: tuple[str, str] | None = None
+        self._cpu_identity_cache: str | None = None
+        self._selected_nvidia_uuid: str | None = None
         self._last_disk_io: tuple[float, int, int] | None = None
-        self._disk_health_cache: tuple[str, float | None] = ("", None)
-        self._disk_health_cache_time = 0.0
+        self._disk_health_cache: dict[
+            frozenset[str],
+            tuple[float, tuple[str, float | None]],
+        ] = {}
+        self._volume_disk_cache: dict[str, frozenset[str]] = {}
         self._update_error = False
         self._pending_updates: int | None = None
         self._update_check_time = 0.0
@@ -318,6 +323,30 @@ class WindowsSystemMonitor:
             provider_errors=tuple(dict.fromkeys(errors)),
         )
 
+    def cpu_hardware_snapshot(self) -> SystemMetrics:
+        """Read optional CPU-only hardware metrics without touching GPU APIs."""
+
+        errors: list[str] = []
+        try:
+            optional = self._hardware_monitor_metrics()
+        except ProviderUnavailable:
+            optional = {}
+            errors.append("hardware_monitor")
+        try:
+            cpu_vendor = self._cpu_identity()
+        except ProviderUnavailable:
+            cpu_vendor = ""
+            errors.append("hardware_identity")
+        return SystemMetrics(
+            cpu_percent=0.0,
+            ram_percent=0.0,
+            uptime_seconds=max(0, int(time.time() - psutil.boot_time())),
+            cpu_temperature=optional.get("cpu_temperature"),
+            cpu_power_watts=optional.get("cpu_power_watts"),
+            cpu_vendor=cpu_vendor,
+            provider_errors=tuple(errors),
+        )
+
     def windows_health(self) -> WindowsHealth:
         self._schedule_windows_update_check()
         return self.windows_health_snapshot()
@@ -492,39 +521,123 @@ class WindowsSystemMonitor:
         if io is not None:
             self._last_disk_io = (now, io.read_bytes, io.write_bytes)
         errors = []
-        if now - self._disk_health_cache_time >= 60.0:
+        aggregate_all = not volumes
+        disk_ids: frozenset[str] = (
+            frozenset({"*"}) if aggregate_all else frozenset()
+        )
+        if not aggregate_all:
             try:
-                self._disk_health_cache = self._physical_disk_health()
-                self._disk_health_cache_time = now
+                disk_ids = self._volume_physical_disks(volumes)
             except ProviderUnavailable:
-                self._disk_health_cache = ("", None)
+                errors.append("disk_mapping")
+        cached = self._disk_health_cache.get(disk_ids)
+        if disk_ids and (cached is None or now - cached[0] >= 60.0):
+            try:
+                health = (
+                    self._physical_disk_health()
+                    if aggregate_all
+                    else self._physical_disk_health(disk_ids)
+                )
+                cached = (now, health)
+                self._disk_health_cache[disk_ids] = cached
+            except ProviderUnavailable:
+                cached = None
                 errors.append("disk_health")
+        health, temperature = cached[1] if cached is not None else ("", None)
         return DiskMetrics(
             provider_errors=tuple(errors),
             used_percent=(used / total * 100.0) if total else 0.0,
             free_gb=free,
             read_mb_s=read_rate,
             write_mb_s=write_rate,
-            health=self._disk_health_cache[0],
-            temperature=self._disk_health_cache[1],
+            health=health,
+            temperature=temperature,
         )
 
+    def invalidate_storage_mapping(self) -> None:
+        """Discard volume/physical-disk relations after a PnP hotplug event."""
+
+        self._volume_disk_cache.clear()
+        self._disk_health_cache.clear()
+
+    def _volume_physical_disks(
+        self,
+        volumes: list[DiskVolume],
+    ) -> frozenset[str]:
+        selected: set[str] = set()
+        service = r"winmgmts:\\.\root\cimv2"
+        for volume in volumes:
+            mount = os.path.normcase(os.path.normpath(volume.mountpoint))
+            cached = self._volume_disk_cache.get(mount)
+            if cached is None:
+                logical = volume.mountpoint.rstrip("\\/")
+                if len(logical) != 2 or logical[1] != ":":
+                    raise ProviderUnavailable(
+                        f"Unsupported volume identity: {volume.mountpoint}"
+                    )
+                try:
+                    partitions = query_wmi(
+                        service,
+                        "ASSOCIATORS OF "
+                        f"{{Win32_LogicalDisk.DeviceID='{logical}'}} "
+                        "WHERE AssocClass=Win32_LogicalDiskToPartition",
+                    )
+                    cached = frozenset(
+                        str(int(item.DiskIndex))
+                        for item in partitions
+                        if getattr(item, "DiskIndex", None) is not None
+                    )
+                except Exception as exc:
+                    raise ProviderUnavailable(
+                        "Volume to physical disk mapping unavailable"
+                    ) from exc
+                if not cached:
+                    raise ProviderUnavailable(
+                        f"No physical disk mapping for {logical}"
+                    )
+                self._volume_disk_cache[mount] = cached
+            selected.update(cached)
+        return frozenset(selected)
+
     @staticmethod
-    def _physical_disk_health() -> tuple[str, float | None]:
+    def _physical_disk_health(
+        disk_ids: frozenset[str] | None = None,
+    ) -> tuple[str, float | None]:
         health = ""
         temperature: float | None = None
         try:
             storage = r"winmgmts:\\.\root\Microsoft\Windows\Storage"
             statuses: list[int] = []
             temperatures: list[float] = []
-            for disk in query_wmi(storage, "SELECT HealthStatus FROM MSFT_PhysicalDisk"):
+            health_query = (
+                "SELECT HealthStatus FROM MSFT_PhysicalDisk"
+                if disk_ids is None
+                else "SELECT DeviceId,HealthStatus FROM MSFT_PhysicalDisk"
+            )
+            for disk in query_wmi(storage, health_query):
+                if (
+                    disk_ids is not None
+                    and str(getattr(disk, "DeviceId", "")) not in disk_ids
+                ):
+                    continue
                 raw_status = getattr(disk, "HealthStatus", None)
                 statuses.append(int(raw_status) if raw_status is not None else 5)
             if statuses:
                 worst = max(statuses)
                 health = {0: "Healthy", 1: "Warning", 2: "Unhealthy"}.get(worst, "Unknown")
             try:
-                for counter in query_wmi(storage, "SELECT Temperature FROM MSFT_StorageReliabilityCounter"):
+                temperature_query = (
+                    "SELECT Temperature FROM MSFT_StorageReliabilityCounter"
+                    if disk_ids is None
+                    else "SELECT DeviceId,Temperature "
+                    "FROM MSFT_StorageReliabilityCounter"
+                )
+                for counter in query_wmi(storage, temperature_query):
+                    if (
+                        disk_ids is not None
+                        and str(getattr(counter, "DeviceId", "")) not in disk_ids
+                    ):
+                        continue
                     value = getattr(counter, "Temperature", None)
                     if value is not None and 0 < float(value) < 150:
                         temperatures.append(float(value))
@@ -539,8 +652,23 @@ class WindowsSystemMonitor:
             try:
                 wmi = r"winmgmts:\\.\root\wmi"
                 predictions = list(
-                    query_wmi(wmi, "SELECT PredictFailure FROM MSStorageDriver_FailurePredictStatus")
+                    query_wmi(
+                        wmi,
+                        "SELECT InstanceName,PredictFailure "
+                        "FROM MSStorageDriver_FailurePredictStatus",
+                    )
                 )
+                if disk_ids is not None:
+                    predictions = [
+                        item
+                        for item in predictions
+                        if any(
+                            f"physicaldrive{disk_id}" in str(
+                                getattr(item, "InstanceName", "")
+                            ).casefold()
+                            for disk_id in disk_ids
+                        )
+                    ]
                 if predictions:
                     health = (
                         "Warning"
@@ -840,6 +968,25 @@ class WindowsSystemMonitor:
         self._hardware_identity_cache = (cpu_vendor[:80], gpu_vendor)
         return self._hardware_identity_cache
 
+    def _cpu_identity(self) -> str:
+        if self._cpu_identity_cache is not None:
+            return self._cpu_identity_cache
+        try:
+            processors = list(
+                query_wmi(
+                    r"winmgmts:\\.\root\cimv2",
+                    "SELECT Manufacturer FROM Win32_Processor",
+                )
+            )
+        except Exception as exc:
+            raise ProviderUnavailable("CPU identity unavailable") from exc
+        self._cpu_identity_cache = (
+            str(getattr(processors[0], "Manufacturer", "") or "")[:80]
+            if processors
+            else ""
+        )
+        return self._cpu_identity_cache
+
     @staticmethod
     def running_process_names(process_names: list[str]) -> set[str]:
         """Return matching process names without relying on an audio session."""
@@ -973,7 +1120,7 @@ class WindowsSystemMonitor:
             return {}
         command = [
             self._nvidia_smi,
-            "--query-gpu=utilization.gpu,temperature.gpu,power.draw,memory.used,memory.total,clocks.current.graphics,fan.speed",
+            "--query-gpu=uuid,utilization.gpu,temperature.gpu,power.draw,memory.used,memory.total,clocks.current.graphics,fan.speed",
             "--format=csv,noheader,nounits",
         ]
         try:
@@ -987,7 +1134,33 @@ class WindowsSystemMonitor:
                 check=True,
                 creationflags=flags,
             )
-            raw_values = completed.stdout.splitlines()[0].split(",")
+            rows = [
+                tuple(part.strip() for part in line.split(","))
+                for line in completed.stdout.splitlines()
+                if line.strip()
+            ]
+            if rows and len(rows[0]) == 7:
+                rows = [("legacy", *row) for row in rows]
+            valid_rows = [row for row in rows if len(row) == 8 and row[0]]
+            if not valid_rows:
+                raise ProviderUnavailable("NVIDIA returned no valid metrics row")
+            if self._selected_nvidia_uuid is None:
+                self._selected_nvidia_uuid = min(
+                    row[0] for row in valid_rows
+                )
+            selected = next(
+                (
+                    row
+                    for row in valid_rows
+                    if row[0] == self._selected_nvidia_uuid
+                ),
+                None,
+            )
+            if selected is None:
+                raise ProviderUnavailable(
+                    "Selected NVIDIA adapter is unavailable"
+                )
+            raw_values = selected[1:]
             keys = (
                 "gpu_percent",
                 "gpu_temperature",
@@ -997,8 +1170,6 @@ class WindowsSystemMonitor:
                 "gpu_clock_mhz",
                 "gpu_fan_percent",
             )
-            if len(raw_values) != len(keys):
-                raise ProviderUnavailable("NVIDIA returned an invalid metrics row")
             metrics: dict[str, float] = {}
             for key, raw_value in zip(keys, raw_values, strict=True):
                 try:

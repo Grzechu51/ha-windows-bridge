@@ -190,11 +190,13 @@ def test_master_audio_pause_fences_an_in_flight_sample():
             super().__init__()
             self.sample_entered = threading.Event()
             self.release_sample = threading.Event()
+            self.sample_returned = threading.Event()
 
         def get_master_snapshot(self):
             self._record()
             self.sample_entered.set()
             assert self.release_sample.wait(2)
+            self.sample_returned.set()
             return SimpleNamespace(volume=self.volume, muted=self.muted)
 
     adapter = BlockingAudio()
@@ -206,8 +208,9 @@ def test_master_audio_pause_fences_an_in_flight_sample():
         assert adapter.sample_entered.wait(1)
         provider.pause(True)
         adapter.release_sample.set()
-        # A queued owner-thread call proves the delayed sample has returned.
-        assert provider.get_master_balance() == 0.0
+        assert adapter.sample_returned.wait(1)
+        # The rejected read is not exposed through the public state facade.
+        assert provider.get_master_balance() is None
         assert state.snapshot().health_for("master_audio").quality == StateQuality.PAUSED
     finally:
         adapter.release_sample.set()

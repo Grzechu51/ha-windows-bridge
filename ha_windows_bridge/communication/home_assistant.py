@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import ssl
 import threading
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from urllib.parse import urlparse, urlunparse
 
@@ -15,6 +17,13 @@ from ..core.commands import Command, CommandError
 from .protocol import TopicProtocol
 from .schema import CommandMessage, ProtocolError
 from .state import Backoff, ConnectionMachine, ConnectionState
+
+
+def _schedule_timer(delay: float, callback: Callable[[], None]):
+    timer = threading.Timer(delay, callback)
+    timer.daemon = True
+    timer.start()
+    return timer.cancel
 
 
 def websocket_url(url: str) -> str:
@@ -63,7 +72,17 @@ def response_error(response):
 
 
 class HomeAssistantTransport:
-    def __init__(self, config, events, receive, *, protocol=None, socket_factory=None):
+    def __init__(
+        self,
+        config,
+        events,
+        receive,
+        *,
+        protocol=None,
+        socket_factory=None,
+        network_delay=None,
+        network_scheduler=None,
+    ):
         self.config, self.receive = config, receive
         self.protocol = protocol or TopicProtocol(config)
         self.machine = ConnectionMachine("home_assistant", events)
@@ -76,22 +95,87 @@ class HomeAssistantTransport:
         self._thread = None
         self._sequence = 0
         self._epoch = 0
+        self._network_wake = threading.Event()
+        self._network_lock = threading.Lock()
+        self._network_pending = False
+        self._network_cancel = None
+        self._network_token = 0
+        self._network_delay = network_delay or (
+            lambda: random.uniform(0.05, 0.25)
+        )
+        self._network_scheduler = network_scheduler or _schedule_timer
 
     def start(self):
         if self._thread is not None and self._thread.is_alive():
             raise RuntimeError("HA transport still running")
         self._stop.clear()
+        self._network_wake.clear()
         self._epoch = self.machine.begin()
         self._thread = threading.Thread(target=self._run, name="ha-transport", daemon=True)
         self._thread.start()
 
     def stop(self):
         self._stop.set()
+        self._cancel_network_wake()
+        self._network_wake.set()
         self.machine.stop()
         self._close_socket()
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=4)
         return self._thread is None or not self._thread.is_alive()
+
+    def network_changed(self, *_args: object) -> bool:
+        with self._network_lock:
+            if self._stop.is_set() or self._network_pending:
+                return False
+            self._network_pending = True
+            self._network_token += 1
+            token = self._network_token
+        try:
+            cancel = self._network_scheduler(
+                max(0.0, float(self._network_delay())),
+                lambda: self._release_network_wake(token),
+            )
+        except Exception:
+            with self._network_lock:
+                if self._network_token == token:
+                    self._network_pending = False
+            self.log.exception("Direct HA network wake could not be scheduled")
+            return False
+        with self._network_lock:
+            if (
+                self._stop.is_set()
+                or self._network_token != token
+                or not self._network_pending
+            ):
+                cancel_now = True
+            else:
+                self._network_cancel = cancel
+                cancel_now = False
+        if cancel_now:
+            cancel()
+            return False
+        return True
+
+    def _release_network_wake(self, token: int) -> None:
+        with self._network_lock:
+            if (
+                self._stop.is_set()
+                or self._network_token != token
+                or not self._network_pending
+            ):
+                return
+            self._network_pending = False
+            self._network_cancel = None
+        self._network_wake.set()
+
+    def _cancel_network_wake(self) -> None:
+        with self._network_lock:
+            self._network_token += 1
+            self._network_pending = False
+            cancel, self._network_cancel = self._network_cancel, None
+        if cancel is not None:
+            cancel()
 
     def _close_socket(self):
         with self._lock:
@@ -186,8 +270,10 @@ class HomeAssistantTransport:
                 self._close_socket()
             if self.machine.status.state in {ConnectionState.AUTH_ERROR, ConnectionState.CONFIGURATION_ERROR}:
                 break
-            if self._stop.wait(Backoff().delay(self.machine.status.attempt)):
+            self._network_wake.wait(Backoff().delay(self.machine.status.attempt))
+            if self._stop.is_set():
                 break
+            self._network_wake.clear()
             if not self.machine.retry(self._epoch):
                 break
 
@@ -196,6 +282,9 @@ class HomeAssistantTransport:
         pending = None
         deadline = 0.0
         while not self._stop.is_set():
+            if self._network_wake.is_set():
+                self._network_wake.clear()
+                raise ConnectionError("Windows network changed")
             now = time.monotonic()
             if pending is not None and now >= deadline:
                 raise ConnectionError("HA heartbeat timeout")
@@ -235,13 +324,22 @@ class HomeAssistantTransport:
 class HomeAssistantGateway:
     def __init__(self, config, router, events):
         self.router = router
+        self.events = events
         self.protocol = TopicProtocol(config)
         self.transport = HomeAssistantTransport(config, events, self.receive, protocol=self.protocol)
+        self._network_unsubscribe = None
 
     def start(self):
+        self._network_unsubscribe = self.events.subscribe(
+            "windows.network_changed",
+            self.transport.network_changed,
+        )
         self.transport.start()
 
     def stop(self):
+        if self._network_unsubscribe is not None:
+            self._network_unsubscribe()
+            self._network_unsubscribe = None
         return self.transport.stop()
 
     def receive(self, value):

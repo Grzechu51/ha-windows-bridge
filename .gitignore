@@ -8,3 +8,4 @@ __pycache__/
 .pip-audit-cache/
 *.egg-info/
 tools/InnoSetup/
+.test-tmp/

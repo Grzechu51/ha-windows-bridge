@@ -134,7 +134,7 @@ def test_disk_health_failure_is_not_cached_as_a_success(monkeypatch):
     result = monitor.disk_metrics()
     assert result.provider_errors == ("disk_health",)
     assert result.health == "" and result.temperature is None
-    assert monitor._disk_health_cache_time == 0
+    assert monitor._disk_health_cache == {}
     recovered = monitor.disk_metrics()
     assert not recovered.provider_errors
     assert recovered.health == "Healthy" and recovered.temperature == 42

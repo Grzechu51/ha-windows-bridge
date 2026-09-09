@@ -26,12 +26,43 @@ class WindowsEventBridge(QAbstractNativeEventFilter):
         self.application = application
         self.hwnd = hwnd
         self._registered = False
+        self._network_registered = False
+        self._network_handle = wintypes.HANDLE()
+        self._network_callback = None
         self._taskbar_message = 0
         self._enabled = sys.platform == "win32" and QApplication.instance().platformName() != "offscreen"
         if self._enabled:
             self._taskbar_message = ctypes.windll.user32.RegisterWindowMessageW("TaskbarCreated")
             self._registered = bool(ctypes.windll.wtsapi32.WTSRegisterSessionNotification(wintypes.HWND(hwnd), 0))
+            self._register_network_notifications()
             QApplication.instance().installNativeEventFilter(self)
+
+    def _register_network_notifications(self) -> None:
+        try:
+            callback_type = ctypes.WINFUNCTYPE(
+                None,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_int,
+            )
+
+            def changed(_context, _row, _notification_type):
+                self.application.events.emit("windows.network_changed")
+
+            self._network_callback = callback_type(changed)
+            result = ctypes.windll.iphlpapi.NotifyIpInterfaceChange(
+                0,
+                self._network_callback,
+                None,
+                False,
+                ctypes.byref(self._network_handle),
+            )
+            self._network_registered = result == 0
+            if not self._network_registered:
+                self._network_callback = None
+        except (AttributeError, OSError):
+            self._network_callback = None
+            self._network_registered = False
 
     def nativeEventFilter(self, event_type, message):  # noqa: N802
         if not self._enabled:
@@ -55,7 +86,6 @@ class WindowsEventBridge(QAbstractNativeEventFilter):
             # DBT_* arrival/removal notifications are only wake signals. The
             # provider owner performs the actual PnP/storage/audio enumeration.
             self.application.events.emit("windows.device_changed")
-            self.application.events.emit("windows.network_changed")
         elif record.message in {0x001A, 0x0320}:
             self.application.events.emit("windows.theme_changed")
         elif record.message == self._taskbar_message:
@@ -68,3 +98,7 @@ class WindowsEventBridge(QAbstractNativeEventFilter):
         if self._registered:
             ctypes.windll.wtsapi32.WTSUnRegisterSessionNotification(wintypes.HWND(self.hwnd))
             self._registered = False
+        if self._network_registered:
+            ctypes.windll.iphlpapi.CancelMibChangeNotify2(self._network_handle)
+            self._network_registered = False
+        self._network_callback = None

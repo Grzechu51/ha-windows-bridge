@@ -201,6 +201,15 @@ class _AsyncRunner:
             future.cancel()
             raise
 
+    def schedule(self, callback: Callable[[], None]) -> bool:
+        """Queue non-blocking callback work on the WinRT owner loop."""
+
+        with self._submission_lock:
+            if self._closing.is_set():
+                return False
+            self._loop.call_soon_threadsafe(callback)
+            return True
+
     def close(self) -> bool:
         with self._submission_lock:
             if not self._closing.is_set():
@@ -225,9 +234,18 @@ class WindowsMediaService:
         self._artwork_checked_at = 0.0
         self._artwork = MediaArtwork()
         self._change_callbacks: set[Callable[..., None]] = set()
-        self._manager_event_tokens: list[tuple[str, object]] = []
-        self._session_event_tokens: list[tuple[str, object]] = []
+        self._manager_event_tokens: list[
+            tuple[str, object, Callable[..., None]]
+        ] = []
+        self._session_event_tokens: list[
+            tuple[str, object, Callable[..., None]]
+        ] = []
         self._event_session: Any = None
+        self._lifecycle_token = 0
+        self._session_key: tuple[str, int] | None = None
+        self._session_identity = ""
+        self._session_sequence = 0
+        self._callback_error = ""
 
     def _ensure_runner(self) -> _AsyncRunner | None:
         with self._runner_lock:
@@ -266,34 +284,96 @@ class WindowsMediaService:
             current = self._ensure_runner()
             if current is None:
                 return
-            with suppress(Exception):
-                current.call(self._unsubscribe_async(changed))
+            current.call(self._unsubscribe_async(changed))
 
         return unsubscribe
 
     async def _subscribe_async(self, changed: Callable[..., None]) -> None:
         self._change_callbacks.add(changed)
-        manager = await self._manager_async()
-        if not self._manager_event_tokens:
-            self._manager_event_tokens = [
-                (
-                    "current",
-                    manager.add_current_session_changed(self._manager_changed),
-                ),
-                ("sessions", manager.add_sessions_changed(self._manager_changed)),
-            ]
-        self._rebind_session_events(manager.get_current_session())
+        try:
+            manager = await self._manager_async()
+            if not self._manager_event_tokens:
+                self._lifecycle_token += 1
+                token = self._lifecycle_token
+                def current_callback(
+                    _sender,
+                    _args,
+                    current=token,
+                ):
+                    self._queue_owner_change(current, rebind=True)
+
+                def sessions_callback(
+                    _sender,
+                    _args,
+                    current=token,
+                ):
+                    self._queue_owner_change(current, rebind=True)
+                registered: list[
+                    tuple[str, object, Callable[..., None]]
+                ] = []
+                try:
+                    registered.append(
+                        (
+                            "current",
+                            manager.add_current_session_changed(current_callback),
+                            current_callback,
+                        )
+                    )
+                    registered.append(
+                        (
+                            "sessions",
+                            manager.add_sessions_changed(sessions_callback),
+                            sessions_callback,
+                        )
+                    )
+                    self._manager_event_tokens = registered
+                    self._rebind_session_events(
+                        manager.get_current_session(),
+                        token,
+                    )
+                except Exception:
+                    self._manager_event_tokens = registered
+                    self._remove_event_handlers()
+                    raise
+            self._callback_error = ""
+        except Exception:
+            self._change_callbacks.discard(changed)
+            raise
 
     async def _unsubscribe_async(self, changed: Callable[..., None]) -> None:
         self._change_callbacks.discard(changed)
         if not self._change_callbacks:
+            self._lifecycle_token += 1
             self._remove_event_handlers()
 
-    def _manager_changed(self, sender, _args) -> None:
-        self._rebind_session_events(sender.get_current_session())
-        self._notify_changed()
+    def _queue_owner_change(self, token: int, *, rebind: bool) -> None:
+        with self._runner_lock:
+            if self._closed or token != self._lifecycle_token:
+                return
+            runner = self._runner
+        if runner is not None:
+            runner.schedule(lambda: self._owner_change(token, rebind=rebind))
 
-    def _session_changed(self, _sender, _args) -> None:
+    def _owner_change(self, token: int, *, rebind: bool) -> None:
+        if (
+            self._closed
+            or token != self._lifecycle_token
+            or not self._change_callbacks
+        ):
+            return
+        try:
+            if rebind:
+                manager = self._manager
+                if manager is None:
+                    return
+                self._rebind_session_events(
+                    manager.get_current_session(),
+                    token,
+                )
+            self._callback_error = ""
+        except Exception as exc:
+            self._callback_error = str(exc) or "callback_rebind_failed"
+            self.log.exception("GSMTC callback rebind failed")
         self._notify_changed()
 
     def _notify_changed(self) -> None:
@@ -303,60 +383,137 @@ class WindowsMediaService:
             except Exception:
                 self.log.debug("GSMTC change callback failed", exc_info=True)
 
-    def _rebind_session_events(self, session: Any) -> None:
+    def _rebind_session_events(self, session: Any, token: int) -> None:
         if session is self._event_session:
             return
-        self._remove_session_handlers()
+        registered: list[tuple[str, object, Callable[..., None]]] = []
+        if session is not None:
+            def callback(
+                _sender,
+                _args,
+                current=token,
+            ):
+                self._queue_owner_change(current, rebind=False)
+
+            try:
+                registered.append(
+                    (
+                        "media",
+                        session.add_media_properties_changed(callback),
+                        callback,
+                    )
+                )
+                registered.append(
+                    (
+                        "playback",
+                        session.add_playback_info_changed(callback),
+                        callback,
+                    )
+                )
+                registered.append(
+                    (
+                        "timeline",
+                        session.add_timeline_properties_changed(callback),
+                        callback,
+                    )
+                )
+            except Exception:
+                self._remove_session_tokens(session, registered)
+                raise
+        try:
+            self._remove_session_handlers()
+        except Exception:
+            rollback_errors = self._remove_session_tokens(session, registered)
+            if rollback_errors:
+                self.log.error(
+                    "GSMTC new-session rollback also failed"
+                )
+            raise
         self._event_session = session
-        if session is None:
-            return
-        self._session_event_tokens = [
-            (
-                "media",
-                session.add_media_properties_changed(self._session_changed),
-            ),
-            (
-                "playback",
-                session.add_playback_info_changed(self._session_changed),
-            ),
-            (
-                "timeline",
-                session.add_timeline_properties_changed(self._session_changed),
-            ),
-        ]
+        self._session_event_tokens = registered
+        if session is not None:
+            self._stable_session_identity(session)
 
     def _remove_session_handlers(self) -> None:
         session = self._event_session
-        for kind, token in self._session_event_tokens:
+        errors = self._remove_session_tokens(
+            session,
+            self._session_event_tokens,
+        )
+        self._session_event_tokens.clear()
+        self._event_session = None
+        if errors:
+            raise RuntimeError("GSMTC session callback cleanup failed")
+
+    @staticmethod
+    def _remove_session_tokens(
+        session: Any,
+        tokens: list[tuple[str, object, Callable[..., None]]],
+    ) -> list[BaseException]:
+        errors: list[BaseException] = []
+        for kind, token, _callback in tokens:
             if session is None:
                 break
-            with suppress(Exception):
+            try:
                 if kind == "media":
                     session.remove_media_properties_changed(token)
                 elif kind == "playback":
                     session.remove_playback_info_changed(token)
                 else:
                     session.remove_timeline_properties_changed(token)
-        self._session_event_tokens.clear()
-        self._event_session = None
+            except Exception as exc:
+                errors.append(exc)
+        return errors
 
     def _remove_event_handlers(self) -> None:
-        self._remove_session_handlers()
+        errors: list[BaseException] = []
+        try:
+            self._remove_session_handlers()
+        except Exception as exc:
+            errors.append(exc)
         manager = self._manager
-        for kind, token in self._manager_event_tokens:
+        for kind, token, _callback in self._manager_event_tokens:
             if manager is None:
                 break
-            with suppress(Exception):
+            try:
                 if kind == "current":
                     manager.remove_current_session_changed(token)
                 else:
                     manager.remove_sessions_changed(token)
+            except Exception as exc:
+                errors.append(exc)
         self._manager_event_tokens.clear()
+        if errors:
+            raise RuntimeError("GSMTC callback cleanup failed")
+
+    @staticmethod
+    def _native_session_key(session: Any) -> tuple[str, int]:
+        source = str(getattr(session, "source_app_user_model_id", "") or "")
+        try:
+            native_hash = hash(session)
+        except Exception:
+            native_hash = id(session)
+        return source, native_hash
+
+    def _stable_session_identity(self, session: Any) -> str:
+        key = self._native_session_key(session)
+        if key != self._session_key:
+            self._session_sequence += 1
+            digest = hashlib.sha256(
+                f"{key[0]}:{key[1]}:{self._session_sequence}".encode()
+            ).hexdigest()[:24]
+            self._session_key = key
+            self._session_identity = f"gsmtc:{digest}"
+        return self._session_identity
 
     async def _snapshot_async(self) -> MediaSnapshot:
+        if self._callback_error:
+            raise RuntimeError(self._callback_error)
         manager = await self._manager_async()
         session = manager.get_current_session()
         if session is None:
+            self._session_key = None
+            self._session_identity = ""
             return MediaSnapshot()
 
         playback = session.get_playback_info()
@@ -368,6 +525,7 @@ class WindowsMediaService:
             properties = None
 
         source_identifier = str(session.source_app_user_model_id or "")
+        session_identity = self._stable_session_identity(session)
         artwork = await self._artwork_async(properties, source_identifier)
         duration = max(_seconds(timeline.end_time), _seconds(timeline.max_seek_time))
         state = _playback_state(playback.playback_status)
@@ -379,7 +537,7 @@ class WindowsMediaService:
             album_title=str(getattr(properties, "album_title", "") or ""),
             album_artist=str(getattr(properties, "album_artist", "") or ""),
             source_app=friendly_media_source(source_identifier),
-            session_id=source_identifier,
+            session_id=session_identity,
             duration=round(duration, 3),
             position=round(position, 3),
             capabilities=MediaCapabilities(
@@ -434,8 +592,12 @@ class WindowsMediaService:
         session = manager.get_current_session()
         if session is None:
             return False
-        current_id = str(session.source_app_user_model_id or "")
-        if session_id and current_id != session_id:
+        current_key = self._native_session_key(session)
+        if (
+            not session_id
+            or current_key != self._session_key
+            or self._session_identity != session_id
+        ):
             return False
         actions = {
             "play": session.try_play_async,
@@ -471,15 +633,22 @@ class WindowsMediaService:
     def close(self) -> bool:
         with self._runner_lock:
             self._closed = True
-            stopped = True
-            if self._runner is not None:
-                with suppress(Exception):
-                    self._runner.call(self._close_async(), timeout=1.0)
-                stopped = self._runner.close()
-                if not self._runner._thread.is_alive():
+            self._lifecycle_token += 1
+            runner = self._runner
+        stopped = True
+        cleanup_ok = True
+        if runner is not None:
+            try:
+                runner.call(self._close_async(), timeout=1.0)
+            except Exception:
+                cleanup_ok = False
+                self.log.exception("GSMTC callback cleanup failed")
+            stopped = runner.close()
+            with self._runner_lock:
+                if not runner._thread.is_alive():
                     self._runner = None
                 self._manager = None
-            return stopped
+        return stopped and cleanup_ok
 
     async def _close_async(self) -> None:
         self._change_callbacks.clear()

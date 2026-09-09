@@ -602,14 +602,10 @@ def discovery_messages(
             ("gpu_memory", "GPU Memory Used", "MiB", "mdi:memory", "measurement"),
             ("gpu_vendor", "GPU Vendor", None, "mdi:expansion-card", None),
             ("gpu_clock", "GPU Clock", "MHz", "mdi:speedometer", "measurement"),
-            ("gpu_fan", "GPU Fan", "%", "mdi:fan", "measurement"),
-            ("gpu_fan_rpm", "GPU Fan Speed", "rpm", "mdi:fan", "measurement"),
+            ("gpu_fan", "GPU Fan Speed", "rpm", "mdi:fan", "measurement"),
+            ("gpu_fan_percent", "GPU Fan", "%", "mdi:fan", "measurement"),
         )
         for metric, name, unit, icon, state_class in gpu_entities:
-            if metric == "gpu_fan_rpm" and (
-                hardware_metrics is None or metric not in hardware_metrics
-            ):
-                continue
             if hardware_metrics is not None and metric not in hardware_metrics:
                 continue
             gpu_payload = _base_entity(config, f"{object_root}_{metric}")

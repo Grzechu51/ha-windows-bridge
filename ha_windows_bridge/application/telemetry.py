@@ -152,64 +152,81 @@ class TelemetryService:
         outputs = [device.name for device in self._audio_outputs]
         hardware_metrics: set[str] = set()
         if self.config.publish_cpu_stats or self.config.publish_gpu_stats:
-            metrics = self.system.system_metrics(
-                include_cpu=self.config.publish_cpu_stats,
-                include_gpu=self.config.publish_gpu_stats,
-                include_ram=False,
-            )
-            candidates: dict[str, float | str | None] = {}
-            if self.config.publish_cpu_stats:
-                candidates.update(
-                    {
-                        "cpu_frequency": metrics.cpu_frequency_mhz,
-                        "cpu_temperature": metrics.cpu_temperature,
-                        "cpu_power": metrics.cpu_power_watts,
-                        "cpu_vendor": metrics.cpu_vendor,
-                    }
+            try:
+                metrics = self.system.system_metrics(
+                    include_cpu=self.config.publish_cpu_stats,
+                    include_gpu=self.config.publish_gpu_stats,
+                    include_ram=False,
                 )
-            if self.config.publish_gpu_stats:
-                candidates.update(
-                    {
-                        "gpu_usage": metrics.gpu_percent,
-                        "gpu_temperature": metrics.gpu_temperature,
-                        "gpu_power": metrics.gpu_power_watts,
-                        "gpu_memory": metrics.gpu_memory_used_mb,
-                        "gpu_clock": metrics.gpu_clock_mhz,
-                        "gpu_fan": metrics.gpu_fan_percent,
-                        "gpu_fan_rpm": metrics.gpu_fan_rpm,
-                        "gpu_vendor": metrics.gpu_vendor,
-                    }
-                )
-            hardware_metrics.update(
-                name for name, value in candidates.items() if value not in (None, "")
-            )
-        if self.config.publish_windows_health:
-            health = self.system.windows_health()
-            hardware_metrics.update(("pending_restart", "windows_update", "uptime"))
-            if health.battery_percent is not None:
-                hardware_metrics.update(("battery", "ac_power"))
-            if health.power_plan:
-                hardware_metrics.add("power_plan")
-        if self.config.publish_disk_stats:
-            volumes = self.system.list_disk_volumes()
-            selected = {
-                os.path.normcase(os.path.normpath(mount)) for mount in self.config.disk_mounts
-            }
-            for volume in volumes:
-                if os.path.normcase(os.path.normpath(volume.mountpoint)) not in selected:
-                    continue
-                hardware_metrics.update(
-                    (
-                        disk_volume_metric(volume.mountpoint, "used"),
-                        disk_volume_metric(volume.mountpoint, "free"),
+            except ProviderUnavailable:
+                metrics = None
+            if metrics is not None:
+                candidates: dict[str, float | str | None] = {}
+                if self.config.publish_cpu_stats:
+                    candidates.update(
+                        {
+                            "cpu_frequency": metrics.cpu_frequency_mhz,
+                            "cpu_temperature": metrics.cpu_temperature,
+                            "cpu_power": metrics.cpu_power_watts,
+                            "cpu_vendor": metrics.cpu_vendor,
+                        }
                     )
+                if self.config.publish_gpu_stats:
+                    candidates.update(
+                        {
+                            "gpu_usage": metrics.gpu_percent,
+                            "gpu_temperature": metrics.gpu_temperature,
+                            "gpu_power": metrics.gpu_power_watts,
+                            "gpu_memory": metrics.gpu_memory_used_mb,
+                            "gpu_clock": metrics.gpu_clock_mhz,
+                            "gpu_fan": metrics.gpu_fan_rpm,
+                            "gpu_fan_percent": metrics.gpu_fan_percent,
+                            "gpu_vendor": metrics.gpu_vendor,
+                        }
+                    )
+                hardware_metrics.update(
+                    name
+                    for name, value in candidates.items()
+                    if value not in (None, "")
                 )
-            disks = self.system.disk_metrics(self.config.disk_mounts)
-            hardware_metrics.update(("disk_read", "disk_write"))
-            if disks.health:
-                hardware_metrics.add("disk_health")
-            if disks.temperature is not None:
-                hardware_metrics.add("disk_temperature")
+        if self.config.publish_windows_health:
+            try:
+                health = self.system.windows_health()
+            except ProviderUnavailable:
+                health = None
+            if health is not None:
+                hardware_metrics.update(("pending_restart", "windows_update", "uptime"))
+                if health.battery_percent is not None:
+                    hardware_metrics.update(("battery", "ac_power"))
+                if health.power_plan:
+                    hardware_metrics.add("power_plan")
+        if self.config.publish_disk_stats:
+            try:
+                volumes = self.system.list_disk_volumes()
+                selected = {
+                    os.path.normcase(os.path.normpath(mount))
+                    for mount in self.config.disk_mounts
+                }
+                for volume in volumes:
+                    if (
+                        os.path.normcase(os.path.normpath(volume.mountpoint))
+                        not in selected
+                    ):
+                        continue
+                    hardware_metrics.update(
+                        (
+                            disk_volume_metric(volume.mountpoint, "used"),
+                            disk_volume_metric(volume.mountpoint, "free"),
+                        )
+                    )
+                disks = self.system.disk_metrics(self.config.disk_mounts)
+                hardware_metrics.update(("disk_read", "disk_write"))
+                if disks.health:
+                    hardware_metrics.add("disk_health")
+                if disks.temperature is not None:
+                    hardware_metrics.add("disk_temperature")
+            except ProviderUnavailable:
+                pass
         payload = integration_announcement_payload(
             self.config,
             outputs,
@@ -456,6 +473,11 @@ class TelemetryService:
             include_ram=self.config.publish_ram_stats,
         )
         self.events.emit("provider.health", {"source": "system", "errors": metrics.provider_errors})
+        unavailable = {
+            item.split(":", 1)[0]
+            for item in metrics.provider_errors
+            if ":" in item
+        }
         values: dict[str, float | int | str | None] = {}
         if self.config.publish_cpu_stats:
             values["cpu"] = round(metrics.cpu_percent, 1)
@@ -488,8 +510,8 @@ class TelemetryService:
                     "gpu_power": metrics.gpu_power_watts,
                     "gpu_memory": metrics.gpu_memory_used_mb,
                     "gpu_clock": metrics.gpu_clock_mhz,
-                    "gpu_fan": metrics.gpu_fan_percent,
-                    "gpu_fan_rpm": metrics.gpu_fan_rpm,
+                    "gpu_fan": metrics.gpu_fan_rpm,
+                    "gpu_fan_percent": metrics.gpu_fan_percent,
                     "gpu_vendor": metrics.gpu_vendor,
                 }
             )
@@ -502,6 +524,25 @@ class TelemetryService:
                     "cpu_vendor": metrics.cpu_vendor,
                 }
             )
+        if "cpu_ram" in unavailable:
+            for metric in (
+                "cpu",
+                "cpu_frequency",
+                "ram",
+                "ram_used",
+                "ram_available",
+                "ram_total",
+            ):
+                if metric in values:
+                    values[metric] = None
+        if "cpu_hardware" in unavailable:
+            for metric in ("cpu_temperature", "cpu_power", "cpu_vendor"):
+                if metric in values:
+                    values[metric] = None
+        if "gpu" in unavailable:
+            for metric in tuple(values):
+                if metric.startswith("gpu_"):
+                    values[metric] = None
         for metric, value in values.items():
             self._publish_text_state(system_metric_topic(self.config, metric), value if value not in (None, "") else "unavailable")
 

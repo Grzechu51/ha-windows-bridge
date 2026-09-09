@@ -49,6 +49,7 @@ class MqttGateway:
         self.publisher = StatePublisher(self.transport, events)
         self.outbox = MessageOutbox(capacity=256)
         self._unsubscribe = None
+        self._network_unsubscribe = None
         self._lock = threading.Lock()
         self._connection_generation = 0
         self._result_status = {}
@@ -72,6 +73,12 @@ class MqttGateway:
     def start(self):
         self._stop.clear()
         self._unsubscribe = self.events.subscribe("connection.changed", self._connection_changed)
+        network_changed = getattr(self.transport, "network_changed", None)
+        if callable(network_changed):
+            self._network_unsubscribe = self.events.subscribe(
+                "windows.network_changed",
+                network_changed,
+            )
         self._retry_thread = threading.Thread(
             target=self._retry_loop, name="mqtt-protocol-outbox", daemon=True
         )
@@ -90,6 +97,9 @@ class MqttGateway:
         if self._unsubscribe:
             self._unsubscribe()
             self._unsubscribe = None
+        if self._network_unsubscribe:
+            self._network_unsubscribe()
+            self._network_unsubscribe = None
         result = self.transport.stop()
         if self._retry_thread and self._retry_thread is not threading.current_thread():
             self._retry_thread.join(timeout=2)

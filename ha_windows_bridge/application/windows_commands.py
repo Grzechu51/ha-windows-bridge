@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 
 from ..communication.protocol import number
 from ..core.commands import Command, CommandError
@@ -42,7 +43,15 @@ class WindowsCommands:
         }
         for kind, allowed in enabled.items():
             if allowed:
-                router.register(kind, self.execute)
+                router.register(
+                    kind,
+                    self.execute,
+                    prepare=(
+                        self._bind_media_target
+                        if kind == "media.control"
+                        else None
+                    ),
+                )
         if any(app.enabled for app in c.apps):
             for kind in ("application.volume", "application.mute", "application.start", "application.close"):
                 router.register(kind, self.execute)
@@ -109,7 +118,13 @@ class WindowsCommands:
             elif action == "mute":
                 self._success(self._master_audio().set_master_mute(self._bool(value)))
             elif action in {"play", "pause", "stop", "next", "previous", "seek"}:
-                self._success(self.media.execute(action, number(value, 0, 86400) if action == "seek" else None))
+                self._success(
+                    self.media.execute(
+                        action,
+                        number(value, 0, 86400) if action == "seek" else None,
+                        session_id=command.target,
+                    )
+                )
             else:
                 raise CommandError("not_allowed")
         elif kind == "overlay.monitor":
@@ -122,6 +137,23 @@ class WindowsCommands:
         else:
             raise CommandError("not_allowed")
         return {"applied": True}
+
+    def _bind_media_target(self, command: Command) -> Command:
+        if command.arguments.get("action") not in {
+            "play",
+            "pause",
+            "stop",
+            "next",
+            "previous",
+            "seek",
+        }:
+            return command
+        if command.target:
+            return command
+        snapshot = self.media.snapshot()
+        if not snapshot.supported or not snapshot.session_id:
+            raise CommandError("media_session_unavailable")
+        return replace(command, target=snapshot.session_id)
 
     def _master_audio(self):
         if self.master_audio is None:

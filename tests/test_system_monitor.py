@@ -233,11 +233,17 @@ def test_zero_physical_disk_health_status_means_healthy(monkeypatch) -> None:
     import win32com.client
 
     storage = SimpleNamespace(
-        ExecQuery=lambda _query: [SimpleNamespace(HealthStatus=0, Temperature=42)]
+        ExecQuery=lambda query: (
+            [SimpleNamespace(DeviceId="0", HealthStatus=0)]
+            if "MSFT_PhysicalDisk" in query
+            else [SimpleNamespace(DeviceId="0", Temperature=42)]
+        )
     )
     monkeypatch.setattr(win32com.client, "GetObject", lambda _path: storage)
 
-    assert WindowsSystemMonitor._physical_disk_health() == ("Healthy", 42.0)
+    assert WindowsSystemMonitor._physical_disk_health(
+        frozenset({"0"})
+    ) == ("Healthy", 42.0)
 
 
 def test_disk_volumes_can_be_selected_individually(monkeypatch) -> None:
@@ -262,7 +268,14 @@ def test_disk_volumes_can_be_selected_individually(monkeypatch) -> None:
         lambda: SimpleNamespace(read_bytes=0, write_bytes=0),
     )
     monkeypatch.setattr(
-        WindowsSystemMonitor, "_physical_disk_health", staticmethod(lambda: ("", None))
+        WindowsSystemMonitor,
+        "_volume_physical_disks",
+        lambda _self, _volumes: frozenset({"0"}),
+    )
+    monkeypatch.setattr(
+        WindowsSystemMonitor,
+        "_physical_disk_health",
+        staticmethod(lambda _disk_ids: ("", None)),
     )
 
     monitor = WindowsSystemMonitor()

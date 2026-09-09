@@ -14,6 +14,7 @@ from ..runtime.worker import SerialWorker
 
 Handler = Callable[[Command], dict[str, Any] | None]
 Reply = Callable[[CommandResult], None]
+Prepare = Callable[[Command], Command]
 
 
 @dataclass
@@ -36,27 +37,55 @@ class CommandRouter:
             if monotonic_clock is None else monotonic_clock
         )
         self._handlers: dict[str, Handler] = {}
+        self._preparers: dict[str, Prepare] = {}
         self._executions: OrderedDict[str, Execution] = OrderedDict()
         self._worker = SerialWorker("bridge-commands", self.log, capacity=64)
         self._lock = threading.RLock()
         self._closed = False
 
-    def register(self, kind: str, handler: Handler) -> None:
+    def register(
+        self,
+        kind: str,
+        handler: Handler,
+        *,
+        prepare: Prepare | None = None,
+    ) -> None:
         with self._lock:
             if kind in self._handlers:
                 raise ValueError(f"Duplicate command handler: {kind}")
             self._handlers[kind] = handler
+            if prepare is not None:
+                self._preparers[kind] = prepare
 
     def submit(self, command: Command, reply: Reply) -> CommandResult:
+        try:
+            fingerprint = command.fingerprint()
+        except (ValueError, TypeError, RecursionError):
+            return CommandResult(command.id, "rejected", "invalid_arguments")
         with self._lock:
             if self._closed:
                 return CommandResult(command.id, "rejected", "stopping")
             if command.kind not in self._handlers:
                 return CommandResult(command.id, "rejected", "not_allowed")
+            previous = self._executions.get(command.id)
+            if previous:
+                if previous.fingerprint != fingerprint:
+                    return CommandResult(command.id, "rejected", "id_conflict")
+                return previous.result or CommandResult(command.id, "pending")
+            prepare = self._preparers.get(command.kind)
+        if prepare is not None:
             try:
-                fingerprint = command.fingerprint()
-            except (ValueError, TypeError, RecursionError):
-                return CommandResult(command.id, "rejected", "invalid_arguments")
+                command = prepare(command)
+            except CommandError as exc:
+                return CommandResult(command.id, "rejected", exc.code)
+            except Exception:
+                self.log.exception("Command target preparation failed: %s", command.kind)
+                return CommandResult(command.id, "rejected", "target_unavailable")
+        with self._lock:
+            if self._closed:
+                return CommandResult(command.id, "rejected", "stopping")
+            if command.kind not in self._handlers:
+                return CommandResult(command.id, "rejected", "not_allowed")
             previous = self._executions.get(command.id)
             if previous:
                 if previous.fingerprint != fingerprint:

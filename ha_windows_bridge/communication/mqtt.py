@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from collections.abc import Callable
@@ -13,6 +14,13 @@ import paho.mqtt.client as mqtt
 from ..config import MqttConfig
 from ..core.events import EventBus
 from .state import Backoff, ConnectionMachine, ConnectionState
+
+
+def _schedule_timer(delay: float, callback: Callable[[], None]):
+    timer = threading.Timer(delay, callback)
+    timer.daemon = True
+    timer.start()
+    return timer.cancel
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +36,8 @@ class MqttTransport:
     def __init__(self, config: MqttConfig, device_id: str, events: EventBus,
                  on_message: Callable[[str, bytes, bool], None], topics: set[str],
                  *, client_factory=None, monotonic_clock=time.monotonic,
-                 ack_timeout: float = 10.0, shutdown_timeout: float = 1.0):
+                 ack_timeout: float = 10.0, shutdown_timeout: float = 1.0,
+                 network_delay=None, network_scheduler=None):
         self.config, self.events = config, events
         self.machine = ConnectionMachine("mqtt", events)
         self.log = logging.getLogger("bridge.mqtt")
@@ -68,6 +77,15 @@ class MqttTransport:
         self._reserved_pubacks = 0
         self._connection_generation = 0
         self._unclean_shutdown = False
+        self._network_wake = threading.Event()
+        self._network_lock = threading.Lock()
+        self._network_pending = False
+        self._network_cancel = None
+        self._network_token = 0
+        self._network_delay = network_delay or (
+            lambda: random.uniform(0.05, 0.25)
+        )
+        self._network_scheduler = network_scheduler or _schedule_timer
 
     @property
     def connected(self) -> bool:
@@ -79,6 +97,7 @@ class MqttTransport:
         self._stop.clear()
         self._shutdown.clear()
         self._offline_confirmed.clear()
+        self._network_wake.clear()
         self._unclean_shutdown = False
         self._epoch = self.machine.begin()
         self._thread = threading.Thread(target=self._run, name="mqtt-transport", daemon=True)
@@ -87,6 +106,8 @@ class MqttTransport:
     def stop(self) -> bool:
         # Fence every reconnect/timeout path before waiting for the final ACK.
         self._shutdown.set()
+        self._cancel_network_wake()
+        self._network_wake.set()
         was_connected = self.connected
         offline_delivered = not was_connected
         if was_connected:
@@ -133,6 +154,67 @@ class MqttTransport:
             self._thread.join(timeout=4)
         stopped = self._thread is None or not self._thread.is_alive()
         return stopped and offline_delivered
+
+    def network_changed(self, *_args: object) -> bool:
+        """Coalesce native network bursts without performing callback-thread I/O."""
+
+        with self._network_lock:
+            if (
+                self._stop.is_set()
+                or self._shutdown.is_set()
+                or self._network_pending
+            ):
+                return False
+            self._network_pending = True
+            self._network_token += 1
+            token = self._network_token
+        try:
+            cancel = self._network_scheduler(
+                max(0.0, float(self._network_delay())),
+                lambda: self._release_network_wake(token),
+            )
+        except Exception:
+            with self._network_lock:
+                if self._network_token == token:
+                    self._network_pending = False
+            self.log.exception("MQTT network wake could not be scheduled")
+            return False
+        with self._network_lock:
+            if (
+                self._stop.is_set()
+                or self._shutdown.is_set()
+                or self._network_token != token
+                or not self._network_pending
+            ):
+                cancel_now = True
+            else:
+                self._network_cancel = cancel
+                cancel_now = False
+        if cancel_now:
+            cancel()
+            return False
+        return True
+
+    def _release_network_wake(self, token: int) -> None:
+        with self._network_lock:
+            if (
+                self._stop.is_set()
+                or self._shutdown.is_set()
+                or self._network_token != token
+                or not self._network_pending
+            ):
+                return
+            self._network_pending = False
+            self._network_cancel = None
+        self._network_wake.set()
+
+    def _cancel_network_wake(self) -> None:
+        with self._network_lock:
+            self._network_token += 1
+            self._network_pending = False
+            cancel, self._network_cancel = self._network_cancel, None
+        if cancel is not None:
+            cancel()
 
     def publish(self, topic: str, payload: str | bytes, *, retain: bool = True, qos: int = 1,
                 on_delivery: Callable[[bool], None] | None = None) -> bool:
@@ -232,6 +314,12 @@ class MqttTransport:
                     if rc != mqtt.MQTT_ERR_SUCCESS:
                         raise ConnectionError("network")
                     self._expire_ack_deadlines()
+                    if self._network_wake.is_set():
+                        self._network_wake.clear()
+                        self.machine.failed(self._epoch, "network_changed")
+                        with suppress(Exception):
+                            self._client.disconnect()
+                        break
                     if self.machine.status.state in {ConnectionState.RETRY_WAIT, ConnectionState.AUTH_ERROR}:
                         break
             except Exception:
@@ -254,8 +342,10 @@ class MqttTransport:
                 break
             if self.machine.status.state == ConnectionState.AUTH_ERROR:
                 break  # Configuration must change; do not retry bad credentials forever.
-            if self._stop.wait(backoff.delay(self.machine.status.attempt)):
+            self._network_wake.wait(backoff.delay(self.machine.status.attempt))
+            if self._stop.is_set():
                 break
+            self._network_wake.clear()
             if not self.machine.retry(self._epoch):
                 break
 
