@@ -1123,3 +1123,323 @@ def test_r14_native_ip_interface_callback_only_emits_wake(monkeypatch) -> None:
     assert received == ["windows.network_changed"]
     bridge.close()
     assert cancelled == [True]
+
+
+def test_r4_unsubscribe_failure_still_closes_media_async_runner() -> None:
+    state = ComputerStateStore(EventBus())
+    state.begin_generation(1)
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.runner = _AsyncRunner()
+            self.closed = threading.Event()
+
+        def reopen(self) -> None:
+            return None
+
+        def snapshot(self) -> MediaSnapshot:
+            return MediaSnapshot()
+
+        def execute(self, _action, _value=None, *, session_id="") -> bool:
+            return bool(session_id)
+
+        def subscribe(self, _changed):
+            def unsubscribe() -> None:
+                raise RuntimeError("unsubscribe failed")
+
+            return unsubscribe
+
+        def close(self) -> bool:
+            self.closed.set()
+            return self.runner.close()
+
+    adapter = Adapter()
+    provider = MediaProvider(adapter, state, 1, interval=60)
+    provider.start()
+
+    assert not provider.stop()
+    assert adapter.closed.is_set()
+    assert not adapter.runner._thread.is_alive()
+
+
+def test_r5_failed_old_endpoint_cleanup_is_retried_after_refresh(monkeypatch) -> None:
+    endpoint_a = _AudioEndpoint(cleanup_error=True)
+    endpoint_b = _AudioEndpoint()
+    manager_a, manager_b = _AudioManager(), _AudioManager()
+    devices = [
+        SimpleNamespace(
+            id="a",
+            EndpointVolume=endpoint_a,
+            AudioSessionManager=manager_a,
+        ),
+        SimpleNamespace(
+            id="b",
+            EndpointVolume=endpoint_b,
+            AudioSessionManager=manager_b,
+        ),
+    ]
+    current = [0]
+    enumerator = SimpleNamespace(
+        RegisterEndpointNotificationCallback=lambda _callback: None,
+        UnregisterEndpointNotificationCallback=lambda _callback: None,
+    )
+    monkeypatch.setattr(
+        "ha_windows_bridge.audio.AudioUtilities.GetDeviceEnumerator",
+        lambda: enumerator,
+    )
+    monkeypatch.setattr(
+        "ha_windows_bridge.audio.AudioUtilities.GetSpeakers",
+        lambda: devices[current[0]],
+    )
+    subscription = _AudioEventSubscription(lambda: None)
+    current[0] = 1
+
+    with pytest.raises(RuntimeError, match="old endpoint cleanup"):
+        subscription.refresh_endpoint()
+    assert subscription.endpoint_id == "b"
+    assert endpoint_a.unregistered == 1
+
+    endpoint_a.cleanup_error = False
+    subscription.refresh_endpoint()
+    assert endpoint_a.unregistered == 2
+    assert subscription._pending_cleanup == []
+    assert subscription.close()
+
+
+def test_r6_valid_nvidia_metrics_survive_missing_hardware_monitor(monkeypatch) -> None:
+    monitor = WindowsSystemMonitor()
+    monkeypatch.setattr(monitor, "_gpu_metrics", lambda: {"gpu_percent": 73.0})
+    monkeypatch.setattr(
+        monitor,
+        "_hardware_monitor_metrics",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            ProviderUnavailable("Hardware monitor unavailable")
+        ),
+    )
+    monkeypatch.setattr(monitor, "_hardware_identity", lambda: ("Intel", "NVIDIA"))
+
+    state = ComputerStateStore(EventBus())
+    state.begin_generation(1)
+    provider = AdaptiveProvider(
+        "gpu",
+        monitor.gpu_metrics_snapshot,
+        state,
+        1,
+        interval=5,
+        maximum_interval=30,
+    )
+    provider._stopping = False
+
+    assert provider._sample(0)
+    sample = state.snapshot().provider("gpu")
+    assert sample is not None
+    assert sample.quality == StateQuality.GOOD
+    assert sample.value.gpu_percent == 73.0
+    assert sample.value.provider_errors == ()
+
+
+def test_r6_public_pnp_and_media_facades_reject_stale_samples() -> None:
+    wall = [100.0]
+    monotonic = [10.0]
+    state = ComputerStateStore(
+        EventBus(),
+        wall_clock=lambda: wall[0],
+        monotonic_clock=lambda: monotonic[0],
+    )
+    state.begin_generation(1)
+    state.observe_provider(
+        "pnp",
+        DeviceSnapshot((PnpDevice("pad", "Gamepad", "HIDClass"),)),
+        generation=1,
+    )
+    state.observe_provider(
+        "media",
+        MediaSnapshot(
+            state="playing",
+            title="Track",
+            session_id="session",
+        ),
+        generation=1,
+    )
+    monotonic[0] = 20.0
+
+    with pytest.raises(ProviderUnavailable, match="freshness_deadline_exceeded"):
+        SystemProviderView(Mock(), state, stale_after=5).present_device_ids()
+    media = MediaProvider(Mock(), state, 1, interval=1).snapshot()
+    assert media.supported is False
+    assert media.state == "idle"
+    assert media.error == "freshness_deadline_exceeded"
+    assert state.snapshot().provider("media").quality == StateQuality.GOOD
+
+
+def test_r10_missing_selected_volume_does_not_use_other_disk_health(monkeypatch) -> None:
+    monitor = WindowsSystemMonitor()
+    volume = DiskVolume("C:\\", "C:\\", "NTFS", 100, 40, 60)
+    monkeypatch.setattr(
+        "ha_windows_bridge.system_monitor.psutil.disk_io_counters",
+        lambda: SimpleNamespace(read_bytes=0, write_bytes=0),
+    )
+    health_queries = []
+    monkeypatch.setattr(
+        monitor,
+        "_physical_disk_health",
+        lambda *_args: health_queries.append(True) or ("Healthy", 35.0),
+    )
+
+    metrics = monitor.disk_metrics(["D:\\"], volumes=[volume])
+
+    assert metrics.health == ""
+    assert metrics.temperature is None
+    assert metrics.provider_errors == ("selected_volume",)
+    assert health_queries == []
+
+
+def test_r10_inflight_storage_mapping_cannot_repopulate_invalidated_cache(
+    monkeypatch,
+) -> None:
+    monitor = WindowsSystemMonitor()
+    volume = DiskVolume("C:\\", "C:\\", "NTFS", 100, 40, 60)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def query(_service, _statement):
+        entered.set()
+        assert release.wait(1)
+        return [SimpleNamespace(DiskIndex=0)]
+
+    monkeypatch.setattr("ha_windows_bridge.system_monitor.query_wmi", query)
+    results = []
+    failures = []
+
+    def map_volume() -> None:
+        try:
+            results.append(monitor._volume_physical_disks([volume]))
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker = threading.Thread(target=map_volume)
+    worker.start()
+    assert entered.wait(1)
+    monitor.invalidate_storage_mapping()
+    release.set()
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert failures == []
+    assert results == [frozenset({"0"})]
+    assert monitor._volume_disk_cache == {}
+
+
+def test_r13_cpu_hardware_path_queries_only_cpu_sensor_parents(monkeypatch) -> None:
+    monitor = WindowsSystemMonitor()
+    sensor_queries = []
+
+    def query(_service, statement):
+        if "FROM Hardware" in statement:
+            return [
+                SimpleNamespace(Identifier="/cpu/0", HardwareType="Cpu"),
+                SimpleNamespace(Identifier="/gpu-amd/0", HardwareType="GpuAmd"),
+            ]
+        sensor_queries.append(statement)
+        if "WHERE Parent='/cpu/0'" in statement:
+            return [
+                SimpleNamespace(
+                    Parent="/cpu/0",
+                    Name="CPU Package",
+                    SensorType="Temperature",
+                    Value=61,
+                )
+            ]
+        raise AssertionError(f"unexpected GPU sensor query: {statement}")
+
+    monkeypatch.setattr("ha_windows_bridge.system_monitor.query_wmi", query)
+    monkeypatch.setattr(monitor, "_cpu_identity", lambda: "GenuineIntel")
+
+    metrics = monitor.cpu_hardware_snapshot()
+
+    assert metrics.cpu_temperature == 61
+    assert metrics.cpu_vendor == "GenuineIntel"
+    assert len(sensor_queries) == 1
+    assert "Parent='/gpu-amd/0'" not in sensor_queries[0]
+
+
+def test_r14_shutdown_wake_pumps_offline_ack_before_disconnect() -> None:
+    first_loop = threading.Event()
+    second_loop = threading.Event()
+    release_loop = threading.Event()
+    offline_published = threading.Event()
+    holder = {}
+
+    class Client(_MqttClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.next_mid = 1
+            self.published = []
+            self.loop_calls = 0
+
+        def connect(self, *_args) -> None:
+            holder["transport"]._on_connect(
+                self,
+                None,
+                None,
+                SimpleNamespace(is_failure=False),
+                None,
+            )
+
+        def publish(self, topic, payload, **kwargs):
+            mid, self.next_mid = self.next_mid, self.next_mid + 1
+            self.published.append((topic, payload, kwargs, mid))
+            if payload == "offline":
+                offline_published.set()
+            return SimpleNamespace(rc=0, mid=mid)
+
+        def loop(self, **_kwargs):
+            self.loop_calls += 1
+            if self.loop_calls == 1:
+                first_loop.set()
+                holder["transport"]._network_wake.wait(1)
+            else:
+                second_loop.set()
+                release_loop.wait(1)
+            return 0
+
+        def disconnect(self):
+            super().disconnect()
+            release_loop.set()
+
+    client = Client()
+    transport = MqttTransport(
+        MqttConfig(base_topic="desktop"),
+        "desktop",
+        EventBus(),
+        lambda *_args: None,
+        set(),
+        client_factory=lambda *_args, **_kwargs: client,
+        shutdown_timeout=1,
+    )
+    holder["transport"] = transport
+    transport.start()
+    assert first_loop.wait(1)
+    stopped = []
+    stop_thread = threading.Thread(target=lambda: stopped.append(transport.stop()))
+    stop_thread.start()
+    try:
+        assert offline_published.wait(1)
+        assert second_loop.wait(1)
+        assert client.disconnects == 0
+        offline_mid = next(
+            mid
+            for _topic, payload, _kwargs, mid in client.published
+            if payload == "offline"
+        )
+        deadline = time.monotonic() + 1
+        while offline_mid not in transport._pending_pubacks and time.monotonic() < deadline:
+            time.sleep(0.001)
+        transport._on_publish(client, None, offline_mid, None, None)
+        stop_thread.join(timeout=1)
+        assert stopped == [True]
+    finally:
+        release_loop.set()
+        transport._stop.set()
+        transport._network_wake.set()
+        stop_thread.join(timeout=1)

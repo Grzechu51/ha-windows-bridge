@@ -148,6 +148,7 @@ class _AudioEventSubscription:
         self.endpoint = None
         self.volume_callback = _VolumeEvents(changed)
         self._session_events: dict[str, tuple[AudioSession, _ExistingSessionEvents]] = {}
+        self._pending_cleanup: list[Callable[[], None]] = []
         try:
             self.enumerator = AudioUtilities.GetDeviceEnumerator()
             self.enumerator.RegisterEndpointNotificationCallback(self.device_callback)
@@ -162,10 +163,13 @@ class _AudioEventSubscription:
             raise
 
     def refresh_endpoint(self) -> None:
+        pending_errors = self._retry_pending_cleanup()
         device = AudioUtilities.GetSpeakers()
         endpoint_id = str(device.id)
         if endpoint_id == self.endpoint_id:
             self._refresh_existing_sessions()
+            if pending_errors:
+                raise RuntimeError("Core Audio old endpoint cleanup failed")
             return
 
         new_endpoint = device.EndpointVolume
@@ -207,7 +211,7 @@ class _AudioEventSubscription:
         self.session_manager = new_manager
         self.endpoint_id = endpoint_id
         self._session_events = new_sessions
-        if cleanup_errors:
+        if pending_errors or cleanup_errors:
             raise RuntimeError("Core Audio old endpoint cleanup failed")
 
     def _enumerate_sessions(self, manager) -> list[AudioSession]:
@@ -292,30 +296,50 @@ class _AudioEventSubscription:
     def _detach_endpoint(self) -> list[BaseException]:
         errors: list[BaseException] = []
         for session, _callback in self._session_events.values():
-            try:
-                session.unregister_notification()
-            except Exception as exc:
-                errors.append(exc)
+            self._attempt_cleanup(session.unregister_notification, errors)
         self._session_events.clear()
         if self.session_manager is not None:
-            try:
-                self.session_manager.UnregisterSessionNotification(
+            manager = self.session_manager
+            self._attempt_cleanup(
+                lambda: manager.UnregisterSessionNotification(
                     self.session_callback
-                )
-            except Exception as exc:
-                errors.append(exc)
+                ),
+                errors,
+            )
         if self.endpoint is not None:
-            try:
-                self.endpoint.UnregisterControlChangeNotify(self.volume_callback)
-            except Exception as exc:
-                errors.append(exc)
+            endpoint = self.endpoint
+            self._attempt_cleanup(
+                lambda: endpoint.UnregisterControlChangeNotify(
+                    self.volume_callback
+                ),
+                errors,
+            )
         self.session_manager = None
         self.endpoint = None
         self.endpoint_id = ""
         return errors
 
+    def _attempt_cleanup(
+        self,
+        cleanup: Callable[[], None],
+        errors: list[BaseException],
+    ) -> None:
+        try:
+            cleanup()
+        except Exception as exc:
+            errors.append(exc)
+            self._pending_cleanup.append(cleanup)
+
+    def _retry_pending_cleanup(self) -> list[BaseException]:
+        pending, self._pending_cleanup = self._pending_cleanup, []
+        errors: list[BaseException] = []
+        for cleanup in pending:
+            self._attempt_cleanup(cleanup, errors)
+        return errors
+
     def close(self) -> bool:
-        errors = self._detach_endpoint()
+        errors = self._retry_pending_cleanup()
+        errors.extend(self._detach_endpoint())
         if self.enumerator is not None:
             try:
                 self.enumerator.UnregisterEndpointNotificationCallback(

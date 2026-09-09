@@ -128,6 +128,8 @@ class WindowsSystemMonitor:
             tuple[float, tuple[str, float | None]],
         ] = {}
         self._volume_disk_cache: dict[str, frozenset[str]] = {}
+        self._storage_cache_guard = threading.Lock()
+        self._storage_mapping_generation = 0
         self._update_error = False
         self._pending_updates: int | None = None
         self._update_check_time = 0.0
@@ -287,7 +289,8 @@ class WindowsSystemMonitor:
             optional = self._hardware_monitor_metrics()
         except ProviderUnavailable:
             optional = {}
-            errors.append("hardware_monitor")
+            if not gpu:
+                errors.append("hardware_monitor")
         gpu.update(
             {
                 key: value
@@ -328,7 +331,10 @@ class WindowsSystemMonitor:
 
         errors: list[str] = []
         try:
-            optional = self._hardware_monitor_metrics()
+            optional = self._hardware_monitor_metrics(
+                include_cpu=True,
+                include_gpu=False,
+            )
         except ProviderUnavailable:
             optional = {}
             errors.append("hardware_monitor")
@@ -521,7 +527,10 @@ class WindowsSystemMonitor:
         if io is not None:
             self._last_disk_io = (now, io.read_bytes, io.write_bytes)
         errors = []
-        aggregate_all = not volumes
+        missing_selection = bool(selected) and not volumes
+        if missing_selection:
+            errors.append("selected_volume")
+        aggregate_all = not selected and not volumes
         disk_ids: frozenset[str] = (
             frozenset({"*"}) if aggregate_all else frozenset()
         )
@@ -557,8 +566,10 @@ class WindowsSystemMonitor:
     def invalidate_storage_mapping(self) -> None:
         """Discard volume/physical-disk relations after a PnP hotplug event."""
 
-        self._volume_disk_cache.clear()
-        self._disk_health_cache.clear()
+        with self._storage_cache_guard:
+            self._storage_mapping_generation += 1
+            self._volume_disk_cache.clear()
+            self._disk_health_cache.clear()
 
     def _volume_physical_disks(
         self,
@@ -568,7 +579,9 @@ class WindowsSystemMonitor:
         service = r"winmgmts:\\.\root\cimv2"
         for volume in volumes:
             mount = os.path.normcase(os.path.normpath(volume.mountpoint))
-            cached = self._volume_disk_cache.get(mount)
+            with self._storage_cache_guard:
+                cached = self._volume_disk_cache.get(mount)
+                mapping_generation = self._storage_mapping_generation
             if cached is None:
                 logical = volume.mountpoint.rstrip("\\/")
                 if len(logical) != 2 or logical[1] != ":":
@@ -595,7 +608,9 @@ class WindowsSystemMonitor:
                     raise ProviderUnavailable(
                         f"No physical disk mapping for {logical}"
                     )
-                self._volume_disk_cache[mount] = cached
+                with self._storage_cache_guard:
+                    if mapping_generation == self._storage_mapping_generation:
+                        self._volume_disk_cache[mount] = cached
             selected.update(cached)
         return frozenset(selected)
 
@@ -1211,7 +1226,11 @@ class WindowsSystemMonitor:
         return metrics
 
     @staticmethod
-    def _hardware_monitor_metrics() -> dict[str, float]:
+    def _hardware_monitor_metrics(
+        *,
+        include_cpu: bool = True,
+        include_gpu: bool = True,
+    ) -> dict[str, float]:
         """Read an optional Libre/OpenHardwareMonitor WMI provider when present."""
         for namespace in ("LibreHardwareMonitor", "OpenHardwareMonitor"):
             try:
@@ -1222,10 +1241,39 @@ class WindowsSystemMonitor:
                     ).casefold()
                     for item in query_wmi(service, "SELECT Identifier,HardwareType FROM Hardware")
                 }
+                selected_hardware = {
+                    identifier: kind
+                    for identifier, kind in hardware.items()
+                    if (include_cpu and "cpu" in kind)
+                    or (
+                        include_gpu
+                        and (
+                            "gpuamd" in kind
+                            or "gpuati" in kind
+                            or (
+                                "gpu" in kind
+                                and any(
+                                    vendor in identifier.casefold()
+                                    for vendor in ("amd", "ati")
+                                )
+                            )
+                        )
+                    )
+                }
                 metrics: dict[str, float] = {}
-                for sensor in query_wmi(service, "SELECT Name,SensorType,Value,Parent FROM Sensor"):
+                sensors = []
+                for parent in sorted(selected_hardware):
+                    escaped_parent = parent.replace("'", "''")
+                    sensors.extend(
+                        query_wmi(
+                            service,
+                            "SELECT Name,SensorType,Value,Parent FROM Sensor "
+                            f"WHERE Parent='{escaped_parent}'",
+                        )
+                    )
+                for sensor in sensors:
                     parent = str(getattr(sensor, "Parent", ""))
-                    kind = hardware.get(parent, "")
+                    kind = selected_hardware.get(parent, "")
                     sensor_type = str(getattr(sensor, "SensorType", "")).casefold()
                     name = str(getattr(sensor, "Name", "")).casefold()
                     try:
@@ -1234,7 +1282,7 @@ class WindowsSystemMonitor:
                         continue
                     if not math.isfinite(value):
                         continue
-                    if "cpu" in kind:
+                    if include_cpu and "cpu" in kind:
                         if sensor_type == "temperature" and (
                             "package" in name or "core max" in name
                         ):
@@ -1245,7 +1293,7 @@ class WindowsSystemMonitor:
                             metrics["cpu_power_watts"] = max(
                                 value, metrics.get("cpu_power_watts", value)
                             )
-                    elif (
+                    elif include_gpu and (
                         "gpuamd" in kind
                         or "gpuati" in kind
                         or (

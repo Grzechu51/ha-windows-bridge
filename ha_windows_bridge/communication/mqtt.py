@@ -307,6 +307,8 @@ class MqttTransport:
     def _run(self) -> None:
         backoff = Backoff()
         while not self._stop.is_set():
+            if self._shutdown.is_set():
+                break
             try:
                 self._client.connect(self.config.host, self.config.port, self.config.keepalive)
                 while not self._stop.is_set():
@@ -314,8 +316,15 @@ class MqttTransport:
                     if rc != mqtt.MQTT_ERR_SUCCESS:
                         raise ConnectionError("network")
                     self._expire_ack_deadlines()
+                    if self._shutdown.is_set():
+                        # Keep pumping the connected socket until stop() gets
+                        # the retained offline PUBACK or reaches its deadline.
+                        self._network_wake.clear()
+                        continue
                     if self._network_wake.is_set():
                         self._network_wake.clear()
+                        if self._shutdown.is_set():
+                            continue
                         self.machine.failed(self._epoch, "network_changed")
                         with suppress(Exception):
                             self._client.disconnect()
@@ -343,7 +352,7 @@ class MqttTransport:
             if self.machine.status.state == ConnectionState.AUTH_ERROR:
                 break  # Configuration must change; do not retry bad credentials forever.
             self._network_wake.wait(backoff.delay(self.machine.status.attempt))
-            if self._stop.is_set():
+            if self._stop.is_set() or self._shutdown.is_set():
                 break
             self._network_wake.clear()
             if not self.machine.retry(self._epoch):

@@ -251,10 +251,12 @@ class AdaptiveProvider:
                             )
                     self._loop()
                 finally:
-                    if unsubscribe is not None:
-                        unsubscribe()
-                    if self.on_stop is not None:
-                        self._cleanup_ok = self.on_stop() is not False
+                    try:
+                        if unsubscribe is not None:
+                            unsubscribe()
+                    finally:
+                        if self.on_stop is not None:
+                            self._cleanup_ok = self.on_stop() is not False
         except Exception:
             self._cleanup_ok = False
             self.log.exception("%s provider owner failed", self.source)
@@ -450,6 +452,7 @@ class MediaProvider(AdaptiveProvider):
         logger: logging.Logger | None = None,
     ) -> None:
         self.adapter = adapter
+        self._stale_after = max(2.0, float(interval) * 3.0)
         try:
             execute_parameters = inspect.signature(adapter.execute).parameters
         except (AttributeError, TypeError, ValueError):
@@ -472,7 +475,7 @@ class MediaProvider(AdaptiveProvider):
         )
 
     def snapshot(self) -> MediaSnapshot:
-        current = self.state.snapshot()
+        current = self.state.snapshot(stale_after=self._stale_after)
         sample = current.provider("media")
         if sample is not None:
             if sample.quality == StateQuality.GOOD:
@@ -521,12 +524,21 @@ class MediaProvider(AdaptiveProvider):
 class SystemProviderView:
     """Read-only compatibility façade backed exclusively by ComputerState."""
 
-    def __init__(self, raw, state: ComputerStateStore) -> None:
+    def __init__(
+        self,
+        raw,
+        state: ComputerStateStore,
+        *,
+        stale_after: float = 30.0,
+    ) -> None:
         self.raw = raw
         self.state = state
+        self._stale_after = max(0.0, float(stale_after))
 
-    def _sample(self, source: str):
-        sample = self.state.snapshot().provider(source)
+    def _sample(self, source: str, *, require_fresh: bool = False):
+        sample = self.state.snapshot(
+            stale_after=self._stale_after if require_fresh else None
+        ).provider(source)
         if sample is None:
             raise ProviderUnavailable(f"{source} has no successful observation")
         return sample
@@ -656,7 +668,12 @@ class SystemProviderView:
         return storage.metrics  # type: ignore[union-attr,return-value]
 
     def list_pnp_devices(self, include_disconnected: bool = False) -> list[PnpDevice]:
-        devices = self._value("pnp", DeviceSnapshot())
+        sample = self._sample("pnp", require_fresh=True)
+        if sample.quality != StateQuality.GOOD:
+            raise ProviderUnavailable(
+                sample.detail or f"pnp is {sample.quality.value}"
+            )
+        devices = sample.value
         visible = list(devices.devices)  # type: ignore[union-attr]
         return visible if include_disconnected else [item for item in visible if item.present]
 

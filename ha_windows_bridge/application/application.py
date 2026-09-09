@@ -76,7 +76,11 @@ class Application:
         self._master_audio = None
         self._media_provider = None
         self._system_providers = []
-        self._system_view = SystemProviderView(self.system, self.computer_state)
+        self._system_view = SystemProviderView(
+            self.system,
+            self.computer_state,
+            stale_after=max(2.0, self.config.poll_interval * 3),
+        )
         self._state_projection = None
         self._protocol_projection = None
         self._generation = 0
@@ -195,7 +199,11 @@ class Application:
             else None
         )
         self._system_providers = self._create_system_providers(enabled_apps)
-        self._system_view = SystemProviderView(self.system, self.computer_state)
+        self._system_view = SystemProviderView(
+            self.system,
+            self.computer_state,
+            stale_after=max(2.0, self.config.poll_interval * 3),
+        )
         audio_view = self._master_audio or self.audio
         media_view = self._media_provider or self.media
         WindowsCommands(self.config, audio_view, self._system_view, media_view, self.power,
