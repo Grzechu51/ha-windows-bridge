@@ -68,6 +68,7 @@ class MqttTransport:
         self._monotonic_clock = monotonic_clock
         self._ack_timeout = max(0.001, float(ack_timeout))
         self._shutdown_timeout = max(0.0, float(shutdown_timeout))
+        self._shutdown_lock = threading.RLock()
         self._ack_lock = threading.Lock()
         self._pending_subacks: dict[int, float] = {}
         self._pending_pubacks: dict[int, _PendingPublish] = {}
@@ -104,8 +105,10 @@ class MqttTransport:
         self._thread.start()
 
     def stop(self) -> bool:
-        # Fence every reconnect/timeout path before waiting for the final ACK.
-        self._shutdown.set()
+        # Linearize shutdown against every transport-owned clean disconnect.
+        # The potentially long offline PUBACK wait remains outside this lock.
+        with self._shutdown_lock:
+            self._shutdown.set()
         self._cancel_network_wake()
         self._network_wake.set()
         was_connected = self.connected
@@ -325,10 +328,8 @@ class MqttTransport:
                         self._network_wake.clear()
                         if self._shutdown.is_set():
                             continue
-                        self.machine.failed(self._epoch, "network_changed")
-                        with suppress(Exception):
-                            self._client.disconnect()
-                        break
+                        if self._disconnect_for_network_change():
+                            break
                     if self.machine.status.state in {ConnectionState.RETRY_WAIT, ConnectionState.AUTH_ERROR}:
                         break
             except Exception:
@@ -336,17 +337,7 @@ class MqttTransport:
                     self.machine.failed(self._epoch, "network")
                     self.log.warning("MQTT connection unavailable")
             finally:
-                if (
-                    self._unclean_shutdown
-                    or (
-                        self._shutdown.is_set()
-                        and not self._offline_confirmed.is_set()
-                    )
-                ):
-                    self._abort_socket()
-                else:
-                    with suppress(Exception):
-                        self._client.disconnect()
+                self._finish_connection_cycle()
             if self._shutdown.is_set():
                 break
             if self.machine.status.state == ConnectionState.AUTH_ERROR:
@@ -469,16 +460,47 @@ class MqttTransport:
                 self.log.exception("MQTT delivery callback failed")
         if not suback_timeout and not callbacks:
             return False
-        if self._shutdown.is_set():
-            self._unclean_shutdown = True
-            self._abort_socket()
+        with self._shutdown_lock:
+            shutting_down = self._shutdown.is_set()
+            if shutting_down:
+                self._unclean_shutdown = True
+                self._abort_socket()
+            else:
+                code = "suback_timeout" if suback_timeout else "puback_timeout"
+                self.machine.failed(self._epoch, code)
+                with suppress(Exception):
+                    self._client.disconnect()
+        if shutting_down:
             self._fail_pubacks()
             return True
-        code = "suback_timeout" if suback_timeout else "puback_timeout"
-        self.machine.failed(self._epoch, code)
-        with suppress(Exception):
-            self._client.disconnect()
         return True
+
+    def _disconnect_for_network_change(self) -> bool:
+        """Atomically reject a stale network wake once shutdown has started."""
+
+        with self._shutdown_lock:
+            if self._stop.is_set() or self._shutdown.is_set():
+                return False
+            self.machine.failed(self._epoch, "network_changed")
+            with suppress(Exception):
+                self._client.disconnect()
+            return True
+
+    def _finish_connection_cycle(self) -> None:
+        """Close a connection cycle without racing the shutdown LWT policy."""
+
+        with self._shutdown_lock:
+            if (
+                self._unclean_shutdown
+                or (
+                    self._shutdown.is_set()
+                    and not self._offline_confirmed.is_set()
+                )
+            ):
+                self._abort_socket()
+            else:
+                with suppress(Exception):
+                    self._client.disconnect()
 
     def _abort_socket(self) -> None:
         """Close TCP without MQTT DISCONNECT so the broker retains the LWT path."""
@@ -491,13 +513,14 @@ class MqttTransport:
     def _connection_failure(
         self, client, code: str, *, authentication: bool = False
     ) -> None:
-        if self._shutdown.is_set():
-            self._unclean_shutdown = True
-            self._abort_socket()
-            return
-        self.machine.failed(self._epoch, code, authentication=authentication)
-        with suppress(Exception):
-            client.disconnect()
+        with self._shutdown_lock:
+            if self._shutdown.is_set():
+                self._unclean_shutdown = True
+                self._abort_socket()
+                return
+            self.machine.failed(self._epoch, code, authentication=authentication)
+            with suppress(Exception):
+                client.disconnect()
 
     def _on_disconnect(self, _client, _userdata, _flags, _reason, _properties):
         self._fail_pubacks()

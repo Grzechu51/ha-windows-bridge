@@ -1443,3 +1443,105 @@ def test_r14_shutdown_wake_pumps_offline_ack_before_disconnect() -> None:
         transport._stop.set()
         transport._network_wake.set()
         stop_thread.join(timeout=1)
+
+
+def test_r14_stale_network_wake_cannot_disconnect_during_shutdown(
+    monkeypatch,
+) -> None:
+    first_loop = threading.Event()
+    release_first_loop = threading.Event()
+    stale_shutdown_read = threading.Event()
+    release_stale_wake = threading.Event()
+    offline_queued = threading.Event()
+    socket_closed = threading.Event()
+    holder = {}
+
+    class Client(_MqttClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.next_mid = 1
+            self.published = []
+            self.loop_calls = 0
+
+        def connect(self, *_args) -> None:
+            holder["transport"]._on_connect(
+                self,
+                None,
+                None,
+                SimpleNamespace(is_failure=False),
+                None,
+            )
+
+        def publish(self, topic, payload, **kwargs):
+            mid, self.next_mid = self.next_mid, self.next_mid + 1
+            self.published.append((topic, payload, kwargs, mid))
+            if payload == "offline":
+                offline_queued.set()
+            return SimpleNamespace(rc=0, mid=mid)
+
+        def loop(self, **_kwargs):
+            self.loop_calls += 1
+            if self.loop_calls == 1:
+                first_loop.set()
+                assert release_first_loop.wait(1)
+            else:
+                socket_closed.wait(1)
+            return 0
+
+        def _sock_close(self):
+            super()._sock_close()
+            socket_closed.set()
+
+    client = Client()
+    transport = MqttTransport(
+        MqttConfig(base_topic="desktop"),
+        "desktop",
+        EventBus(),
+        lambda *_args: None,
+        set(),
+        client_factory=lambda *_args, **_kwargs: client,
+        shutdown_timeout=0.1,
+    )
+    holder["transport"] = transport
+    original_disconnect = transport._disconnect_for_network_change
+
+    def resume_stale_network_disconnect() -> bool:
+        # _run() already observed shutdown=False before entering this call.
+        stale_shutdown_read.set()
+        assert release_stale_wake.wait(1)
+        return original_disconnect()
+
+    monkeypatch.setattr(
+        transport,
+        "_disconnect_for_network_change",
+        resume_stale_network_disconnect,
+    )
+    transport.start()
+    assert first_loop.wait(1)
+    transport._network_wake.set()
+    release_first_loop.set()
+    assert stale_shutdown_read.wait(1)
+
+    stopped = []
+    stop_thread = threading.Thread(target=lambda: stopped.append(transport.stop()))
+    stop_thread.start()
+    try:
+        assert offline_queued.wait(1)
+        assert transport._shutdown.is_set()
+        release_stale_wake.set()
+        stop_thread.join(timeout=2)
+
+        assert not stop_thread.is_alive()
+        assert stopped == [False]
+        assert client.disconnects == 0
+        assert not transport._offline_confirmed.is_set()
+        assert client.socket_closes >= 1
+        assert transport._thread is not None
+        assert not transport._thread.is_alive()
+    finally:
+        release_first_loop.set()
+        release_stale_wake.set()
+        socket_closed.set()
+        transport._stop.set()
+        transport._network_wake.set()
+        stop_thread.join(timeout=1)
