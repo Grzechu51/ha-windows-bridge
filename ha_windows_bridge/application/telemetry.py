@@ -42,6 +42,7 @@ from ..media_protocol import (
     media_thumbnail_topic,
     media_topics,
 )
+from ..overlays.monitors import selected_monitor_label
 from ..runtime.polling import PollScheduler
 from ..system_monitor import PcContext
 from ..windows.com import ProviderUnavailable
@@ -124,6 +125,9 @@ class TelemetryService:
         if event.topic == "inventory.requested" or (
             event.topic == "connection.changed" and event.data.transport == "mqtt" and event.data.state == "connected"
         ):
+            self._inventory_requested.set()
+            self._wake_event.set()
+        if event.topic == "overlay.monitors_changed":
             self._inventory_requested.set()
             self._wake_event.set()
 
@@ -257,9 +261,10 @@ class TelemetryService:
             client.publish(state_topic, "", qos=1, retain=True)
             client.publish(media_thumbnail_topic(self.config), "", qos=1, retain=True)
         if self.config.overlay_enabled and self._overlay_monitor_state:
-            selected = self.overlay_monitors[
-                max(0, min(len(self.overlay_monitors) - 1, self.config.overlay_monitor))
-            ]
+            selected = selected_monitor_label(
+                self.overlay_monitors, self.config.overlay_monitor_id,
+                self.config.overlay_monitor,
+            )
             self._publish_text_state(self._overlay_monitor_state, selected)
         count = len(payload["entities"]) + int(self.config.media_player_enabled)
         self.events.emit("inventory.published", {"entities": count, "sensors": sum(item.get("platform") in {"sensor", "binary_sensor"} for item in payload["entities"])})

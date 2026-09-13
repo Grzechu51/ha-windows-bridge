@@ -81,7 +81,19 @@ class DesktopWindow(QMainWindow):
         self.resize(1120, 780)
         self._signals = UiEvents(self)
         self._signals.received.connect(self._event, Qt.ConnectionType.QueuedConnection)
-        self._unsubscribe = application.events.subscribe("*", self._signals.received.emit)
+        ui_topics = (
+            "inventory.disks", "inventory.devices", "inventory.applications",
+            "resources.updated", "notification.show", "updates.checked",
+            "log.appended", "windows.explorer_restarted", "windows.theme_changed",
+            "audio.snapshot", "computer_state.changed", "connection.changed",
+            "services.changed", "inventory.published", "sensors.paused",
+            "application.running", "configuration.changed", "application.error",
+            "command.result",
+        )
+        self._unsubscribers = [
+            application.events.subscribe(topic, self._signals.received.emit)
+            for topic in ui_topics
+        ]
         self._wheel_guard = SettingsWheelGuard(self)
         QApplication.instance().installEventFilter(self._wheel_guard)
         self._toggles = {}
@@ -683,7 +695,9 @@ class DesktopWindow(QMainWindow):
         self._disposed = True
         self._page_timer.stop()
         self._state_timer.stop()
-        self._unsubscribe()
+        for unsubscribe in self._unsubscribers:
+            unsubscribe()
+        self._unsubscribers.clear()
         self.tray.hide()
         QApplication.instance().removeEventFilter(self._wheel_guard)
 

@@ -78,7 +78,8 @@ class GlassRenderer(QObject):
             if screen not in screens or window._animation is not None and not window._awaiting_glass:
                 continue
             region = QRect(window.pos() - screen.geometry().topLeft(), window.size())
-            key = (identifier, int(window.winId()), region.x(), region.y(), region.width(), region.height(), screen.name())
+            key = (identifier, int(window.winId()), window._token, region.x(), region.y(),
+                   region.width(), region.height(), screen.name())
             targets.append((key, screens.index(screen), screen.name(), region, window.devicePixelRatioF()))
         if not targets:
             return
@@ -116,11 +117,12 @@ class GlassRenderer(QObject):
         images = {key: image for key, image in frames}
         for key in requested:
             window = self.windows.get(key[0])
-            if window is None or int(window.winId()) != key[1] or not (window.isVisible() or window._awaiting_glass):
+            if (window is None or int(window.winId()) != key[1] or window._token != key[2]
+                    or not (window.isVisible() or window._awaiting_glass)):
                 continue
             screen = window.screen()
             region = QRect(window.pos() - screen.geometry().topLeft(), window.size())
-            if (region.x(), region.y(), region.width(), region.height(), screen.name()) == key[2:]:
+            if (region.x(), region.y(), region.width(), region.height(), screen.name()) == key[3:]:
                 image = images.get(key)
                 if image is not None:
                     window.set_glass_image(image)

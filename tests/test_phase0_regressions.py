@@ -38,7 +38,7 @@ def test_p03_progress_only_ha_update_keeps_engine_title_message_and_options():
     engine.submit({"title": "Keep title", "message": "Keep message", "data": {"id": "one", "pinned": True}})
     payload = call({"notification_id": "one", "progress": 65}, "update_overlay")
     assert "title" not in payload and "message" not in payload
-    assert engine.submit(payload) == "updated"
+    assert engine.submit(payload).reason.value == "updated"
     options = engine.visible["one"].options
     assert options["title"] == "Keep title" and options["message"] == "Keep message"
     assert options["progress"] == 65 and options["pinned"]

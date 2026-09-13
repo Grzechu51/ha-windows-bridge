@@ -6,6 +6,7 @@ from dataclasses import replace
 
 from ..communication.protocol import number
 from ..core.commands import Command, CommandError
+from ..overlays.monitors import monitor_id_from_label, selected_monitor_label
 
 
 class WindowsCommands:
@@ -20,11 +21,13 @@ class WindowsCommands:
         monitors,
         *,
         master_audio=None,
+        notifications=None,
     ):
         self.config, self.audio, self.system = config, audio, system
         self.master_audio = master_audio
         self.media, self.power, self.events = media, power, events
         self.monitors = monitors
+        self.notifications = notifications
 
     def install(self, router):
         c = self.config
@@ -131,6 +134,7 @@ class WindowsCommands:
             if value not in self.monitors:
                 raise CommandError("unknown_monitor")
             self.config.overlay_monitor = self.monitors.index(value)
+            self.config.overlay_monitor_id = monitor_id_from_label(value)
             self.events.emit("overlay.monitor_changed", self.config.overlay_monitor)
         elif kind in {"overlay.show", "notification.show"}:
             return self._notification(command)
@@ -162,16 +166,24 @@ class WindowsCommands:
 
     def _notification(self, command):
         value = command.arguments
-        title, message = value.get("title", "Home Assistant"), value.get("message", "")
         data = value.get("data", {})
-        if not isinstance(title, str) or not isinstance(message, str) or len(title) > 128 or len(message) > 2048 or not isinstance(data, dict):
+        if not isinstance(data, dict):
             raise CommandError("notification_arguments")
         data = dict(data)
-        data["media_controls"] = False
-        data["media_live"] = False
-        if data.get("action", "show") not in {"show", "update", "remove", "clear"}:
+        action = data.get("action", "show")
+        if action not in {"show", "update", "remove", "clear"}:
             raise CommandError("notification_action")
-        if command.kind == "overlay.show" and data.get("action", "show") in {"show", "update"}:
+        for field, limit in (("title", 128), ("message", 2048)):
+            if field in value and (
+                not isinstance(value[field], str) or len(value[field]) > limit
+            ):
+                raise CommandError("notification_arguments")
+        title = value.get("title", "Home Assistant" if action == "show" else None)
+        message = value.get("message", "" if action == "show" else None)
+        if action == "show":
+            data["media_controls"] = False
+            data["media_live"] = False
+        if command.kind == "overlay.show" and action in {"show", "update"}:
             context = self.system.context_snapshot()
             if context.locked or (context.fullscreen and not self.config.overlay_allow_fullscreen):
                 raise CommandError("presentation_suppressed")
@@ -185,6 +197,43 @@ class WindowsCommands:
                             media_controls=self.config.media_player_enabled, media_live=True)
                 if snapshot.artwork.data and len(snapshot.artwork.data) <= 512 * 1024:
                     data["image"] = f"data:{snapshot.artwork.content_type};base64," + base64.b64encode(snapshot.artwork.data).decode()
-        data.setdefault("monitor", self.config.overlay_monitor)
-        self.events.emit(command.kind, {"title": title, "message": message, "data": data})
+        if action == "show":
+            data.setdefault("monitor", self.config.overlay_monitor)
+        if action == "show" and self.monitors:
+            selected = selected_monitor_label(
+                self.monitors, self.config.overlay_monitor_id,
+                self.config.overlay_monitor,
+            )
+            data.setdefault("monitor_id", monitor_id_from_label(selected))
+        payload = {"data": data}
+        if title is not None:
+            payload["title"] = title
+        if message is not None:
+            payload["message"] = message
+        if command.kind == "overlay.show" and self.notifications is not None:
+            from ..overlays.models import NotificationCommand
+
+            request = NotificationCommand.parse(
+                payload,
+                source=command.transport or "local",
+                command_id=command.id,
+                session=command.session,
+                device_id=command.device_id,
+                default_monitor=self.config.overlay_monitor,
+            )
+            result = self.notifications.submit(request)
+            if not result.accepted:
+                self.events.emit("overlay.wakeup", {
+                    "notification_id": result.notification_id,
+                })
+                raise CommandError(result.reason.value)
+            self.events.emit("overlay.wakeup", {
+                "notification_id": result.notification_id,
+            })
+            return {
+                "delivery": result.disposition.value,
+                "notification_id": result.notification_id,
+                "reason": result.reason.value,
+            }
+        self.events.emit(command.kind, payload)
         return {"delivery": "queued_for_presentation"}

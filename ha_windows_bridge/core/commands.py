@@ -34,6 +34,7 @@ class Command:
     session: str = ""
     device_id: str = ""
     monotonic_expires_at: float | None = None
+    transport: str = ""
 
     @classmethod
     def parse(cls, payload: bytes, *, retained: bool = False, now: float | None = None,

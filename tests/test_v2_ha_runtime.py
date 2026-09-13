@@ -89,6 +89,41 @@ def test_direct_ack_is_correlated_and_disconnect_fails_pending(runtime_module):
     asyncio.run(exercise())
 
 
+def test_notification_lifecycle_uses_separate_bus_and_never_resolves_command_future(runtime_module):
+    async def exercise():
+        events = []
+        hass = SimpleNamespace(
+            loop=asyncio.get_running_loop(),
+            bus=SimpleNamespace(async_fire=lambda topic, data: events.append((topic, data))),
+        )
+        runtime = runtime_module.BridgeRuntime(
+            hass, "pc", {"popup"}, "popup", "pc/overlay", "direct",
+            protocol=protocol({}),
+        )
+        command = {
+            "id": "command-1", "session": "mqtt-session",
+        }
+        future = hass.loop.create_future()
+        runtime.pending[command["id"]] = future
+        lifecycle = result(command)
+        lifecycle.update(code="notification_lifecycle", data={
+            "notification_id": "card", "disposition": "displayed",
+            "reason": "displayed", "command_id": command["id"],
+        })
+        runtime._result(lifecycle)
+        assert not future.done()
+        assert list(runtime.notification_lifecycle) == [lifecycle["data"]]
+        assert events == [("ha_windows_bridge_notification_lifecycle", lifecycle["data"])]
+        invalid = {**lifecycle, "data": {**lifecycle["data"], "reason": "raw traceback"}}
+        runtime._result(invalid)
+        assert len(runtime.notification_lifecycle) == 1
+        runtime._result(result(command))
+        assert future.done()
+        runtime.close()
+
+    asyncio.run(exercise())
+
+
 def test_direct_rejects_offline_and_second_client(runtime_module):
     async def exercise():
         runtime = make_runtime(runtime_module)

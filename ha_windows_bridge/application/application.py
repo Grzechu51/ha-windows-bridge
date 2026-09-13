@@ -18,6 +18,7 @@ from ..core.commands import Command, CommandResult
 from ..core.events import EventBus
 from ..core.observability import DiagnosticBuffer
 from ..core.state import ComputerStateStore, StateQuality, StateStore
+from ..overlays.engine import NotificationEngine
 from ..runtime.worker import SerialWorker
 from ..security import redact_data
 from ..windows.resources import ProcessResources
@@ -57,6 +58,7 @@ class Application:
         self.diagnostics = DiagnosticBuffer(self.events)
         self.log.addHandler(self.diagnostics)
         self.config = copy.deepcopy(config)
+        self.notifications = NotificationEngine()
         self.store, self.startup = store, startup
         self.audio, self.system, self.media, self.power = audio, system, media, power
         self.monitors = monitors or ["1: Monitor"]
@@ -208,7 +210,8 @@ class Application:
         media_view = self._media_provider or self.media
         WindowsCommands(self.config, audio_view, self._system_view, media_view, self.power,
                         self.events, self.monitors,
-                        master_audio=self._master_audio).install(self.router)
+                        master_audio=self._master_audio,
+                        notifications=self.notifications).install(self.router)
         self._telemetry = None
         self._state_projection = None
         self._protocol_projection = None
@@ -834,6 +837,21 @@ class Application:
             self.events.emit("command.result", result)
         return result
 
+    def publish_notification_lifecycle(self, result) -> None:
+        payload = {
+            "notification_id": result.notification_id,
+            "disposition": result.disposition.value,
+            "reason": result.reason.value,
+            "command_id": result.command_id,
+        }
+        self.events.emit("overlay.lifecycle", payload)
+        self.events.emit("overlay.lifecycle.delivery", {
+            "payload": payload,
+            "transport": result.transport,
+            "session": result.session,
+            "device_id": result.device_id,
+        })
+
     def computer_snapshot(self):
         return self.computer_state.snapshot(
             stale_after=max(2.0, self.config.poll_interval * 3)
@@ -882,6 +900,9 @@ class Application:
             self._closed = True
             self._desired_running = False
             self._lifecycle_epoch += 1
+        self.notifications.shutdown()
+        for result in self.notifications.drain_lifecycle():
+            self.publish_notification_lifecycle(result)
         self._begin_stop("shutdown")
         self._operations.close(timeout=4)
         self._queries.close(timeout=4)

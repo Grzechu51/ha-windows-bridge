@@ -10,6 +10,7 @@ from .message_outbox import MessageItem, MessageOutbox
 from .mqtt import MqttTransport
 from .protocol import ReplyContext, TopicProtocol
 from .publishing import StatePublisher
+from .schema import ResultMessage
 from .state import Backoff
 
 _RESULT_PRECEDENCE = {
@@ -48,8 +49,10 @@ class MqttGateway:
                                        self.protocol.subscriptions)
         self.publisher = StatePublisher(self.transport, events)
         self.outbox = MessageOutbox(capacity=256)
+        self.lifecycle_outbox = MessageOutbox(capacity=256)
         self._unsubscribe = None
         self._network_unsubscribe = None
+        self._lifecycle_unsubscribe = None
         self._lock = threading.Lock()
         self._connection_generation = 0
         self._result_status = {}
@@ -73,6 +76,9 @@ class MqttGateway:
     def start(self):
         self._stop.clear()
         self._unsubscribe = self.events.subscribe("connection.changed", self._connection_changed)
+        self._lifecycle_unsubscribe = self.events.subscribe(
+            "overlay.lifecycle.delivery", self._lifecycle
+        )
         network_changed = getattr(self.transport, "network_changed", None)
         if callable(network_changed):
             self._network_unsubscribe = self.events.subscribe(
@@ -100,11 +106,15 @@ class MqttGateway:
         if self._network_unsubscribe:
             self._network_unsubscribe()
             self._network_unsubscribe = None
+        if self._lifecycle_unsubscribe:
+            self._lifecycle_unsubscribe()
+            self._lifecycle_unsubscribe = None
         result = self.transport.stop()
         if self._retry_thread and self._retry_thread is not threading.current_thread():
             self._retry_thread.join(timeout=2)
             result = result and not self._retry_thread.is_alive()
         self.outbox.close()
+        self.lifecycle_outbox.close()
         return result
 
     def _connection_changed(self, event):
@@ -114,6 +124,7 @@ class MqttGateway:
                 generation = self._connection_generation
             self.publisher.request_replay()
             self.outbox.replay(generation)
+            self.lifecycle_outbox.replay(generation)
             self._flush_protocol()
 
     def receive(self, topic, payload, retained=False):
@@ -157,31 +168,65 @@ class MqttGateway:
             return
         self._send_protocol(item)
 
+    def _lifecycle(self, event):
+        envelope = event.data
+        payload = envelope.get("payload", {})
+        if (envelope.get("transport") != "mqtt"
+                or envelope.get("session") != self.protocol.session
+                or envelope.get("device_id") != self.protocol.device_id
+                or not payload.get("command_id")):
+            return
+        public = {
+            key: payload[key]
+            for key in ("notification_id", "disposition", "reason", "command_id")
+        }
+        message = ResultMessage(
+            public["command_id"], self.protocol.session, self.protocol.device_id,
+            "succeeded", "notification_lifecycle", public,
+        )
+        key = "lifecycle:" + ":".join((
+            self.protocol.session, public["command_id"], public["notification_id"],
+            public["disposition"], public["reason"],
+        ))
+        with self._lock:
+            item = self.lifecycle_outbox.accept(
+                key, self.protocol.result_topic, message.encode(),
+                retain=False, replace_latest=False,
+            )
+        if item is None:
+            self.log.error("Notification lifecycle outbox is full")
+            return
+        self._send_protocol(item, self.lifecycle_outbox)
+
     def _flush_protocol(self):
         for item in self.outbox.pending():
             self._send_protocol(item)
+        for item in self.lifecycle_outbox.pending():
+            self._send_protocol(item, self.lifecycle_outbox)
         self.outbox.discard_delivered()
+        self.lifecycle_outbox.discard_delivered()
 
-    def _send_protocol(self, item: MessageItem):
+    def _send_protocol(self, item: MessageItem, outbox=None):
+        outbox = outbox or self.outbox
         with self._lock:
             generation = self._connection_generation
-        attempt = self.outbox.begin_attempt(item.key, item.token, generation)
+        attempt = outbox.begin_attempt(item.key, item.token, generation)
         if attempt is None:
             return
 
         def delivered(success: bool):
             if success:
-                self.outbox.mark_delivered(
+                outbox.mark_delivered(
                     attempt.key, attempt.token, attempt.connection_generation
                 )
-                self.outbox.discard_delivered()
+                outbox.discard_delivered()
             else:
-                if not self.outbox.mark_failed(
+                if not outbox.mark_failed(
                     attempt.key, attempt.token, attempt.connection_generation
                 ):
                     return
                 if attempt.attempts >= self._max_active_attempts:
-                    self.outbox.mark_exhausted(
+                    outbox.mark_exhausted(
                         attempt.key,
                         attempt.token,
                         attempt.connection_generation,

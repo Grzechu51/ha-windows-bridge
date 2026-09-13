@@ -5,6 +5,7 @@ import asyncio
 import json
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +23,13 @@ from .protocol import (
     SnapshotMessage,
     legacy_arguments,
 )
+
+_LIFECYCLE_DISPOSITIONS = frozenset({"accepted", "displayed", "rejected", "closed", "dropped"})
+_LIFECYCLE_REASONS = frozenset({
+    "queued", "displayed", "queue_full", "pinned_limit", "not_found",
+    "replaced", "updated", "expired", "user", "locked", "suspended",
+    "fullscreen", "display_removed", "no_space", "render_error", "stopping",
+})
 
 
 def command_arguments(parser: str, payload: str) -> dict:
@@ -44,6 +52,7 @@ class BridgeRuntime:
     listeners: set = field(default_factory=set)
     pending: dict = field(default_factory=dict)
     _direct_pending: set = field(default_factory=set)
+    notification_lifecycle: deque = field(default_factory=lambda: deque(maxlen=256))
     _unsubscribe: list = field(default_factory=list)
     _deadline_cancel: Any = None
     _closed: bool = False
@@ -156,7 +165,7 @@ class BridgeRuntime:
         self._notify()
 
     @callback
-    def _result(self, value):
+    def _result(self, value, *, direct=False):
         if self.protocol.get("version") == 2:
             try:
                 value = json.loads(value) if isinstance(value, (str, bytes)) else value
@@ -171,13 +180,36 @@ class BridgeRuntime:
                 message = ResultMessage.decode(raw)
             except (ProtocolError, ValueError, TypeError, RecursionError):
                 return
-            expected_session = self._direct_session if message.id in self._direct_pending else self.protocol.get("session")
+            expected_session = (
+                self._direct_session
+                if direct or message.id in self._direct_pending
+                else self.protocol.get("session")
+            )
             if message.device_id != self.device_id or message.session != expected_session:
                 return
             identifier, status, value = message.id, message.status, message.to_dict()
+            if message.code == "notification_lifecycle":
+                self._notification_lifecycle(message)
+                return
         future = self.pending.get(identifier)
         if future is not None and not future.done() and status in {"succeeded", "failed", "rejected", "cancelled"}:
             future.set_result(value)
+
+    def _notification_lifecycle(self, message):
+        data = message.data
+        if (set(data) != {"notification_id", "disposition", "reason", "command_id"}
+                or data.get("command_id") != message.id
+                or not all(isinstance(data.get(key), str) for key in data)
+                or not 1 <= len(data["notification_id"]) <= 128
+                or not 1 <= len(data["command_id"]) <= 128
+                or data["disposition"] not in _LIFECYCLE_DISPOSITIONS
+                or data["reason"] not in _LIFECYCLE_REASONS):
+            return
+        public = dict(data)
+        self.notification_lifecycle.append(public)
+        bus = getattr(self.hass, "bus", None)
+        if bus is not None:
+            bus.async_fire("ha_windows_bridge_notification_lifecycle", public)
 
     async def send(self, topic: str, payload: str, *, direct=False):
         if self._closed:
@@ -271,6 +303,7 @@ class BridgeRuntime:
                 future.set_exception(HomeAssistantError("Bridge integration unloaded"))
         self.pending.clear()
         self._direct_pending.clear()
+        self.notification_lifecycle.clear()
         self.listeners.clear()
         self.available = False
         self.owner, self._direct_sender = None, None

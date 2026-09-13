@@ -253,7 +253,7 @@ def test_glass_is_ready_before_first_animated_frame(monkeypatch):
         assert window._awaiting_glass and not window.isVisible()
         screen = window.screen()
         region = window.geometry().translated(-screen.geometry().topLeft())
-        key = ("staged", int(window.winId()), region.x(), region.y(), region.width(), region.height(), screen.name())
+        key = ("staged", int(window.winId()), window._token, region.x(), region.y(), region.width(), region.height(), screen.name())
         background = QImage(320, 240, QImage.Format.Format_RGBA8888)
         background.fill(QColor("#38506b"))
         renderer._accept((0, [(key, background)], [key]), 5)
@@ -371,10 +371,10 @@ def test_live_refresh_preserves_animation_and_stops_polling_when_dismissed(anima
             assert window.mask().contains(window.rect().center())
             assert not window.mask().contains(QPoint(0, 0))
             assert window.windowOpacity() == 1
-        overlays._dismiss("live-animation")
+        overlays._dismiss("live-animation", window._token)
         assert not overlays.media_timer.isActive()
         if animation != "none":
-            assert window._animation.duration() == 700
+            assert window._animation.duration() == MotionSystem.TOKENS["popup_exit"].duration
         assert not overlays.glass.timer.isActive()
     finally:
         overlays.close()

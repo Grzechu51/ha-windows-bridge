@@ -111,7 +111,7 @@ def result(hass, connection, msg):
     if decoded.device_id != runtime.device_id or decoded.session != runtime._direct_session:
         raise Unauthorized()
     # Only IDs belonging to this connection's device/session can complete commands.
-    runtime._result(msg["result"])
+    runtime._result(msg["result"], direct=True)
     connection.send_result(msg["id"])
 
 

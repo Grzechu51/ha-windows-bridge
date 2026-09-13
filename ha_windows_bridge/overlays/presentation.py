@@ -49,16 +49,22 @@ MEDIA_CARD_HEIGHT = 214
 
 
 class NotificationWindow(QFrame):
-    dismissed = Signal(str)
-    hovered = Signal(str, bool)
+    displayed = Signal(str, int)
+    dismissed = Signal(str, int)
+    hovered = Signal(str, int, bool)
     action = Signal(str)
 
-    def __init__(self, options):
+    def __init__(self, options, *, token=0):
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self._backdrop = NativeBackdrop()
         self._animation = None
+        self._motion_generation = 0
+        self._motion_phase = "idle"
+        self._displayed_token = None
+        self._closed = False
+        self._token = token
         self._target = QPoint()
         self._options = {}
         self._media_image = QPixmap()
@@ -93,7 +99,9 @@ class NotificationWindow(QFrame):
         self.close_button = QToolButton(self)
         self.close_button.setText("×")
         self.close_button.setAccessibleName("Zamknij nakładkę")
-        self.close_button.clicked.connect(lambda: self.dismissed.emit(self._options["id"]))
+        self.close_button.clicked.connect(
+            lambda: self.dismissed.emit(self._options["id"], self._token)
+        )
         self.progress = QProgressBar(self)
         self.progress.setRange(0, 100)
         self.progress.setTextVisible(False)
@@ -123,7 +131,9 @@ class NotificationWindow(QFrame):
             widget.hide()
         self.update_notification(options)
 
-    def update_notification(self, options):
+    def update_notification(self, options, *, token=None):
+        if token is not None:
+            self._token = token
         transport = {"media_position", "media_duration", "media_playing", "progress"}
         expected_width = min(self._width_limit, options["width"] if options["size_mode"] == "manual" else MEDIA_CARD_WIDTH)
         if self._options and options["layout"] == "media" and self.width() == expected_width and {k: v for k, v in self._options.items() if k not in transport} == {k: v for k, v in options.items() if k not in transport}:
@@ -457,6 +467,10 @@ class NotificationWindow(QFrame):
             self.update_notification(self._options)
 
     def place(self, point, *, appearing=False):
+        if self._closed:
+            return
+        self._motion_generation += 1
+        generation = self._motion_generation
         if self._animation:
             self._animation.stop()
             self._animation.deleteLater()
@@ -465,8 +479,10 @@ class NotificationWindow(QFrame):
         style = app.property("bridgePopupAnimation") or "slide"
         duration = app.property("bridgePopupAnimationDuration") or 220
         direction = -1 if "left" in self._options["corner"] else 1
-        start = point + QPoint(direction * 24, 0) if appearing and style == "slide" else point if appearing else self.pos()
+        distance = round(MotionSystem.TOKENS["popup_enter"].distance)
+        start = point + QPoint(direction * distance, 0) if appearing and style == "slide" else point if appearing else self.pos()
         self._target = point
+        self._motion_phase = "enter" if appearing else "reposition"
         self._awaiting_glass = False
         self._apply_surface_mask()
         if not MotionSystem.enabled() or style == "none":
@@ -475,9 +491,13 @@ class NotificationWindow(QFrame):
             self.show()
             self._apply_surface_mask()
             def reveal_static():
-                if self.isVisible():
+                if (not self._closed and generation == self._motion_generation
+                        and self.isVisible()):
                     self._reinforce_surface_mask()
                     self.setWindowOpacity(1)
+                    if appearing:
+                        self._emit_displayed_once()
+                    self._motion_phase = "idle"
             QTimer.singleShot(0, reveal_static)
             return
         if appearing:
@@ -494,6 +514,8 @@ class NotificationWindow(QFrame):
         else:
             self._apply_surface_mask()
         def frame(value):
+            if self._closed or generation != self._motion_generation:
+                return
             self.move(start + (point - start) * value)
             if fade:
                 self.setWindowOpacity(value)
@@ -502,15 +524,21 @@ class NotificationWindow(QFrame):
                 reveal = QRegion(QRect(self.width() - width if direction > 0 else 0, (self.height() - height) // 2, width, height))
                 self.setMask(self._surface_region().intersected(reveal))
         def complete():
+            if self._closed or generation != self._motion_generation:
+                return
             self._animation = None
             self.move(self._target)
             self.setWindowOpacity(1)
             self._apply_surface_mask()
             self._finish_intro_frame()
+            if appearing:
+                self._emit_displayed_once()
+            self._motion_phase = "idle"
         self._animation = MotionSystem.animate(self, "popup_enter" if appearing else "reposition", frame, complete, duration=duration if appearing else None)
         animation = self._animation
         def start_animation():
-            if self._animation is animation:
+            if (not self._closed and generation == self._motion_generation
+                    and self._animation is animation):
                 if appearing and style == "reveal":
                     self._reinforce_surface_mask(self._surface_region().intersected(reveal))
                 else:
@@ -521,14 +549,18 @@ class NotificationWindow(QFrame):
         QTimer.singleShot(0, start_animation)
 
     def retire(self):
+        if self._closed:
+            return
+        self._motion_generation += 1
+        generation = self._motion_generation
         if self._animation:
             self._animation.stop()
             self._animation.deleteLater()
         self._animation = None
+        self._motion_phase = "exit"
         self._awaiting_glass = False
         app = QGuiApplication.instance()
         style = app.property("bridgePopupAnimation") or "slide"
-        duration = app.property("bridgePopupAnimationDuration") or 220
         if not MotionSystem.enabled() or style == "none":
             self.dispose()
             return
@@ -536,22 +568,57 @@ class NotificationWindow(QFrame):
         start = self.pos()
         direction = -1 if "left" in self._options["corner"] else 1
         def frame(value):
+            if self._closed or generation != self._motion_generation:
+                return
             if style == "fade":
                 self.setWindowOpacity(opacity * (1 - value))
             elif style == "slide":
-                self.move(start + QPoint(round(direction * 24 * value), 0))
+                distance = MotionSystem.TOKENS["popup_exit"].distance
+                self.move(start + QPoint(round(direction * distance * value), 0))
             elif style == "reveal":
                 width, height = max(1, round(self.width() * (1 - value))), max(1, round(self.height() * (1 - value)))
                 reveal = QRegion(QRect(self.width() - width if direction > 0 else 0, (self.height() - height) // 2, width, height))
                 self.setMask(self._surface_region().intersected(reveal))
-        self._animation = MotionSystem.animate(self, "popup_exit", frame, self.dispose, duration=duration)
+        def complete():
+            if not self._closed and generation == self._motion_generation:
+                self.dispose()
+        self._animation = MotionSystem.animate(self, "popup_exit", frame, complete)
         self._animation.start()
 
+    def reduce_motion(self):
+        phase = self._motion_phase
+        self._motion_generation += 1
+        if self._animation:
+            self._animation.stop()
+            self._animation.deleteLater()
+            self._animation = None
+        if phase == "exit":
+            self.dispose()
+            return
+        self.move(self._target)
+        self.setWindowOpacity(1)
+        self._apply_surface_mask()
+        self._finish_intro_frame()
+        if phase == "enter":
+            self._emit_displayed_once()
+        self._motion_phase = "idle"
+
+    def _emit_displayed_once(self):
+        if self._closed or self._displayed_token == self._token:
+            return
+        self._displayed_token = self._token
+        self.displayed.emit(self._options["id"], self._token)
+
     def dispose(self):
+        if self._closed:
+            return
+        self._closed = True
+        self._motion_generation += 1
         if self._animation:
             self._animation.stop()
             self._animation.deleteLater()
         self._animation = None
+        self._motion_phase = "closed"
         self._intro_visible.clear()
         self._intro_snapshot = QPixmap()
         self._backdrop.disable()
@@ -560,14 +627,14 @@ class NotificationWindow(QFrame):
         self.deleteLater()
 
     def enterEvent(self, event):
-        self.hovered.emit(self._options["id"], True)
+        self.hovered.emit(self._options["id"], self._token, True)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self.hovered.emit(self._options["id"], False)
+        self.hovered.emit(self._options["id"], self._token, False)
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event):
         if self._options["close_on_click"]:
-            self.dismissed.emit(self._options["id"])
+            self.dismissed.emit(self._options["id"], self._token)
         super().mouseReleaseEvent(event)

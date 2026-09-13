@@ -215,7 +215,8 @@ class TopicProtocol:
             raise CommandError("expired")
         return Command(message.id, message.kind, message.target, message.arguments,
                        deadline, session=message.session, device_id=message.device_id,
-                       monotonic_expires_at=self._monotonic_clock() + deadline - now)
+                       monotonic_expires_at=self._monotonic_clock() + deadline - now,
+                       transport="mqtt")
 
     def decode_inbound(
         self, topic: str, payload: bytes, retained: bool = False

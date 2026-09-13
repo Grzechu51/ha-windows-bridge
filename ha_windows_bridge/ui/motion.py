@@ -25,7 +25,7 @@ class MotionSystem:
         "normal": MotionToken(180, QEasingCurve.Type.OutCubic),
         "slow": MotionToken(260, QEasingCurve.Type.OutCubic),
         "popup_enter": MotionToken(220, QEasingCurve.Type.OutCubic, distance=12, scale=0.98),
-        "popup_exit": MotionToken(160, QEasingCurve.Type.InCubic),
+        "popup_exit": MotionToken(160, QEasingCurve.Type.InCubic, distance=6),
         "reposition": MotionToken(180, QEasingCurve.Type.OutCubic),
         "page": MotionToken(180, QEasingCurve.Type.OutCubic),
         "toggle": MotionToken(120, QEasingCurve.Type.OutCubic),

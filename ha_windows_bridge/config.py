@@ -198,6 +198,7 @@ class AppConfig:
     overlay_enabled: bool = False
     overlay_allow_fullscreen: bool = False
     overlay_monitor: int = 0
+    overlay_monitor_id: str = ""
     overlay_animation: str = "slide"
     overlay_animation_duration: int = 220
     overlay_example_duration: int = 12
@@ -227,6 +228,7 @@ class AppConfig:
             )
         )
         self.overlay_monitor = max(0, min(15, int(self.overlay_monitor)))
+        self.overlay_monitor_id = str(self.overlay_monitor_id).strip()[:128]
         if self.overlay_animation not in {"slide", "fade", "reveal", "none"}:
             self.overlay_animation = "slide"
         self.overlay_animation_duration = max(80, min(1000, int(self.overlay_animation_duration)))
@@ -345,6 +347,7 @@ class AppConfig:
             overlay_enabled=bool(data.get("overlay_enabled", False)),
             overlay_allow_fullscreen=bool(data.get("overlay_allow_fullscreen", False)),
             overlay_monitor=int(data.get("overlay_monitor", 0)),
+            overlay_monitor_id=str(data.get("overlay_monitor_id", "")),
             overlay_animation=str(data.get("overlay_animation", "slide")),
             overlay_animation_duration=int(data.get("overlay_animation_duration", 220)),
             overlay_example_duration=int(data.get("overlay_example_duration", 12)),

@@ -2,10 +2,160 @@ from __future__ import annotations
 
 import math
 import uuid
+from dataclasses import dataclass
+from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 
 from .constants import _CORNERS, _ID_RE, _PRESET_COLORS, _PRIORITIES
 
+
+class NotificationAction(StrEnum):
+    SHOW = "show"
+    UPDATE = "update"
+    REMOVE = "remove"
+    CLEAR = "clear"
+
+
+class DeliveryDisposition(StrEnum):
+    ACCEPTED = "accepted"
+    DISPLAYED = "displayed"
+    REJECTED = "rejected"
+    CLOSED = "closed"
+    DROPPED = "dropped"
+
+
+class LifecycleReason(StrEnum):
+    QUEUED = "queued"
+    DISPLAYED = "displayed"
+    QUEUE_FULL = "queue_full"
+    PINNED_LIMIT = "pinned_limit"
+    NOT_FOUND = "not_found"
+    REPLACED = "replaced"
+    UPDATED = "updated"
+    EXPIRED = "expired"
+    USER = "user"
+    LOCKED = "locked"
+    SUSPENDED = "suspended"
+    FULLSCREEN = "fullscreen"
+    DISPLAY_REMOVED = "display_removed"
+    NO_SPACE = "no_space"
+    RENDER_ERROR = "render_error"
+    STOPPING = "stopping"
+
+
+@dataclass(frozen=True)
+class NotificationContent:
+    title: str
+    message: str
+    icon: str = ""
+    image: str = ""
+    qr: str = ""
+    progress: int | None = None
+
+
+@dataclass(frozen=True)
+class NotificationPresentation:
+    layout: str
+    display_mode: str
+    corner: str
+    monitor_id: str
+    values: MappingProxyType
+
+
+@dataclass(frozen=True)
+class NotificationLifetime:
+    duration: int
+    pinned: bool
+    pause_on_hover: bool
+
+
+@dataclass(frozen=True)
+class NotificationPolicy:
+    source: str
+    priority: int
+    session: str = ""
+    device_id: str = ""
+
+
+@dataclass(frozen=True)
+class NotificationCommand:
+    action: NotificationAction
+    notification_id: str
+    content: NotificationContent | None
+    presentation: NotificationPresentation | None
+    lifetime: NotificationLifetime | None
+    policy: NotificationPolicy | None
+    provided: frozenset[str]
+    patch: MappingProxyType
+    command_id: str = ""
+
+    @classmethod
+    def parse(cls, payload: dict[str, Any], *, source: str = "remote",
+              command_id: str = "", session: str = "", device_id: str = "",
+              default_monitor: int = 0) -> NotificationCommand:
+        if not isinstance(payload, dict):
+            raise ValueError("Notification payload must be an object")
+        raw_data = payload.get("data", {})
+        if not isinstance(raw_data, dict):
+            raise ValueError("Notification options must be an object")
+        try:
+            action = NotificationAction(raw_data.get("action", "show"))
+        except (ValueError, TypeError) as exc:
+            raise ValueError("Invalid notification action") from exc
+        raw_id = raw_data.get("id")
+        if raw_id is not None and not isinstance(raw_id, str):
+            raise ValueError("Invalid notification ID")
+        if action in {NotificationAction.UPDATE, NotificationAction.REMOVE} and not raw_id:
+            raise ValueError("Notification ID is required")
+        provided = frozenset(raw_data) | frozenset(key for key in ("title", "message") if key in payload)
+        if action in {NotificationAction.REMOVE, NotificationAction.CLEAR}:
+            return cls(action, raw_id or "", None, None, None,
+                       NotificationPolicy(source[:64] or "remote", 0, session, device_id), provided,
+                       MappingProxyType(dict(raw_data)), command_id)
+        if action is NotificationAction.UPDATE:
+            patch = dict(raw_data)
+            patch.pop("action", None)
+            patch.pop("id", None)
+            if "title" in payload:
+                patch["title"] = payload["title"]
+            if "message" in payload:
+                patch["message"] = payload["message"]
+            return cls(action, raw_id, None, None, None,
+                       NotificationPolicy(source[:64] or "remote", 0, session, device_id), provided,
+                       MappingProxyType(patch), command_id)
+        normalized = validated_request(payload.get("title", ""), payload.get("message", ""), raw_data,
+                                       default_monitor=default_monitor)
+        owned = MappingProxyType(dict(normalized))
+        return cls(
+            action, normalized["id"],
+            NotificationContent(normalized["title"], normalized["message"], normalized["icon"],
+                                normalized["image"], normalized["qr"], normalized["progress"]),
+            NotificationPresentation(normalized["layout"], normalized["display_mode"], normalized["corner"],
+                                     str(raw_data.get("monitor_id", normalized["monitor"])), owned),
+            NotificationLifetime(normalized["duration"], normalized["pinned"], normalized["pause_on_hover"]),
+            NotificationPolicy(source[:64] or "remote", normalized["priority"], session, device_id),
+            provided, MappingProxyType({}), command_id,
+        )
+
+    def options(self) -> dict[str, Any]:
+        return dict(self.presentation.values) if self.presentation else {}
+
+
+@dataclass(frozen=True)
+class EngineResult:
+    disposition: DeliveryDisposition
+    notification_id: str = ""
+    reason: LifecycleReason = LifecycleReason.QUEUED
+    token: int = 0
+    command_id: str = ""
+    transport: str = ""
+    session: str = ""
+    device_id: str = ""
+
+    @property
+    def accepted(self) -> bool:
+        return self.disposition is not DeliveryDisposition.REJECTED
 
 def validated_request(
     title: str, message: str, options: dict[str, Any], *, duration_seconds: int = 8, default_monitor: int = 0
@@ -132,6 +282,7 @@ def validated_request(
         "priority": priority,
         "priority_name": priority_name,
         "monitor": monitor,
+        "monitor_id": str(options.get("monitor_id", "")).strip()[:128],
         "edge_offset": edge_offset,
         "media_position": media_position,
         "media_duration": media_duration,

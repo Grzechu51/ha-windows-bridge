@@ -7,6 +7,7 @@ import random
 import ssl
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
 from urllib.parse import urlparse, urlunparse
@@ -15,7 +16,7 @@ import websocket
 
 from ..core.commands import Command, CommandError
 from .protocol import TopicProtocol
-from .schema import CommandMessage, ProtocolError
+from .schema import CommandMessage, ProtocolError, ResultMessage
 from .state import Backoff, ConnectionMachine, ConnectionState
 
 
@@ -100,6 +101,7 @@ class HomeAssistantTransport:
         self._network_pending = False
         self._network_cancel = None
         self._network_token = 0
+        self._lifecycle_outbox = deque(maxlen=256)
         self._network_delay = network_delay or (
             lambda: random.uniform(0.05, 0.25)
         )
@@ -122,6 +124,7 @@ class HomeAssistantTransport:
         self._close_socket()
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=4)
+        self._lifecycle_outbox.clear()
         return self._thread is None or not self._thread.is_alive()
 
     def network_changed(self, *_args: object) -> bool:
@@ -282,6 +285,7 @@ class HomeAssistantTransport:
         pending = None
         deadline = 0.0
         while not self._stop.is_set():
+            self._flush_lifecycle()
             if self._network_wake.is_set():
                 self._network_wake.clear()
                 raise ConnectionError("Windows network changed")
@@ -320,6 +324,36 @@ class HomeAssistantTransport:
         except Exception:
             self.log.warning("HA command result could not be delivered")
 
+    def lifecycle(self, payload):
+        with self._lock:
+            if len(self._lifecycle_outbox) >= self._lifecycle_outbox.maxlen:
+                return False
+            self._lifecycle_outbox.append(dict(payload))
+        return True
+
+    def _flush_lifecycle(self):
+        while not self._stop.is_set():
+            with self._lock:
+                if not self._lifecycle_outbox or self._socket is None:
+                    return
+                payload = self._lifecycle_outbox[0]
+            try:
+                message = ResultMessage(
+                    payload["command_id"], self.protocol.session,
+                    self.config.device_id, "succeeded",
+                    "notification_lifecycle", payload,
+                )
+                self._send({
+                    "type": "ha_windows_bridge/result",
+                    "device_id": self.config.device_id,
+                    "result": message.to_dict(),
+                })
+            except Exception:
+                return
+            with self._lock:
+                if self._lifecycle_outbox and self._lifecycle_outbox[0] == payload:
+                    self._lifecycle_outbox.popleft()
+
 
 class HomeAssistantGateway:
     def __init__(self, config, router, events):
@@ -328,19 +362,39 @@ class HomeAssistantGateway:
         self.protocol = TopicProtocol(config)
         self.transport = HomeAssistantTransport(config, events, self.receive, protocol=self.protocol)
         self._network_unsubscribe = None
+        self._lifecycle_unsubscribe = None
 
     def start(self):
         self._network_unsubscribe = self.events.subscribe(
             "windows.network_changed",
             self.transport.network_changed,
         )
+        self._lifecycle_unsubscribe = self.events.subscribe(
+            "overlay.lifecycle.delivery", self._lifecycle
+        )
         self.transport.start()
 
     def stop(self):
+        if self._lifecycle_unsubscribe is not None:
+            self._lifecycle_unsubscribe()
+            self._lifecycle_unsubscribe = None
         if self._network_unsubscribe is not None:
             self._network_unsubscribe()
             self._network_unsubscribe = None
         return self.transport.stop()
+
+    def _lifecycle(self, event):
+        envelope = event.data
+        payload = envelope.get("payload", {})
+        if (envelope.get("transport") != "direct"
+                or envelope.get("session") != self.protocol.session
+                or envelope.get("device_id") != self.protocol.device_id
+                or not payload.get("command_id")):
+            return
+        self.transport.lifecycle({
+            key: payload[key]
+            for key in ("notification_id", "disposition", "reason", "command_id")
+        })
 
     def receive(self, value):
         try:
@@ -357,7 +411,7 @@ class HomeAssistantGateway:
                 raise CommandError("expired")
             command = Command(message.id, message.kind, message.target, message.arguments,
                               deadline, message.session, message.device_id,
-                              time.monotonic() + deadline - now)
+                              time.monotonic() + deadline - now, "direct")
         except (ProtocolError, CommandError, ValueError, RecursionError):
             self.transport.log.warning("Direct overlay command rejected")
             return
