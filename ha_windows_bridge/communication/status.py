@@ -1,5 +1,7 @@
 """User-facing connection status shared by the window and diagnostics."""
 
+from ..i18n import active_language, translate
+
 CONNECTION_NAMES = {"mqtt": "MQTT", "home_assistant": "Home Assistant"}
 CONNECTION_STATES = {
     "stopped": "Zatrzymane", "connecting": "Łączenie…", "connected": "Połączono",
@@ -23,7 +25,8 @@ CONNECTION_ERRORS = {
 
 
 def connection_text(status):
-    text = CONNECTION_STATES.get(status.state, str(status.state))
+    language = active_language()
+    text = translate(CONNECTION_STATES.get(status.state, str(status.state)), language)
     if status.error:
-        text += " — " + CONNECTION_ERRORS.get(status.error, "Błąd połączenia")
+        text += " — " + translate(CONNECTION_ERRORS.get(status.error, "Błąd połączenia"), language)
     return text

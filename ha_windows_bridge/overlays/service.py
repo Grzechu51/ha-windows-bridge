@@ -190,6 +190,7 @@ class OverlayService(QObject):
             for index, screen in enumerate(screens)
         ]
         self.application.monitors[:] = monitor_names
+        self.application.monitors[:] = monitor_names
         self.application.events.emit("overlay.monitors_changed", tuple(monitor_names))
         self._display_changed()
 

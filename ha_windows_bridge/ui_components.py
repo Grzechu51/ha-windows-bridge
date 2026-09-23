@@ -119,9 +119,12 @@ class ToggleSwitch(QAbstractButton):
         track = QRectF(2.5, 3.5, self.width() - 5.0, self.height() - 7.0)
         palette = PALETTES["light" if QApplication.instance().property("bridgeTheme") == "light" else "dark"]
         if self.isChecked():
-            track_color = QColor(palette.accent)
-            knob_color = QColor(palette.accent_text)
-            border_color = QColor(palette.accent)
+            app = QApplication.instance()
+            accent = app.property("bridgeAccent") or palette.accent
+            accent_text = app.property("bridgeAccentText") or palette.accent_text
+            track_color = QColor(accent)
+            knob_color = QColor(accent_text)
+            border_color = QColor(accent)
         else:
             track_color = QColor(palette.field)
             knob_color = QColor(palette.muted)
@@ -142,7 +145,7 @@ class ToggleSwitch(QAbstractButton):
         painter.drawEllipse(QRectF(x, track.top() + 2, diameter, diameter))
         if self.hasFocus() and self._focus_visible:
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor(palette.accent), 1))
+            painter.setPen(QPen(QColor(QApplication.instance().property("bridgeFocus") or palette.text), 2))
             painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12, 12)
         painter.end()
 
@@ -285,6 +288,7 @@ class AppCard(QFrame):
     remove_requested = Signal(object)
     volume_requested = Signal(str, int)
     mute_requested = Signal(str, bool)
+    configuration_changed = Signal()
 
     _COLORS = ("#4285f4", "#5865f2", "#2ebd67", "#ef4b3f", "#8b5cf6", "#e59a3a")
 
@@ -293,9 +297,11 @@ class AppCard(QFrame):
         self.setObjectName("appCard")
         self.setMinimumHeight(88)
         self.config = config
+        self.language = "pl"
         self._user_adjusting = False
         self._volume_available = False
         self._mute_available = False
+        self._runtime_control_enabled = config.enabled
 
         layout = QGridLayout(self)
         self._icon_key = None
@@ -357,6 +363,7 @@ class AppCard(QFrame):
         self.enabled_switch.setChecked(config.enabled)
         self.enabled_switch.setToolTip("Włącz encje Home Assistant dla tej aplikacji")
         self.enabled_switch.toggled.connect(self._apply_enabled_state)
+        self.enabled_switch.toggled.connect(self.configuration_changed)
         layout.addWidget(self.enabled_switch, 2, 4, Qt.AlignmentFlag.AlignVCenter)
 
         self.more_button = QToolButton()
@@ -374,12 +381,14 @@ class AppCard(QFrame):
             "Jeśli ścieżka programu nie jest znana, aplikacja poprosi o wskazanie pliku EXE."
         )
         self.remote_start_action.toggled.connect(self._remote_start_toggled)
+        self.remote_start_action.toggled.connect(self.configuration_changed)
         self.remote_close_action = self.options_menu.addAction("Zamykanie z Home Assistant")
         self.remote_close_action.setCheckable(True)
         self.remote_close_action.setChecked(config.allow_remote_close)
         self.remote_close_action.toggled.connect(
             lambda checked: setattr(self.config, "allow_remote_close", checked)
         )
+        self.remote_close_action.toggled.connect(self.configuration_changed)
         self.options_menu.addSeparator()
         self.options_menu.addAction("Usuń", lambda: self.remove_requested.emit(self))
         self.more_button.clicked.connect(self._show_options_menu)
@@ -447,9 +456,9 @@ class AppCard(QFrame):
         if checked and not QFileInfo(self.config.executable_path).exists():
             file_name, _ = QFileDialog.getOpenFileName(
                 self,
-                "Wskaż plik EXE aplikacji",
+                translate("Wskaż plik EXE aplikacji", self.language),
                 "",
-                "Programy Windows (*.exe)",
+                translate("Programy Windows (*.exe)", self.language),
             )
             if not file_name:
                 self.remote_start_action.blockSignals(True)
@@ -496,16 +505,16 @@ class AppCard(QFrame):
     def edit(self) -> None:
         name, accepted = QInputDialog.getText(
             self,
-            "Nazwa aplikacji",
-            "Przyjazna nazwa:",
+            translate("Nazwa aplikacji", self.language),
+            translate("Przyjazna nazwa:", self.language),
             text=self.config.display_name,
         )
         if not accepted or not name.strip():
             return
         topic_id, accepted = QInputDialog.getText(
             self,
-            "Identyfikator topicu",
-            "Identyfikator MQTT:",
+            translate("Identyfikator topicu", self.language),
+            translate("Identyfikator MQTT:", self.language),
             text=self.config.slug,
         )
         if not accepted:
@@ -514,6 +523,7 @@ class AppCard(QFrame):
         self.config.slug = slugify(topic_id or name)
         self.name_label.setText(self.config.display_name)
         self.set_executable_icon(self.config.executable_path)
+        self.configuration_changed.emit()
 
     def to_config(self) -> AudioAppConfig:
         return AudioAppConfig(
@@ -561,7 +571,9 @@ class AppCard(QFrame):
         self.mute_button.blockSignals(True)
         self.mute_button.setChecked(muted)
         self.mute_button.setIcon(qta.icon("mdi6.volume-off" if muted else "mdi6.volume-high", color="#ef8794" if muted else "#aab8b2"))
-        self.mute_button.setToolTip("Włącz dźwięk aplikacji" if muted else "Wycisz aplikację")
+        self.mute_button.setToolTip(
+            translate("Włącz dźwięk aplikacji" if muted else "Wycisz aplikację", self.language)
+        )
         self.mute_button.blockSignals(False)
         self._apply_enabled_state(self.enabled_switch.isChecked())
 
@@ -570,10 +582,14 @@ class AppCard(QFrame):
         self.avatar_effect.setOpacity(1.0 if enabled else 0.72)
         for widget in (self.name_label, self.process_label, self.percent_label):
             widget.setEnabled(enabled)
-        self.slider.setEnabled(enabled and self._volume_available)
-        self.mute_button.setEnabled(enabled and self._mute_available)
+        self.slider.setEnabled(self._runtime_control_enabled and self._volume_available)
+        self.mute_button.setEnabled(self._runtime_control_enabled and self._mute_available)
         self.style().unpolish(self)
         self.style().polish(self)
+
+    def set_runtime_enabled(self, enabled: bool) -> None:
+        self._runtime_control_enabled = bool(enabled)
+        self._apply_enabled_state(self.enabled_switch.isChecked())
 
     def _mute_toggled(self, muted: bool) -> None:
         self.mute_button.setIcon(qta.icon("mdi6.volume-off" if muted else "mdi6.volume-high", color="#ef8794" if muted else "#aab8b2"))

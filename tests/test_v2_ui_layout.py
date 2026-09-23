@@ -29,7 +29,7 @@ def test_all_pages_fit_minimum_width_and_port_ignores_wheel(theme):
             qt.processEvents()
             page = window.pages.widget(index)
             assert page.horizontalScrollBar().maximum() == 0, (theme, index)
-        window.navigation.setCurrentRow(Page.OVERVIEW)
+        window.navigation.setCurrentRow(Page.SETTINGS)
         port = window._fields["mqtt.port"]
         before = port.value()
         wheel = QWheelEvent(QPointF(10, 10), QPointF(10, 10), QPoint(), QPoint(0, 120), Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)

@@ -22,12 +22,14 @@ class WindowsCommands:
         *,
         master_audio=None,
         notifications=None,
+        notifications_quiet=None,
     ):
         self.config, self.audio, self.system = config, audio, system
         self.master_audio = master_audio
         self.media, self.power, self.events = media, power, events
         self.monitors = monitors
         self.notifications = notifications
+        self.notifications_quiet = notifications_quiet or (lambda: False)
 
     def install(self, router):
         c = self.config
@@ -183,6 +185,8 @@ class WindowsCommands:
         if action == "show":
             data["media_controls"] = False
             data["media_live"] = False
+        if command.kind == "overlay.show" and action == "show" and self.notifications_quiet():
+            raise CommandError("notifications_quiet")
         if command.kind == "overlay.show" and action in {"show", "update"}:
             context = self.system.context_snapshot()
             if context.locked or (context.fullscreen and not self.config.overlay_allow_fullscreen):

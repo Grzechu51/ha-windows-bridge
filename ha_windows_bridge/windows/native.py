@@ -8,6 +8,8 @@ from ctypes import wintypes
 from PySide6.QtCore import QAbstractNativeEventFilter
 from PySide6.QtWidgets import QApplication
 
+INSTANCE_ACTIVATE_MESSAGE = "HAWindowsBridge.Activate.v2"
+
 
 def system_accent() -> str | None:
     if sys.platform != "win32":
@@ -30,9 +32,11 @@ class WindowsEventBridge(QAbstractNativeEventFilter):
         self._network_handle = wintypes.HANDLE()
         self._network_callback = None
         self._taskbar_message = 0
+        self._activate_message = 0
         self._enabled = sys.platform == "win32" and QApplication.instance().platformName() != "offscreen"
         if self._enabled:
             self._taskbar_message = ctypes.windll.user32.RegisterWindowMessageW("TaskbarCreated")
+            self._activate_message = ctypes.windll.user32.RegisterWindowMessageW(INSTANCE_ACTIVATE_MESSAGE)
             self._registered = bool(ctypes.windll.wtsapi32.WTSRegisterSessionNotification(wintypes.HWND(hwnd), 0))
             self._register_network_notifications()
             QApplication.instance().installNativeEventFilter(self)
@@ -90,6 +94,8 @@ class WindowsEventBridge(QAbstractNativeEventFilter):
             self.application.events.emit("windows.theme_changed")
         elif record.message == self._taskbar_message:
             self.application.events.emit("windows.explorer_restarted")
+        elif record.message == self._activate_message:
+            self.application.events.emit("windows.activate_requested")
         return False, 0
 
     def close(self):

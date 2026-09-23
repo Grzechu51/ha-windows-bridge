@@ -21,7 +21,7 @@ from .system_actions import WindowsPowerActions
 from .system_monitor import WindowsSystemMonitor
 from .ui.control_style import BridgeProxyStyle
 from .ui.shell import DesktopWindow
-from .ui.theme import style_for_theme
+from .ui.theme import style_for_theme, tokens_for_theme
 from .windows.credentials import DpapiCipher
 from .windows.native import WindowsEventBridge, system_accent
 from .windows_effects import NativeBackdrop, enable_per_monitor_v2
@@ -45,7 +45,8 @@ def main(argv=None):
     else:
         instance = SingleInstance()
         if instance.already_running:
-            QMessageBox.information(None, "HA Windows Bridge", "Program jest już uruchomiony w zasobniku.")
+            if not instance.activate_existing():
+                QMessageBox.information(None, "HA Windows Bridge", "Program jest już uruchomiony w zasobniku.")
             instance.close()
             return 0
         try:
@@ -66,17 +67,28 @@ def main(argv=None):
         selected = configuration.theme
         if selected == "system":
             selected = "dark" if qt.styleHints().colorScheme() == Qt.ColorScheme.Dark else "light"
+        accent = system_accent() if qt.platformName() != "offscreen" else None
+        tokens = tokens_for_theme(selected, accent)
         qt.setProperty("bridgeTheme", selected)
+        qt.setProperty("bridgeAccent", tokens.accent)
+        qt.setProperty("bridgeAccentText", tokens.accent_text)
+        qt.setProperty("bridgeIcon", tokens.text)
+        qt.setProperty("bridgeFocus", tokens.text)
         qt.setProperty("bridgeReducedMotion", configuration.reduced_motion)
-        qt.setStyleSheet(style_for_theme("", selected, system_accent() if qt.platformName() != "offscreen" else None))
+        qt.setStyleSheet(style_for_theme("", selected, accent))
+        window._refresh_navigation_icons()
+        window.update()
         if sys.platform == "win32" and qt.platformName() != "offscreen":
             NativeBackdrop._dwm_attribute(int(window.winId()), 20, int(selected == "dark"))
             caption = 0x151515 if selected == "dark" else 0xF3F3F3
             NativeBackdrop._dwm_attribute(int(window.winId()), 35, caption)
         # Native window frame owns resize, caption buttons, Snap and the system menu.
     apply_theme(config)
-    window._signals.received.connect(lambda event: apply_theme(event.data if event.topic == "configuration.changed" else runtime.config) if event.topic in {"configuration.changed", "windows.theme_changed"} else None)
-    qt.styleHints().colorSchemeChanged.connect(lambda *_: apply_theme(runtime.config))
+    window._signals.received.connect(
+        lambda event: apply_theme(event.data if event.topic in {"configuration.changed", "ui.theme_preview"} else window.draft)
+        if event.topic in {"configuration.changed", "ui.theme_preview", "windows.theme_changed"} else None
+    )
+    qt.styleHints().colorSchemeChanged.connect(lambda *_: apply_theme(window.draft))
     if args.smoke_test:
         window.show()
         qt.processEvents()

@@ -89,6 +89,8 @@ class Application:
         self._services_generation = None
         self._restart_blocked = False
         self._connections = {}
+        self._sensors_paused = False
+        self._notifications_quiet = False
         self._pending_queries = set()
         self.last_start_report = LifecycleReport("start")
         self.last_stop_report = LifecycleReport("stop")
@@ -211,7 +213,8 @@ class Application:
         WindowsCommands(self.config, audio_view, self._system_view, media_view, self.power,
                         self.events, self.monitors,
                         master_audio=self._master_audio,
-                        notifications=self.notifications).install(self.router)
+                        notifications=self.notifications,
+                        notifications_quiet=lambda: self.notifications_quiet).install(self.router)
         self._telemetry = None
         self._state_projection = None
         self._protocol_projection = None
@@ -271,6 +274,10 @@ class Application:
                 from ..communication.home_assistant import HomeAssistantGateway
                 self._direct_factory = HomeAssistantGateway
             self.supervisor.register("home_assistant", self._direct_factory(self.config, self.router, self.events))
+        if self._sensors_paused:
+            for service in (self._telemetry, self._master_audio, self._media_provider, *self._system_providers):
+                if service is not None:
+                    service.pause(True)
 
     def _event_subscription(self, *topics: str, before_wake=None):
         def subscribe(changed):
@@ -604,6 +611,10 @@ class Application:
         return self._schedule(reconnect)
 
     def apply_configuration(self, config: AppConfig):
+        return self.request_configuration_apply(config) is not None
+
+    def request_configuration_apply(self, config: AppConfig) -> str | None:
+        """Queue the existing transaction and expose progress and terminal result."""
         candidate = copy.deepcopy(config)
         errors = candidate.validation_errors()
         if not candidate.mqtt.host and not candidate.home_assistant.enabled:
@@ -611,62 +622,99 @@ class Application:
         if errors:
             self.log.warning("Nie zapisano ustawień: %s", "; ".join(errors))
             self.events.emit("application.error", "\n".join(errors))
-            return False
+            return None
+        request_id = uuid.uuid4().hex
         self._protect_secrets(candidate)
+
         def apply():
-            previous = copy.deepcopy(self.config)
-            # Read before stopping anything; a read failure leaves runtime intact.
-            previous_startup = self.startup.is_enabled()
-            saved = startup_attempted = False
-            self._ensure_operation_current()
-            self._stop()
-            self._ensure_operation_current()
+            terminal_code = ""
+            stage = "preflight"
+
+            def progress(next_stage: str) -> None:
+                nonlocal stage
+                stage = next_stage
+                self.events.emit("configuration.apply_progress", {
+                    "request_id": request_id, "stage": next_stage,
+                })
+
             try:
-                self.store.save(candidate)
-                saved = True
+                progress("preflight")
+                previous = copy.deepcopy(self.config)
+                # Read before stopping anything; a read failure leaves runtime intact.
+                previous_startup = self.startup.is_enabled()
+                saved = startup_attempted = False
                 self._ensure_operation_current()
-                startup_attempted = True
-                self.startup.set_enabled(candidate.start_with_windows)
+                progress("stopping")
+                self._stop()
                 self._ensure_operation_current()
-                with self._guard:
-                    self._ensure_operation_current_locked()
-                    self.config = candidate
-                self._build_services()
-                self._start()
-                self._ensure_operation_current()
-                if any(status.state.value == "error" for status in self.states.snapshot()):
-                    raise RuntimeError("Configuration service startup failed")
-            except Exception:
-                # Cover every stage after stop, including registry, build and start.
-                # A rollback failure is explicit and never reported as applied.
-                with self._guard:
-                    operation_current = self._operation_is_current_locked()
                 try:
-                    if operation_current:
-                        self._stop()
-                    if saved:
-                        self.store.save(previous)
-                    if startup_attempted:
-                        self.startup.set_enabled(previous_startup)
+                    progress("saving")
+                    self.store.save(candidate)
+                    saved = True
+                    self._ensure_operation_current()
+                    startup_attempted = True
+                    progress("startup")
+                    self.startup.set_enabled(candidate.start_with_windows)
+                    self._ensure_operation_current()
                     with self._guard:
-                        self.config = previous
-                        operation_current = self._operation_is_current_locked()
-                    if operation_current:
-                        self._build_services()
-                        self._start()
-                        self._ensure_operation_current()
-                        if any(status.state.value == "error" for status in self.states.snapshot()):
-                            raise RuntimeError("Previous configuration service startup failed")
+                        self._ensure_operation_current_locked()
+                        self.config = candidate
+                    progress("rebuilding")
+                    self._build_services()
+                    self._start()
+                    self._ensure_operation_current()
+                    if any(status.state.value == "error" for status in self.states.snapshot()):
+                        raise RuntimeError("Configuration service startup failed")
                 except Exception:
-                    self.log.exception("Configuration rollback failed; recovery required")
-                    self.events.emit("application.error", "configuration_rollback_failed")
+                    # Roll back only failures after the original transaction stopped runtime.
+                    progress("rollback")
+                    with self._guard:
+                        operation_current = self._operation_is_current_locked()
+                    try:
+                        if operation_current:
+                            self._stop()
+                        if saved:
+                            self.store.save(previous)
+                        if startup_attempted:
+                            self.startup.set_enabled(previous_startup)
+                        with self._guard:
+                            self.config = previous
+                            operation_current = self._operation_is_current_locked()
+                        if operation_current:
+                            self._build_services()
+                            self._start()
+                            self._ensure_operation_current()
+                            if any(status.state.value == "error" for status in self.states.snapshot()):
+                                raise RuntimeError("Previous configuration service startup failed")
+                    except Exception:
+                        self.log.exception("Configuration rollback failed; recovery required")
+                        terminal_code = "configuration_rollback_failed"
+                        self.events.emit("application.error", terminal_code)
                     raise
-                raise
-            self.events.emit("configuration.changed", copy.deepcopy(candidate))
-            self.log.info("Zapisano i zastosowano ustawienia")
-        return self._schedule(apply)
+                self.events.emit("configuration.changed", copy.deepcopy(candidate))
+                self.log.info("Zapisano i zastosowano ustawienia")
+            except Exception as exc:
+                if not terminal_code:
+                    self.events.emit("application.error", type(exc).__name__)
+                self.events.emit("configuration.apply_finished", {
+                    "request_id": request_id, "ok": False,
+                    "code": terminal_code or type(exc).__name__,
+                })
+                # The correlated terminal result is authoritative for apply failures.
+                # Do not let the generic operation wrapper overwrite recovery guidance.
+                return
+            progress("complete")
+            self.events.emit("configuration.apply_finished", {
+                "request_id": request_id, "ok": True, "code": "applied",
+            })
+
+        if not self._schedule(apply):
+            return None
+        return request_id
 
     def pause_sensors(self, paused: bool):
+        paused = bool(paused)
+        self._sensors_paused = paused
         if self._telemetry:
             self._telemetry.pause(paused)
         if self._master_audio:
@@ -675,7 +723,19 @@ class Application:
             self._media_provider.pause(paused)
         for provider in self._system_providers:
             provider.pause(paused)
+        self.events.emit("sensors.paused", paused)
 
+    @property
+    def sensors_paused(self) -> bool:
+        return self._sensors_paused
+
+    @property
+    def notifications_quiet(self) -> bool:
+        return self._notifications_quiet
+
+    def set_notifications_quiet(self, quiet: bool) -> None:
+        self._notifications_quiet = bool(quiet)
+        self.events.emit("notifications.quiet", self._notifications_quiet)
     def request_inventory(self, kind):
         if kind not in {"disks", "devices", "applications"} or self._closed:
             return False
@@ -871,10 +931,67 @@ class Application:
             }
         return redact_data(report, (self.config.mqtt.password, self.config.home_assistant.token))
 
-    def export_diagnostics(self, path):
-        report = self.diagnostic_report()
-        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    def diagnostic_preview(self):
+        """Return the exact privacy-safe object written by export_diagnostics."""
+        now = time.time()
+        state = self.computer_snapshot()
+        queue = self.notifications.snapshot()
+        with self._guard:
+            connections = [
+                {
+                    "transport": item["transport"],
+                    "state": str(item["state"]),
+                    "attempt": int(item.get("attempt", 0)),
+                    "error_code": (
+                        str(item.get("error", ""))
+                        if str(item.get("error", "")) in {
+                            "network", "network_changed", "disconnected",
+                            "suback_timeout", "puback_timeout", "unauthorized",
+                            "integration_missing", "protocol_mismatch",
+                            "bridge_not_configured", "popup_unavailable",
+                            "bridge_busy", "bridge_not_ready", "server_error",
+                        } else "transport_error" if item.get("error") else ""
+                    ),
+                }
+                for item in self._connections.values()
+            ]
+        return {
+            "schema": 1,
+            "version": __version__,
+            "platform": platform.system(),
+            "python": platform.python_version(),
+            "qt": version("PySide6"),
+            "services": [
+                {"name": item.name, "state": str(item.state)}
+                for item in self.states.snapshot()
+            ],
+            "connections": connections,
+            "providers": [
+                {
+                    "source": item.source,
+                    "quality": str(item.quality),
+                    "age_seconds": max(0, round(now - item.checked_at, 1)),
+                    "has_sample": state.provider(item.source) is not None,
+                }
+                for item in state.health
+            ],
+            "notifications": {
+                "visible": len(queue[0]),
+                "pending": len(queue[1]),
+                "retiring": len(queue[2]),
+                "quiet": self.notifications_quiet,
+            },
+            "runtime": {
+                "generation": state.generation,
+                "revision": state.revision,
+                "sensors_paused": self.sensors_paused,
+                "process_resources": self.resources.sample(),
+            },
+        }
 
+    def export_diagnostics(self, path):
+        report = self.diagnostic_preview()
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     def _close_system_owner(self) -> LifecycleResult | None:
         closer = getattr(self.system, "close", None)
         if not callable(closer):

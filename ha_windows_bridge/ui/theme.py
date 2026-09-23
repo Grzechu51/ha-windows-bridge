@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from string import Template
 
 VALID_THEMES = frozenset({"dark", "light"})
@@ -50,7 +50,7 @@ QFrame#titleDivider, QFrame#statusVerticalDivider { background: $border; border:
 QToolButton { border: 1px solid transparent; border-radius: 5px; padding: 2px; }
 QToolButton:hover { background: $hover; }
 QToolButton:pressed { background: $selection; }
-QToolButton:focus, QPushButton:focus { border: 1px solid $accent; }
+QToolButton:focus, QPushButton:focus { border: 2px solid $text; }
 QToolButton#hamburgerButton, QToolButton#windowButton, QToolButton#closeButton { font-size: 14pt; }
 QToolButton#closeButton:hover { background: #c42b1c; color: #ffffff; }
 QLabel#windowTitle { font-size: 12pt; font-weight: 600; }
@@ -75,7 +75,7 @@ QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
     background: $field; border: 1px solid $border;
     border-radius: 5px; min-height: 22px; padding: 7px 10px; selection-background-color: $selection;
 }
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border: 1px solid $accent; }
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border: 2px solid $text; }
 QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled { color: $disabled; background: $chrome; border-color: $border; }
 QComboBox { padding-right: 28px; }
 QComboBox::drop-down { width: 24px; border: none; }
@@ -101,7 +101,7 @@ QFrame#uninstallCard { background: $surface; border: 1px solid $border; border-r
 QFrame#appCard[featureEnabled="false"], QFrame#masterVolumeCard[featureEnabled="false"],
 QFrame#microphoneCard[featureEnabled="false"], QFrame#audioOutputCard[featureEnabled="false"], QFrame#settingRow[featureEnabled="false"] { background: $field; }
 QLabel:disabled { color: $disabled; }
-QLabel#masterAvatar, QLabel#microphoneAvatar, QLabel#audioOutputAvatar { background: $selection; color: $accent; border-radius: 20px; font-size: 17pt; }
+QLabel#masterAvatar, QLabel#microphoneAvatar, QLabel#audioOutputAvatar { background: $selection; color: $text; border-radius: 20px; font-size: 17pt; }
 QLabel#volumePercent { font-weight: 600; }
 QToolButton#muteButton { background: $field; border: 1px solid $border; }
 QToolButton#muteButton:checked { color: $danger; background: $danger_surface; }
@@ -126,7 +126,7 @@ QListWidget#devicesList::item:selected { background: $selection; }
 QListWidget#devicesList:disabled, QListWidget#devicesList::item:disabled { background: $field; color: $disabled; }
 QLabel#statusCardTitle { font-size: 14pt; font-weight: 600; }
 QLabel#metricValue { font-weight: 600; }
-QLabel#statusBadge { color: $accent; background: $selection; border: none; border-radius: 4px; padding: 4px 8px; }
+QLabel#statusBadge { color: $text; background: $selection; border: none; border-radius: 4px; padding: 4px 8px; }
 QLabel#emptyState { color: $muted; border: 1px dashed $border; border-radius: 8px; padding: 24px; }
 QLabel#infoBanner { color: $muted; background: $selection; border: none; border-radius: 6px; padding: 12px; }
 QPlainTextEdit#logViewer { background: $field; border: 1px solid $border; border-radius: 6px; padding: 10px; font-family: "Consolas", "Segoe UI"; font-size: 9pt; selection-background-color: $selection; }
@@ -146,12 +146,15 @@ QProgressBar#resourceBar::chunk, QProgressBar#microphoneLevelBar::chunk { backgr
 ''')
 
 
+def tokens_for_theme(theme: str, accent: str | None = None) -> ThemeTokens:
+    tokens = PALETTES[normalize_theme(theme)]
+    if not accent or not re.fullmatch(r"#[0-9a-fA-F]{6}", accent):
+        return tokens
+    channels = [int(accent[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4 for channel in channels]
+    luminance = sum(weight * channel for weight, channel in zip((0.2126, 0.7152, 0.0722), linear, strict=True))
+    return replace(tokens, accent=accent, accent_text="#000000" if luminance > 0.179 else "#ffffff")
+
+
 def style_for_theme(base_style: str, theme: str, accent: str | None = None) -> str:
-    tokens = asdict(PALETTES[normalize_theme(theme)])
-    if accent and re.fullmatch(r"#[0-9a-fA-F]{6}", accent):
-        tokens["accent"] = accent
-        channels = [int(accent[index:index + 2], 16) / 255 for index in (1, 3, 5)]
-        linear = [channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4 for channel in channels]
-        luminance = sum(weight * channel for weight, channel in zip((0.2126, 0.7152, 0.0722), linear, strict=True))
-        tokens["accent_text"] = "#000000" if luminance > 0.179 else "#ffffff"
-    return base_style + "\n" + _STYLE.substitute(tokens)
+    return base_style + "\n" + _STYLE.substitute(asdict(tokens_for_theme(theme, accent)))

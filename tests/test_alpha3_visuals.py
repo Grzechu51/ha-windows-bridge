@@ -98,10 +98,11 @@ def test_setting_text_and_switch_centres_match_and_theme_uses_same_row(theme, tm
             window.navigation.setCurrentRow(page)
             qt.processEvents()
             for row in window.pages.widget(page).findChildren(SettingRow):
-                assert row.description_label.isHidden()
+                assert row.description_label.isHidden() == (not bool(row.description_label.text()))
                 assert row.title_label.isEnabled()
-                center = row.title_label.mapTo(row, row.title_label.rect().center()).y()
-                assert abs(center - row.switch.geometry().center().y()) <= 1
+                if row.description_label.isHidden():
+                    center = row.title_label.mapTo(row, row.title_label.rect().center()).y()
+                    assert abs(center - row.switch.geometry().center().y()) <= 1
             assert window.pages.widget(page).horizontalScrollBar().maximum() == 0
         row = window.theme_row
         center = row.title_label.mapTo(row, row.title_label.rect().center()).y()

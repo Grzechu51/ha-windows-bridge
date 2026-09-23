@@ -40,7 +40,7 @@ def test_new_shell_uses_application_and_has_independent_status_pages(tmp_path):
         window.resize(1000, 760)
         window.show()
         qt.processEvents()
-        assert window.pages.count() == 6
+        assert window.pages.count() == len(PAGES)
         assert not hasattr(window, "bridge")
         assert not hasattr(window, "direct_bridge")
         for page in range(len(PAGES)):

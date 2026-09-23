@@ -122,9 +122,9 @@ def test_overview_contains_connections_and_diagnostics_has_history(tmp_path):
         window.resize(1000, 760)
         window.show()
         qt.processEvents()
-        assert window.pages.count() == 6
+        assert window.pages.count() == 7
         assert not any(window.navigation.item(i).text() == "Połączenia" for i in range(window.navigation.count()))
-        assert window.pages.widget(Page.OVERVIEW).isAncestorOf(window._fields["home_assistant.url"])
+        assert window.pages.widget(Page.SETTINGS).isAncestorOf(window._fields["home_assistant.url"])
         assert "Dodaj ten komputer" in window.summary.text()
         assert "działa" not in window.summary.text()
         assert "Dodaj ten komputer" in window.logs.toPlainText()
