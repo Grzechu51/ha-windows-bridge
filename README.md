@@ -66,6 +66,10 @@ wybierz **Redownload → Need a different version? → v0.10.0-beta.5**. Aplikac
 pobierz z wydania oznaczonego **Pre-release** na GitHubie. Stabilne `v0.9.0` pozostaje
 wydaniem domyślnym.
 
+## Zgodność z Home Assistant
+
+Rozwijana integracja wymaga Home Assistant **2026.9.0 lub nowszego**; macierz testów obejmuje 2026.9.0 i 2026.9.3. Zasady zachowania encji, migracji Direct/MQTT oraz zgodności v2/v3 opisuje [dokumentacja kompatybilności](docs/HOME_ASSISTANT_COMPATIBILITY.md).
+
 ## Pierwsze uruchomienie
 
 1. Podaj adres, port, użytkownika i hasło MQTT.
@@ -87,7 +91,7 @@ raportu diagnostycznego.
 - **Nakładka** — wiadomości, statusy, obrazy i multimedia na pulpicie. W aplikacji
   wybierasz monitor i sprawdzasz przykłady, a treść i wygląd ustawiasz w akcji Home Assistant.
 
-Wyłączenie modułu usuwa jego encje po zapisaniu i ponownym opublikowaniu konfiguracji.
+Wyłączenie modułu lub chwilowy brak funkcji pozostawia encje w rejestrze Home Assistant. Mogą być niedostępne do ponownego włączenia funkcji; zachowują swoje identyfikatory i ustawienia użytkownika.
 
 ## Media Player
 

@@ -93,18 +93,24 @@ def test_p04_whole_media_platform_registers_cleanup_immediately(ha_platforms, ac
                   "volume_command_topic": "volume/set", "mute_command_topic": "mute/set"}
     entry = SimpleNamespace(data={"device_id": "pc", "device": {}, "entities": [] if active else [definition],
                                  "media_player": {"enabled": active, "command_topic": "command", "state_topic": "state",
-                                                  "availability_topic": "availability", "thumbnail_topic": "thumbnail"}})
+                                                  "availability_topic": "availability", "thumbnail_topic": "thumbnail"}},
+                            runtime_data=SimpleNamespace(setup_failed=False))
     entities = []
     asyncio.run(platform.async_setup_entry(object(), entry, entities.extend))
     assert len(entities) == 1
     entity = entities[0]
-    entity.hass = object()
+    released_ids = []
+    entity.entity_id = "media_player.pc_app"
+    entity.hass = SimpleNamespace(states=SimpleNamespace(
+        get=lambda _entity_id: None, async_remove=released_ids.append))
     relevant = {"state", "availability", "thumbnail"} if active else {"state", "availability", "volume", "mute"}
     if fail_at in relevant:
         with pytest.raises(OSError, match="partial setup"):
             asyncio.run(entity.async_added_to_hass())
         assert sorted(removed) == sorted(acquired)
         assert not entity.cleanup
+        assert entry.runtime_data.setup_failed
+        assert released_ids == [entity.entity_id]
     else:
         asyncio.run(entity.async_added_to_hass())
         if not active:

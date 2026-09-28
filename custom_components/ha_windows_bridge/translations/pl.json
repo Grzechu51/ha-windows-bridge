@@ -161,6 +161,14 @@
         "close_on_click": {"name": "Zamykanie kliknięciem"},
         "pause_on_hover": {"name": "Wstrzymaj po najechaniu"},
         "show_lifetime": {"name": "Pasek czasu wyświetlania"}
+      ,
+        "image": {"name": "Obraz"},
+        "qr": {"name": "Kod QR"},
+        "duration": {"name": "Czas wy\u015bwietlania"},
+        "duration_entity": {"name": "Encja czasu"},
+        "duration_attribute": {"name": "Atrybut czasu"},
+        "corner": {"name": "Po\u0142o\u017cenie na ekranie"},
+        "monitor": {"name": "Monitor"}
       }
     },
     "remove_overlay": {
@@ -171,6 +179,135 @@
     "clear_overlay": {
       "name": "Wyczyść nakładki Windows",
       "description": "Zamyka wszystkie bieżące i oczekujące karty nakładki Windows."
+    }
+  },
+  "exceptions": {
+    "not_authorized_control": {
+      "message": "Brak uprawnienia do sterowania t\u0105 nak\u0142adk\u0105."
+    },
+    "popup_required": {
+      "message": "Wybierz w\u0142\u0105czon\u0105 encj\u0119 nak\u0142adki HA Windows Bridge."
+    },
+    "number_must_be_finite": {
+      "message": "Pole {field} musi mie\u0107 sko\u0144czon\u0105 warto\u015b\u0107 liczbow\u0105."
+    },
+    "not_authorized_read_source": {
+      "message": "Brak uprawnienia do odczytu encji \u017ar\u00f3d\u0142owej."
+    },
+    "source_unavailable": {
+      "message": "Encja \u017ar\u00f3d\u0142owa jest niedost\u0119pna."
+    },
+    "source_not_numeric": {
+      "message": "Encja \u017ar\u00f3d\u0142owa nie zawiera warto\u015bci liczbowej."
+    },
+    "progress_range_invalid": {
+      "message": "Zakres post\u0119pu musi by\u0107 sko\u0144czony, a maksimum wi\u0119ksze od minimum."
+    },
+    "camera_or_image_required": {
+      "message": "Wybierz encj\u0119 kamery lub obrazu."
+    },
+    "not_authorized_image": {
+      "message": "Brak uprawnienia do odczytu wybranej encji obrazu."
+    },
+    "image_entity_unsupported": {
+      "message": "Wybrana encja kamery lub obrazu nie zwr\u00f3ci\u0142a obs\u0142ugiwanego obrazu."
+    },
+    "image_url_unsupported": {
+      "message": "Adres URL nie zwr\u00f3ci\u0142 obs\u0142ugiwanego obrazu."
+    },
+    "media_player_required": {
+      "message": "Wybierz encj\u0119 odtwarzacza multimedi\u00f3w."
+    },
+    "not_authorized_media_player": {
+      "message": "Brak uprawnienia do odczytu wybranego odtwarzacza."
+    },
+    "media_player_unavailable": {
+      "message": "Wybrany odtwarzacz jest niedost\u0119pny."
+    },
+    "content_required": {
+      "message": "Dodaj tre\u015b\u0107, wybierz odtwarzacz Home Assistant lub w\u0142\u0105cz bie\u017c\u0105ce multimedia Windows."
+    },
+    "payload_too_large": {
+      "message": "Dane nak\u0142adki s\u0105 zbyt du\u017ce."
+    },
+    "targets_unconfirmed": {
+      "message": "Liczba komputer\u00f3w bez potwierdzenia polecenia: {count}."
+    },
+    "notification_empty": {
+      "message": "Wiadomo\u015b\u0107 powiadomienia nie mo\u017ce by\u0107 pusta."
+    },
+    "notification_too_long": {
+      "message": "Tre\u015b\u0107 powiadomienia jest zbyt d\u0142uga."
+    },
+    "notification_title_too_long": {
+      "message": "Tytu\u0142 powiadomienia jest zbyt d\u0142ugi."
+    },
+    "invalid_legacy_payload": {
+      "message": "Dane starszego polecenia s\u0105 nieprawid\u0142owe."
+    },
+    "bridge_busy": {
+      "message": "Windows Bridge jest ju\u017c po\u0142\u0105czony albo trwa jego wy\u0142\u0105czanie."
+    },
+    "bridge_unloading": {
+      "message": "Trwa wy\u0142\u0105czanie integracji Windows Bridge."
+    },
+    "bridge_unloaded": {
+      "message": "Integracja Windows Bridge zosta\u0142a wy\u0142\u0105czona."
+    },
+    "command_too_large": {
+      "message": "Polecenie przekracza dozwolony rozmiar."
+    },
+    "too_many_pending": {
+      "message": "Zbyt wiele polece\u0144 Windows Bridge oczekuje na potwierdzenie."
+    },
+    "bridge_offline": {
+      "message": "Windows Bridge jest niedost\u0119pny."
+    },
+    "command_not_allowed": {
+      "message": "To polecenie nie jest dozwolone przez Windows Bridge."
+    },
+    "command_rejected": {
+      "message": "Windows Bridge odrzuci\u0142 polecenie lub jego wykonanie si\u0119 nie powiod\u0142o."
+    },
+    "command_timeout": {
+      "message": "Windows Bridge nie potwierdzi\u0142 polecenia na czas."
+    },
+    "bridge_disconnected": {
+      "message": "Po\u0142\u0105czenie z Windows Bridge zosta\u0142o przerwane."
+    },
+    "capability_unavailable": {
+      "message": "Ta funkcja jest niedost\u0119pna dla wybranego sposobu komunikacji."
+    },
+    "invalid_protocol_session": {
+      "message": "Sesja protoko\u0142u Windows Bridge jest nieprawid\u0142owa."
+    },
+    "invalid_command_content": {
+      "message": "Tre\u015b\u0107 polecenia jest nieprawid\u0142owa."
+    },
+    "session_changed": {
+      "message": "Sesja Windows Bridge uleg\u0142a zmianie."
+    },
+    "mqtt_required": {
+      "message": "Najpierw skonfiguruj i w\u0142\u0105cz integracj\u0119 MQTT w Home Assistant."
+    },
+    "entity_setup_failed": {
+      "message": "Nie uko\u0144czono konfiguracji encji Windows Bridge."
+    },
+    "migration_conflict": {
+      "message": "Migracja to\u017csamo\u015bci Windows Bridge wymaga r\u0119cznego sprawdzenia."
+    },
+    "migration_cleanup_pending": {
+      "message": "Czyszczenie starej konfiguracji Windows Bridge jest w toku; prze\u0142aduj integracj\u0119, aby ponowi\u0107 pr\u00f3b\u0119."
+    }
+  },
+  "issues": {
+    "migration_conflict": {
+      "title": "{name}: Migracja to\u017csamo\u015bci Windows Bridge wymaga sprawdzenia",
+      "description": "Wiele starszych wpis\u00f3w Direct lub nieoczekiwane wpisy rejestru uniemo\u017cliwiaj\u0105 bezpieczne scalenie. Sprawd\u017a zduplikowane integracje i przypisanie encji, a nast\u0119pnie prze\u0142aduj integracj\u0119. Automatyczne czyszczenie zosta\u0142o zatrzymane do czasu sprawdzenia."
+    },
+    "migration_cleanup_pending": {
+      "title": "{name}: Czyszczenie starej konfiguracji Windows Bridge jest nieuko\u0144czone",
+      "description": "Nowa konfiguracja dzia\u0142a, ale usuwanie starej integracji Direct lub jej wpis\u00f3w nie zako\u0144czy\u0142o si\u0119. Prze\u0142aduj integracj\u0119, aby ponowi\u0107 pr\u00f3b\u0119. Je\u015bli problem powr\u00f3ci, sprawd\u017a dziennik Home Assistant przed r\u0119cznym usuwaniem wpis\u00f3w."
     }
   }
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import math
 from datetime import UTC, datetime
 from typing import Any
@@ -18,6 +19,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import target as target_helpers
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -37,8 +39,23 @@ from .const import (
     TRANSPORT_DIRECT,
     direct_overlay_event,
 )
+from .errors import failed, invalid
+from .migration import (
+    async_finish_migration,
+    async_prepare_migration,
+    canonical_direct_entities,
+    direct_in_place_journal,
+)
+from .repairs import (
+    clear_migration_conflict,
+    clear_migration_issues,
+    migration_cleanup_pending,
+    migration_conflict,
+)
 from .runtime import BridgeRuntime
 from .websocket import async_register_commands
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [
     Platform.BINARY_SENSOR,
@@ -171,8 +188,9 @@ def _text_attribute(value: Any) -> str:
 def _number_attribute(value: Any) -> float:
     """Return a non-negative media number."""
     try:
-        return max(0.0, float(value))
-    except (TypeError, ValueError):
+        numeric = float(value)
+        return max(0.0, numeric) if math.isfinite(numeric) else 0.0
+    except (TypeError, ValueError, OverflowError):
         return 0.0
 
 
@@ -259,17 +277,23 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             if call.context.user_id:
                 user = await hass.auth.async_get_user(call.context.user_id)
                 if user is None or not user.permissions.check_entity(entity_id, POLICY_CONTROL):
-                    raise HomeAssistantError("Not authorized to control this overlay entity")
+                    raise failed("not_authorized_control", "Not authorized to control this overlay entity")
             registered = registry.async_get(entity_id)
             if registered is None or registered.config_entry_id is None:
                 continue
             entry = hass.config_entries.async_get_entry(registered.config_entry_id)
             runtime = getattr(entry, "runtime_data", None)
-            if runtime is None or registered.unique_id != runtime.overlay_unique_id:
+            if (runtime is None or registered.domain != Platform.NOTIFY.value
+                    or registered.platform != DOMAIN or registered.disabled_by is not None
+                    or registered.unique_id != runtime.overlay_unique_id):
                 continue
             runtimes[registered.config_entry_id] = runtime
         if not runtimes:
-            raise HomeAssistantError("Select an enabled HA Windows Bridge popup entity")
+            raise invalid("popup_required", "Select an enabled HA Windows Bridge popup entity")
+
+        for field in ("progress_min", "progress_max", "opacity"):
+            if field in call.data and not math.isfinite(float(call.data[field])):
+                raise invalid("number_must_be_finite", f"{field} must be finite", field=field)
 
         options: dict[str, Any] = {
             key: value
@@ -296,28 +320,33 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             if call.context.user_id:
                 user = await hass.auth.async_get_user(call.context.user_id)
                 if user is None or not user.permissions.check_entity(entity_id, POLICY_READ):
-                    raise HomeAssistantError(f"Not authorized to read the source entity: {entity_id}")
+                    raise failed("not_authorized_read_source", f"Not authorized to read the source entity: {entity_id}")
             state = hass.states.get(entity_id)
             if state is None:
-                raise HomeAssistantError(f"Source entity is unavailable: {entity_id}")
+                raise invalid("source_unavailable", f"Source entity is unavailable: {entity_id}")
             attribute = str(call.data.get(attribute_field, "")).strip()
             raw_value = state.attributes.get(attribute) if attribute else state.state
             try:
                 numeric = float(raw_value)
                 if not math.isfinite(numeric):
                     raise ValueError
-            except (TypeError, ValueError):
-                raise HomeAssistantError(
+            except (TypeError, ValueError, OverflowError):
+                raise invalid("source_not_numeric",
                     f"Source entity does not contain a numeric value: {entity_id}"
                 ) from None
             if value_field == "progress":
                 source_min = float(call.data.get("progress_min", 0))
                 source_max = float(call.data.get("progress_max", 100))
-                if source_max <= source_min:
-                    raise HomeAssistantError(
-                        "Progress maximum must be greater than progress minimum"
+                span = source_max - source_min
+                if span <= 0 or not math.isfinite(span):
+                    raise invalid(
+                        "progress_range_invalid",
+                        "Progress maximum must be greater than progress minimum",
                     )
-                numeric = round((numeric - source_min) / (source_max - source_min) * 100)
+                scaled = (numeric - source_min) / span * 100
+                if not math.isfinite(scaled):
+                    raise invalid("progress_range_invalid", "Progress range cannot be normalized")
+                numeric = round(scaled)
             else:
                 numeric = round(numeric)
             options[value_field] = max(minimum, min(maximum, numeric))
@@ -340,12 +369,12 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
                 if user is None or not user.permissions.check_entity(
                     entity_id, POLICY_READ
                 ):
-                    raise HomeAssistantError(
+                    raise failed("not_authorized_read_source",
                         f"Not authorized to read the source entity: {entity_id}"
                     )
             state = hass.states.get(entity_id)
             if state is None:
-                raise HomeAssistantError(f"Source entity is unavailable: {entity_id}")
+                raise invalid("source_unavailable", f"Source entity is unavailable: {entity_id}")
             attribute = str(call.data.get(attribute_field, "")).strip()
             value = state.attributes.get(attribute) if attribute else state.state
             return _text_attribute(value)
@@ -356,25 +385,25 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
         image_url = str(options.pop("image_url", "")).strip()
         if image_entity:
             if not image_entity.startswith(("camera.", "image.")):
-                raise HomeAssistantError("Select a camera or image entity")
+                raise invalid("camera_or_image_required", "Select a camera or image entity")
             if call.context.user_id:
                 user = await hass.auth.async_get_user(call.context.user_id)
                 if user is None or not user.permissions.check_entity(
                     image_entity, POLICY_READ
                 ):
-                    raise HomeAssistantError(
+                    raise failed("not_authorized_image",
                         "Not authorized to read the selected image entity"
                     )
             entity_image = await _async_entity_image(hass, image_entity)
             if not entity_image:
-                raise HomeAssistantError(
+                raise invalid("image_entity_unsupported",
                     "The selected camera or image entity did not return a supported image"
                 )
             options["image"] = entity_image
         elif image_url:
             url_image = await _async_media_image(hass, image_url)
             if not url_image:
-                raise HomeAssistantError(
+                raise invalid("image_url_unsupported",
                     "The image URL did not return a supported image"
                 )
             options["image"] = url_image
@@ -383,18 +412,18 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
         media_message = ""
         if media_player_entity and action in {"show", "update"}:
             if not media_player_entity.startswith("media_player."):
-                raise HomeAssistantError("Select a media_player entity")
+                raise invalid("media_player_required", "Select a media_player entity")
             if call.context.user_id:
                 user = await hass.auth.async_get_user(call.context.user_id)
                 if user is None or not user.permissions.check_entity(
                     media_player_entity, POLICY_READ
                 ):
-                    raise HomeAssistantError(
+                    raise failed("not_authorized_media_player",
                         "Not authorized to read the selected media player"
                     )
             media_state = hass.states.get(media_player_entity)
             if media_state is None:
-                raise HomeAssistantError(
+                raise invalid("media_player_unavailable",
                     f"Selected media player is unavailable: {media_player_entity}"
                 )
             attributes = media_state.attributes
@@ -452,7 +481,7 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             and not options.get("qr")
             and not badge_has_content
         ):
-            raise HomeAssistantError(
+            raise invalid("content_required",
                 "Provide content, select a Home Assistant media player, "
                 "or enable current Windows media"
             )
@@ -466,14 +495,18 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
             content["message"] = message
         payload = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
         if len(payload.encode("utf-8")) > 768 * 1024:
-            raise HomeAssistantError("Overlay payload is too large")
+            raise invalid("payload_too_large", "Overlay payload is too large")
         results = await asyncio.gather(*(
             runtime.send(runtime.overlay_topic, payload, direct=bool(runtime.overlay_event_type))
             for runtime in runtimes.values()
         ), return_exceptions=True)
-        failed = sum(isinstance(result, Exception) for result in results)
-        if failed:
-            raise HomeAssistantError(f"{failed} Windows Bridge target(s) did not confirm the command")
+        failed_count = sum(isinstance(result, Exception) for result in results)
+        if failed_count:
+            raise failed(
+                "targets_unconfirmed",
+                f"{failed_count} Windows Bridge target(s) did not confirm the command",
+                count=str(failed_count),
+            )
 
     hass.services.async_register(
         DOMAIN, SERVICE_SHOW_OVERLAY, publish_overlay, schema=_SHOW_OVERLAY_SCHEMA
@@ -490,24 +523,78 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
     return True
 
 
+def _entry_platforms(hass: HomeAssistant, entry: ConfigEntry) -> list:
+    """Return only entity platforms created for this config entry."""
+    return [
+        platform for platform in entity_platform.async_get_platforms(hass, DOMAIN)
+        if platform.config_entry is entry
+    ]
+
+
+def _forwarded_entities_ready(hass: HomeAssistant, entry: ConfigEntry, platforms: list) -> bool:
+    """Detect entity-add errors that HA logs without failing platform setup."""
+    by_domain = {platform.domain: platform for platform in platforms}
+    if any(
+        platform not in by_domain or not by_domain[platform]._setup_complete
+        for platform in PLATFORMS
+    ):
+        return False
+    expected = [
+        (definition["platform"], str(definition["unique_id"]))
+        for definition in entry.data.get(CONF_ENTITIES, [])
+        if isinstance(definition, dict) and definition.get("unique_id")
+    ]
+    if entry.data.get(CONF_MEDIA_PLAYER, {}).get("enabled", False):
+        expected.append((Platform.MEDIA_PLAYER, f"{entry.data[CONF_DEVICE_ID]}_media_player"))
+    registry = er.async_get(hass)
+    for domain, unique_id in expected:
+        platform = by_domain.get(domain)
+        if platform is None:
+            return False
+        entity_id = registry.async_get_entity_id(domain, DOMAIN, unique_id)
+        registered = registry.async_get(entity_id) if entity_id else None
+        if registered is None or registered.config_entry_id != entry.entry_id:
+            return False
+        if registered.disabled_by is None and entity_id not in platform.entities:
+            return False
+    return True
+
+
+async def _async_rollback_platforms(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload only instantiated platforms, then release their HA registrations."""
+    platforms = _entry_platforms(hass, entry)
+    if not platforms:
+        return True
+    domains = list(dict.fromkeys(platform.domain for platform in platforms))
+    try:
+        if not await hass.config_entries.async_unload_platforms(entry, domains):
+            return False
+        for platform in platforms:
+            if platform in entity_platform.async_get_platforms(hass, DOMAIN):
+                await platform.async_destroy()
+    except Exception:
+        return False
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up every entity announced by one Windows bridge."""
     direct = entry.data.get(CONF_TRANSPORT) == TRANSPORT_DIRECT
     if not direct and not await mqtt.async_wait_for_mqtt_client(hass):
-        raise ConfigEntryNotReady("Configure and enable the Home Assistant MQTT integration first")
+        raise ConfigEntryNotReady(
+            "Configure and enable the Home Assistant MQTT integration first",
+            translation_domain=DOMAIN, translation_key="mqtt_required",
+        )
 
-    valid_unique_ids = {
-        str(definition["unique_id"])
-        for definition in entry.data.get(CONF_ENTITIES, [])
-        if isinstance(definition, dict) and definition.get("unique_id")
-    }
-    if entry.data.get(CONF_MEDIA_PLAYER, {}).get("enabled", False):
-        valid_unique_ids.add(f"{entry.data[CONF_DEVICE_ID]}_media_player")
-
-    registry = er.async_get(hass)
-    for registered in er.async_entries_for_config_entry(registry, entry.entry_id):
-        if registered.unique_id not in valid_unique_ids:
-            registry.async_remove(registered.entity_id)
+    try:
+        await async_prepare_migration(hass, entry)
+    except Exception as exc:
+        migration_conflict(hass, entry)
+        raise ConfigEntryNotReady(
+            "Windows Bridge migration needs manual review",
+            translation_domain=DOMAIN, translation_key="migration_conflict",
+        ) from exc
+    clear_migration_conflict(hass, entry)
 
     overlay_definition = next(
         (
@@ -522,27 +609,84 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ),
         {},
     )
-    overlay_topic = "" if direct else str(overlay_definition.get("command_topic", ""))
+    popup_direct = str(overlay_definition.get("command_topic", "")).startswith("direct://")
+    overlay_topic = "" if popup_direct else str(overlay_definition.get("command_topic", ""))
     runtime = BridgeRuntime(
-        hass=hass, device_id=str(entry.data[CONF_DEVICE_ID]), unique_ids=valid_unique_ids,
+        hass=hass, device_id=str(entry.data[CONF_DEVICE_ID]),
         overlay_unique_id=str(overlay_definition.get("unique_id", "")), overlay_topic=overlay_topic,
-        overlay_event_type=direct_overlay_event(str(entry.data[CONF_DEVICE_ID])) if direct else "",
+        overlay_event_type=direct_overlay_event(str(entry.data[CONF_DEVICE_ID])) if popup_direct else "",
         protocol=entry.data.get("protocol", {}),
     )
     entry.runtime_data = runtime
-    entry.async_on_unload(runtime.close)
     try:
         await runtime.start()
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        if runtime.setup_failed or not _forwarded_entities_ready(
+            hass, entry, _entry_platforms(hass, entry)
+        ):
+            raise ConfigEntryNotReady(
+                "Windows Bridge entity setup did not complete",
+                translation_domain=DOMAIN, translation_key="entity_setup_failed",
+            )
     except BaseException:
-        runtime.close()
+        # HA can log platform and entity-add failures without propagating them.
+        unloaded = await _async_rollback_platforms(hass, entry)
+        await runtime.async_close()
+        if unloaded:
+            entry.runtime_data = None
         raise
+    entry.async_on_unload(runtime.close)
+    # Cleanup starts only after HA has loaded and verified the canonical model.
+    # A cleanup error leaves the working bridge online and its journal for replay.
+    try:
+        await async_finish_migration(hass, entry)
+    except Exception:
+        runtime.migration_incomplete = True
+        migration_cleanup_pending(hass, entry)
+        _LOGGER.exception("Windows Bridge identity cleanup is pending retry")
+    else:
+        clear_migration_issues(hass, entry)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload HA Windows Bridge."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    platforms = _entry_platforms(hass, entry)
+    unload_ok = await hass.config_entries.async_unload_platforms(
+        entry, list(dict.fromkeys(platform.domain for platform in platforms))
+    ) if platforms else True
     if unload_ok:
-        entry.runtime_data.close()
+        for platform in platforms:
+            if platform in entity_platform.async_get_platforms(hass, DOMAIN):
+                await platform.async_destroy()
+        runtime = getattr(entry, "runtime_data", None)
+        if runtime is not None:
+            await runtime.async_close()
+            entry.runtime_data = None
     return unload_ok
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Upgrade v1 entries; an existing MQTT owner always wins a duplicate pair."""
+    if entry.version > 2:
+        return False
+    if entry.version == 2:
+        return True
+    device_id = str(entry.data[CONF_DEVICE_ID])
+    if entry.data.get(CONF_TRANSPORT) == TRANSPORT_DIRECT and not any(
+        other.unique_id == device_id for other in hass.config_entries.async_entries(DOMAIN)
+        if other.entry_id != entry.entry_id
+    ):
+        journal = direct_in_place_journal(hass, entry)
+        hass.config_entries.async_update_entry(
+            entry, version=2, unique_id=device_id,
+            data={**entry.data, CONF_ENTITIES: canonical_direct_entities(device_id),
+                  "migration_journal": journal, "direct_popup_enabled": True})
+    else:
+        hass.config_entries.async_update_entry(entry, version=2)
+    return True
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove any migration Repair when this entry is deleted."""
+    clear_migration_issues(hass, entry)

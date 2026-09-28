@@ -341,6 +341,13 @@ update_overlay:
     icon:
       selector:
         icon:
+    image:
+      selector:
+        text:
+          multiline: true
+    qr:
+      selector:
+        text:
     background_effect:
       selector:
         select:
@@ -385,6 +392,22 @@ update_overlay:
           step: 1
           unit_of_measurement: px
           mode: box
+    corner:
+      selector:
+        select:
+          translation_key: overlay_corner
+          options:
+            - top_left
+            - top_right
+            - bottom_left
+            - bottom_right
+            - top_center
+    monitor:
+      selector:
+        number:
+          min: 0
+          max: 15
+          mode: box
     progress:
       selector:
         number:
@@ -409,6 +432,22 @@ update_overlay:
       selector:
         number:
           mode: box
+    duration:
+      selector:
+        number:
+          min: 2
+          max: 60
+          unit_of_measurement: s
+    duration_entity:
+      selector:
+        entity:
+          domain:
+            - sensor
+            - number
+            - input_number
+    duration_attribute:
+      selector:
+        text:
     pinned:
       selector:
         boolean:

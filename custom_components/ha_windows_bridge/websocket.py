@@ -79,8 +79,24 @@ def connect(hass, connection, msg):
     if direct != {"overlay.show"}:
         connection.send_error(msg["id"], "protocol_mismatch", "Unsupported Direct capabilities")
         return
-    runtime.attach(connection, lambda command: connection.send_event(msg["id"], command), msg["session"])
-    connection.subscriptions[msg["id"]] = lambda: runtime.detach(connection)
+    runtime.attach(
+        connection, lambda command: connection.send_event(msg["id"], command),
+        msg["session"], capabilities=direct,
+    )
+    def unsubscribe():
+        # HA invokes this while iterating subscriptions on disconnect.
+        if runtime._subscription_cleanup is not remove_subscription:
+            return
+        runtime.set_subscription_cleanup(None)
+        runtime.detach(connection)
+
+    connection.subscriptions[msg["id"]] = unsubscribe
+
+    def remove_subscription():
+        if connection.subscriptions.get(msg["id"]) is unsubscribe:
+            connection.subscriptions.pop(msg["id"], None)
+
+    runtime.set_subscription_cleanup(remove_subscription)
     connection.send_result(msg["id"], {"protocol": 3, "session": msg["session"],
                                        "capabilities": ["overlay.show"]})
 

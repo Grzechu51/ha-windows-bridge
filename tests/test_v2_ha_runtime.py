@@ -1,6 +1,7 @@
 """The real HA runtime exercised with dependency doubles; no HA server on Windows."""
 from __future__ import annotations
 
+import ast
 import asyncio
 import importlib.util
 import json
@@ -23,7 +24,14 @@ def runtime_module(monkeypatch):
     module("homeassistant")
     module("homeassistant.components", mqtt=mqtt)
     module("homeassistant.core", callback=lambda function: function)
-    module("homeassistant.exceptions", HomeAssistantError=RuntimeError)
+    class FakeHAError(RuntimeError):
+        def __init__(self, message, **translation):
+            super().__init__(message)
+            self.translation_key = translation.get("translation_key")
+            self.translation_domain = translation.get("translation_domain")
+
+    module("homeassistant.exceptions", HomeAssistantError=FakeHAError,
+           ServiceValidationError=FakeHAError)
     module("homeassistant.helpers")
     module("homeassistant.helpers.event", async_call_later=lambda hass, delay, function: hass.loop.call_later(delay, function, None).cancel)
     directory = Path(__file__).parents[1] / "custom_components/ha_windows_bridge"
@@ -44,7 +52,7 @@ def runtime_module(monkeypatch):
 
 
 def make_runtime(module, **kwargs):
-    return module.BridgeRuntime(SimpleNamespace(loop=asyncio.get_running_loop()), "pc", {"popup"}, "popup", "pc/overlay", "direct", **kwargs)
+    return module.BridgeRuntime(SimpleNamespace(loop=asyncio.get_running_loop()), "pc", "popup", "pc/overlay", "direct", **kwargs)
 
 
 def protocol(routes):
@@ -59,6 +67,12 @@ def result(command, status="succeeded", *, session=None):
             "status": status, "code": "", "data": {}}
 
 
+async def wait_for_condition(predicate):
+    async with asyncio.timeout(1):
+        while not predicate():
+            await asyncio.sleep(0)
+
+
 def test_direct_ack_is_correlated_and_disconnect_fails_pending(runtime_module):
     async def exercise():
         runtime = make_runtime(runtime_module)
@@ -66,7 +80,7 @@ def test_direct_ack_is_correlated_and_disconnect_fails_pending(runtime_module):
         owner = object()
         runtime.attach(owner, sent.append)
         task = asyncio.create_task(runtime.send("", '{"message":"hello"}', direct=True))
-        await asyncio.sleep(0)
+        await wait_for_condition(lambda: bool(sent))
         command = sent[0]
         assert command["version"] == 3 and command["kind"] == "overlay.show"
         for bad in ({"version": 3, "id": []}, result({**command, "id": "other"}),
@@ -77,7 +91,7 @@ def test_direct_ack_is_correlated_and_disconnect_fails_pending(runtime_module):
         await task
         assert not runtime.pending
         task = asyncio.create_task(runtime.send("", '{}', direct=True))
-        await asyncio.sleep(0)
+        await wait_for_condition(lambda: len(sent) == 2)
         runtime.detach(object())
         assert runtime.available
         runtime.detach(owner)
@@ -97,7 +111,7 @@ def test_notification_lifecycle_uses_separate_bus_and_never_resolves_command_fut
             bus=SimpleNamespace(async_fire=lambda topic, data: events.append((topic, data))),
         )
         runtime = runtime_module.BridgeRuntime(
-            hass, "pc", {"popup"}, "popup", "pc/overlay", "direct",
+            hass, "pc", "popup", "pc/overlay", "direct",
             protocol=protocol({}),
         )
         command = {
@@ -175,7 +189,7 @@ def test_mqtt_computer_uses_direct_for_popup_but_keeps_audio_and_acks_independen
         runtime.attach(owner, direct_sent.append)
         audio = asyncio.create_task(runtime.send("volume", "42"))
         popup = asyncio.create_task(runtime.send("pc/overlay", '{"message":"Direct from MQTT entry"}'))
-        await asyncio.sleep(0)
+        await wait_for_condition(lambda: bool(direct_sent) and runtime_module.mqtt.async_publish.call_count == 1)
         assert direct_sent[0]["kind"] == "overlay.show"
         assert direct_sent[0]["arguments"]["message"] == "Direct from MQTT entry"
         published = runtime_module.mqtt.async_publish.call_args.args
@@ -191,13 +205,80 @@ def test_mqtt_computer_uses_direct_for_popup_but_keeps_audio_and_acks_independen
         assert not runtime.pending and not runtime._direct_pending
         # With Direct gone, future popup commands use MQTT again.
         fallback = asyncio.create_task(runtime.send("pc/overlay", '{"message":"MQTT fallback"}'))
-        await asyncio.sleep(0)
+        await wait_for_condition(lambda: runtime_module.mqtt.async_publish.call_count == 2)
         command = json.loads(runtime_module.mqtt.async_publish.call_args.args[2])
         assert command["kind"] == "overlay.show"
         assert len(direct_sent) == 1
         runtime._result(result(command))
         await fallback
         runtime.close()
+    asyncio.run(exercise())
+
+
+def test_close_settles_pending_send_and_ignores_late_callbacks(runtime_module):
+    async def exercise():
+        runtime = make_runtime(runtime_module, protocol=protocol({
+            "volume": {"kind": "audio.master.volume", "parser": "volume"}}))
+        runtime.overlay_event_type = ""
+        await runtime.start()
+        task = asyncio.create_task(runtime.send("volume", "42"))
+        await wait_for_condition(lambda: runtime_module.mqtt.async_publish.call_args is not None)
+        command = json.loads(runtime_module.mqtt.async_publish.call_args.args[2])
+        runtime.close()
+        with pytest.raises(RuntimeError, match="unload"):
+            await task
+        assert runtime._closed and not runtime.pending
+        assert not runtime._direct_pending
+        runtime._mqtt_result(SimpleNamespace(retain=False, payload=json.dumps(result(command))))
+        runtime._mqtt_capabilities(SimpleNamespace(payload=runtime_module.CapabilitiesMessage(
+            "capabilities-new", "new-session", "pc", 2, ()).encode(), retain=True))
+        assert runtime.protocol["session"] == "mqtt-session"
+        assert runtime.capabilities is None
+        runtime.close()
+        with pytest.raises(RuntimeError, match="unload"):
+            await runtime.send("volume", "42")
+
+    asyncio.run(exercise())
+
+
+def test_close_before_owned_command_starts_returns_unload_error(runtime_module):
+    async def exercise():
+        runtime = make_runtime(runtime_module)
+        runtime.attach(object(), lambda command: None)
+        caller = asyncio.create_task(runtime.send("", "{}", direct=True))
+        await asyncio.sleep(0)
+        assert runtime._send_tasks
+        await runtime.async_close()
+        assert not runtime._send_tasks
+        with pytest.raises(RuntimeError, match="unload"):
+            await caller
+
+    asyncio.run(exercise())
+
+
+def test_close_interrupts_blocked_publish_and_does_not_mutate_entry_protocol(runtime_module):
+    async def exercise():
+        data = protocol({"volume": {"kind": "audio.master.volume", "parser": "volume"}})
+        runtime = make_runtime(runtime_module, protocol=data)
+        runtime.overlay_event_type = ""
+        started = asyncio.Event()
+
+        async def publish(*_args, **_kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        runtime_module.mqtt.async_publish.side_effect = publish
+        task = asyncio.create_task(runtime.send("volume", "42"))
+        await started.wait()
+        await runtime.async_close()
+        with pytest.raises(RuntimeError, match="unload"):
+            await task
+        assert not runtime.pending and not runtime._send_tasks
+        assert data["session"] == "mqtt-session"
+        runtime._mqtt_capabilities(SimpleNamespace(payload=runtime_module.CapabilitiesMessage(
+            "capabilities-new", "new-session", "pc", 2, ()).encode(), retain=True))
+        assert data["session"] == "mqtt-session"
+
     asyncio.run(exercise())
 
 
@@ -266,7 +347,7 @@ def test_p2_r11_mqtt_result_uses_shared_utf8_byte_limit(runtime_module):
             "device_id": "pc",
             "status": "succeeded",
             "code": "",
-            "data": {"text": "ą" * 4600},
+            "data": {"text": "\u0105" * 4600},
         }
         encoded_large = json.dumps(
             large, ensure_ascii=False, separators=(",", ":")
@@ -289,4 +370,86 @@ def test_p2_r11_mqtt_result_uses_shared_utf8_byte_limit(runtime_module):
         assert boundary_future.done()
         runtime.close()
 
+    asyncio.run(exercise())
+
+
+
+def test_websocket_subscription_removed_on_expiry_detach_and_close(runtime_module):
+    path = Path(__file__).parents[1] / "custom_components/ha_windows_bridge/websocket.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    node = next(item for item in tree.body if getattr(item, "name", None) == "connect")
+    node.decorator_list = []
+    namespace = {
+        "authorized_runtime": lambda *args: runtime,
+        "Capability": SimpleNamespace(from_dict=lambda data: SimpleNamespace(
+            name=data["name"], transports=data["transports"])),
+        "ProtocolError": ValueError,
+    }
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), namespace)  # noqa: S102
+
+    async def exercise():
+        nonlocal runtime
+        runtime = make_runtime(runtime_module)
+        connection = SimpleNamespace(
+            subscriptions={7: lambda: None},
+            send_result=lambda *args: None,
+            send_error=lambda *args: None,
+            send_event=lambda *args: None,
+        )
+        msg = {"id": 8, "device_id": "pc", "session": "session-1",
+               "capabilities": [{"name": "overlay.show", "transports": ["direct"]}]}
+        namespace["connect"](runtime.hass, connection, msg)
+        assert 8 in connection.subscriptions and 7 in connection.subscriptions
+        assert runtime._direct_capabilities == {"overlay.show"}
+        runtime._expired(None)
+        assert 8 not in connection.subscriptions and 7 in connection.subscriptions
+        assert not runtime._direct_capabilities
+        namespace["connect"](runtime.hass, connection, msg)
+        connection.subscriptions.pop(8)()
+        assert 8 not in connection.subscriptions and 7 in connection.subscriptions
+        assert not runtime._direct_capabilities
+        namespace["connect"](runtime.hass, connection, msg)
+        runtime.close()
+        assert 8 not in connection.subscriptions and 7 in connection.subscriptions
+        assert not runtime._direct_capabilities
+        runtime = make_runtime(runtime_module)
+        namespace["connect"](runtime.hass, connection, msg)
+        # HA closes connections by iterating subscription values before clearing.
+        for callback in connection.subscriptions.values():
+            callback()
+        connection.subscriptions.clear()
+        assert runtime.owner is None and not runtime.available
+        assert not runtime._direct_capabilities
+        runtime.close()
+
+    runtime = None
+    asyncio.run(exercise())
+
+
+def test_mqtt_v2_and_direct_v3_acks_stay_on_their_own_transport(runtime_module):
+    async def exercise():
+        runtime = make_runtime(runtime_module, protocol={
+            "version": 2, "command_topic": "v2/command", "result_topic": "v2/result",
+            "routes": {"pc/volume": {"kind": "audio.master.volume", "parser": "volume"}},
+        })
+        sent_direct = []
+        runtime.attach(object(), sent_direct.append)
+        direct_task = asyncio.create_task(runtime.send("", '{"message":"hello"}', direct=True))
+        await wait_for_condition(lambda: bool(sent_direct))
+        direct_command = sent_direct[0]
+        assert direct_command["version"] == 3
+        runtime._result({"version": 2, "id": direct_command["id"], "status": "succeeded"})
+        assert not direct_task.done()
+        runtime._result(result(direct_command), direct=True)
+        await direct_task
+
+        mqtt_task = asyncio.create_task(runtime.send("pc/volume", "42"))
+        await wait_for_condition(lambda: runtime_module.mqtt.async_publish.call_count == 1)
+        encoded = runtime_module.mqtt.async_publish.call_args.args[2]
+        mqtt_command = json.loads(encoded)
+        assert mqtt_command["version"] == 2
+        runtime._result({"version": 2, "id": mqtt_command["id"], "status": "succeeded"})
+        await mqtt_task
+        assert not runtime.pending
+        await runtime.async_close()
     asyncio.run(exercise())

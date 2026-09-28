@@ -33,6 +33,9 @@ def service_harness(*, denied: str = ""):
         "math": math,
         "DOMAIN": "ha_windows_bridge",
         "HomeAssistantError": RuntimeError,
+        "Platform": SimpleNamespace(NOTIFY=SimpleNamespace(value="notify")),
+        "failed": lambda _key, message, **_placeholders: RuntimeError(message),
+        "invalid": lambda _key, message, **_placeholders: RuntimeError(message),
         "POLICY_READ": "read",
         "POLICY_CONTROL": "control",
         "er": SimpleNamespace(async_get=lambda hass: hass.registry),
@@ -66,7 +69,8 @@ def service_harness(*, denied: str = ""):
         },
         registry=SimpleNamespace(
             async_get=lambda entity_id: SimpleNamespace(
-                config_entry_id="pc", unique_id="pc_overlay"
+                config_entry_id="pc", unique_id="pc_overlay", domain="notify",
+                platform="ha_windows_bridge", disabled_by=None,
             )
         ),
         auth=SimpleNamespace(

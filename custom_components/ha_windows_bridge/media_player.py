@@ -82,8 +82,7 @@ class HAWindowsAppVolumePlayer(BridgeMqttEntity, MediaPlayerEntity):
             self.async_on_remove(await mqtt.async_subscribe(
                 self.hass, self._mute_state_topic, self._mute_received, qos=1))
         except BaseException:
-            # HA logs add failures but does not automatically abort this entity.
-            self.add_to_platform_abort()
+            self._abort_failed_setup()
             raise
 
     @callback
@@ -181,8 +180,11 @@ class HAWindowsMediaPlayer(MediaPlayerEntity):
                     self.hass, self._thumbnail_topic, self._thumbnail_received, qos=1))
             self._update_availability()
         except BaseException:
-            # HA logs add failures but does not automatically abort this entity.
+            self._entry.runtime_data.setup_failed = True
+            hass, entity_id = self.hass, self.entity_id
             self.add_to_platform_abort()
+            if entity_id and hass.states.get(entity_id) is None:
+                hass.states.async_remove(entity_id)
             raise
 
     @callback

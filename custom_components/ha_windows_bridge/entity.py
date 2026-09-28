@@ -62,35 +62,50 @@ class BridgeMqttEntity:
         self._mqtt_connected = False
         self._attr_available = False
 
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        self._mqtt_connected = mqtt.is_connected(self.hass)
-        self.async_on_remove(
-            mqtt.async_subscribe_connection_status(
-                self.hass,
-                self._mqtt_connection_received,
-            )
-        )
-        if self._availability_topic:
-            self.async_on_remove(
-                await mqtt.async_subscribe(
-                    self.hass,
-                    self._availability_topic,
-                    self._availability_received,
-                    qos=1,
-                )
-            )
-        if self._state_topic:
-            self.async_on_remove(
-                await mqtt.async_subscribe(
-                    self.hass,
-                    self._state_topic,
-                    self._state_received,
-                    qos=1,
-                )
-            )
+    def _abort_failed_setup(self) -> None:
+        """Report an entity-add error HA otherwise only logs and clean up hooks."""
+        self._entry.runtime_data.setup_failed = True
+        if not getattr(self, "_bridge_setup_aborted", False):
+            self._bridge_setup_aborted = True
+            hass, entity_id = self.hass, self.entity_id
+            self.add_to_platform_abort()
+            # HA reserves the ID before async_added_to_hass; abort does not
+            # release that reservation, which would block a clean retry.
+            if entity_id and hass.states.get(entity_id) is None:
+                hass.states.async_remove(entity_id)
 
-        self._update_availability()
+    async def async_added_to_hass(self) -> None:
+        try:
+            await super().async_added_to_hass()
+            self._mqtt_connected = mqtt.is_connected(self.hass)
+            self.async_on_remove(
+                mqtt.async_subscribe_connection_status(
+                    self.hass,
+                    self._mqtt_connection_received,
+                )
+            )
+            if self._availability_topic:
+                self.async_on_remove(
+                    await mqtt.async_subscribe(
+                        self.hass,
+                        self._availability_topic,
+                        self._availability_received,
+                        qos=1,
+                    )
+                )
+            if self._state_topic:
+                self.async_on_remove(
+                    await mqtt.async_subscribe(
+                        self.hass,
+                        self._state_topic,
+                        self._state_received,
+                        qos=1,
+                    )
+                )
+            self._update_availability()
+        except BaseException:
+            self._abort_failed_setup()
+            raise
 
     @callback
     def _availability_received(self, message: ReceiveMessage) -> None:

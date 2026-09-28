@@ -31,7 +31,7 @@ def test_diagnostics_does_not_export_identities_topics_or_payloads():
         "device_id": "secret-device", "token": "secret-token", "transport": "mqtt", "media_player": {"enabled": True},
         "entities": [{"platform": "sensor", "state_topic": "secret-topic", "name": "secret-name"}, {"platform": "secret-platform"}],
     })
-    entry.runtime_data = SimpleNamespace(pending={})
+    entry.runtime_data = SimpleNamespace(pending={}, notification_lifecycle=[])
     report = asyncio.run(diagnostic(SimpleNamespace(), entry))
     assert report["entity_counts"] == {"sensor": 1}
     assert report["runtime_loaded"]
@@ -101,13 +101,151 @@ def test_entity_registers_cleanup_before_later_subscription_fails():
         def async_on_remove(self, callback):
             self.cleanup.append(callback)
 
+        def add_to_platform_abort(self):
+            for callback in self.cleanup:
+                callback()
+            self.cleanup.clear()
+
     class Entity(mixin, EntityBase):
         pass
 
-    entity = Entity(SimpleNamespace(), {"unique_id": "same-id", "name": "Name", "availability_topic": "availability", "state_topic": "state"})
-    entity.hass = object()
+    runtime = SimpleNamespace(setup_failed=False)
+    entity = Entity(SimpleNamespace(runtime_data=runtime), {"unique_id": "same-id", "name": "Name", "availability_topic": "availability", "state_topic": "state"})
+    released = []
+    entity.entity_id = "sensor.name"
+    entity.hass = SimpleNamespace(states=SimpleNamespace(
+        get=lambda entity_id: None, async_remove=released.append))
     with pytest.raises(OSError, match="broker disconnected"):
         asyncio.run(entity.async_added_to_hass())
     for cleanup in entity.cleanup:
         cleanup()
     assert removed == ["connection", "availability"]
+    assert released == ["sensor.name"]
+    assert runtime.setup_failed
+
+
+
+def _setup_namespace(*, fail_forward=False, unload_ok=True, platform_failure=False):
+    events = []
+    registered = SimpleNamespace(entity_id="sensor.custom_name", unique_id="old-capability")
+    registry = SimpleNamespace(
+        async_remove=lambda entity_id: events.append(("remove", entity_id)),
+        async_get_entity_id=lambda platform, domain, unique_id:
+            "notify.popup" if (platform, unique_id) == ("notify", "popup") else None,
+        async_get=lambda entity_id: SimpleNamespace(
+            config_entry_id="entry", disabled_by=None) if entity_id == "notify.popup" else None,
+    )
+    class Runtime:
+        def __init__(self, **kwargs):
+            self.protocol = kwargs["protocol"]
+            self._closed = False
+            self.setup_failed = False
+            events.append(("runtime", self))
+        async def start(self):
+            events.append(("start", self))
+        def close(self):
+            if not self._closed:
+                self._closed = True
+                events.append(("close", self))
+        async def async_close(self):
+            self.close()
+    async def forward(entry, platforms):
+        events.append(("forward", tuple(platforms)))
+        if fail_forward:
+            raise OSError("platform forwarding failed")
+    async def unload(entry, platforms):
+        events.append(("unload", tuple(platforms)))
+        return unload_ok
+    class FakeNotReady(RuntimeError):
+        def __init__(self, message, **translation):
+            super().__init__(message)
+            self.translation_key = translation.get("translation_key")
+
+    namespace = {
+        "HomeAssistant": object, "ConfigEntry": object,
+        "CONF_TRANSPORT": "transport", "TRANSPORT_DIRECT": "direct",
+        "CONF_ENTITIES": "entities", "CONF_MEDIA_PLAYER": "media_player",
+        "CONF_DEVICE_ID": "device_id", "PLATFORMS": ["sensor", "notify"],
+        "DOMAIN": "ha_windows_bridge", "ConfigEntryNotReady": FakeNotReady,
+        "Platform": SimpleNamespace(NOTIFY=SimpleNamespace(value="notify")),
+        "er": SimpleNamespace(async_get=lambda hass: registry,
+                              async_entries_for_config_entry=lambda registry, entry_id: [registered]),
+        "entity_platform": SimpleNamespace(async_get_platforms=lambda hass, domain: platforms),
+        "BridgeRuntime": Runtime,
+        "direct_overlay_event": lambda device: "direct-event",
+        "async_prepare_migration": lambda hass, entry: asyncio.sleep(0),
+        "async_finish_migration": lambda hass, entry: asyncio.sleep(0),
+        "migration_conflict": lambda hass, entry: None,
+        "migration_cleanup_pending": lambda hass, entry: None,
+        "clear_migration_conflict": lambda hass, entry: None,
+        "clear_migration_issues": lambda hass, entry: None,
+        "_LOGGER": SimpleNamespace(exception=lambda *args: None),
+    }
+    entry = SimpleNamespace(
+        data={"transport": "direct", "device_id": "pc",
+              "entities": [{"platform": "notify", "unique_id": "popup",
+                            "command_topic": "direct://pc"}],
+              "protocol": {"session": "initial"}},
+        entry_id="entry", runtime_data=None,
+        async_on_unload=lambda callback: events.append(("on_unload", callback)),
+    )
+    async def destroy(platform):
+        events.append(("destroy", platform.domain))
+    platforms = [
+        SimpleNamespace(config_entry=entry, domain="sensor", _setup_complete=True,
+                        entities={}, async_destroy=lambda: destroy(platforms[0])),
+        SimpleNamespace(config_entry=entry, domain="notify",
+                        _setup_complete=not platform_failure,
+                        entities={"notify.popup": object()} if not platform_failure else {},
+                        async_destroy=lambda: destroy(platforms[1])),
+    ]
+    hass = SimpleNamespace(config_entries=SimpleNamespace(
+        async_forward_entry_setups=forward, async_unload_platforms=unload))
+    return namespace, hass, entry, events
+
+
+def test_failed_platform_forward_unloads_partial_platforms_and_clears_runtime():
+    namespace, hass, entry, events = _setup_namespace(fail_forward=True)
+    for name in ("_entry_platforms", "_forwarded_entities_ready", "_async_rollback_platforms"):
+        load_function("__init__.py", name, namespace)
+    setup = load_function("__init__.py", "async_setup_entry", namespace)
+    with pytest.raises(OSError, match="platform forwarding failed"):
+        asyncio.run(setup(hass, entry))
+    assert [event[0] for event in events] == [
+        "runtime", "start", "forward", "unload", "destroy", "destroy", "close"]
+    assert entry.runtime_data is None
+    assert not any(event[0] == "remove" for event in events)
+
+
+def test_unload_clears_runtime_only_after_platform_cleanup():
+    namespace, hass, entry, events = _setup_namespace(unload_ok=False)
+    for name in ("_entry_platforms", "_forwarded_entities_ready", "_async_rollback_platforms"):
+        load_function("__init__.py", name, namespace)
+    setup = load_function("__init__.py", "async_setup_entry", namespace)
+    unload = load_function("__init__.py", "async_unload_entry", namespace)
+    async def exercise():
+        assert await setup(hass, entry)
+        runtime = entry.runtime_data
+        assert not await unload(hass, entry)
+        assert entry.runtime_data is runtime and not runtime._closed
+        hass.config_entries.async_unload_platforms = async_success
+        assert await unload(hass, entry)
+        assert entry.runtime_data is None and runtime._closed
+    async def async_success(entry, platforms):
+        return True
+    asyncio.run(exercise())
+    assert not any(event[0] == "remove" for event in events)
+
+
+
+def test_swallowed_platform_failure_destroys_failed_platform_and_unloads_loaded_one():
+    namespace, hass, entry, events = _setup_namespace(platform_failure=True)
+    for name in ("_entry_platforms", "_forwarded_entities_ready", "_async_rollback_platforms"):
+        load_function("__init__.py", name, namespace)
+    setup = load_function("__init__.py", "async_setup_entry", namespace)
+    with pytest.raises(RuntimeError, match="entity setup did not complete"):
+        asyncio.run(setup(hass, entry))
+    assert [event[0] for event in events] == [
+        "runtime", "start", "forward", "unload", "destroy", "destroy", "close"]
+    assert next(event[1] for event in events if event[0] == "unload") == ("sensor", "notify")
+    assert entry.runtime_data is None

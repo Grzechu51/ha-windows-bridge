@@ -17,12 +17,13 @@ from .const import (
     DOMAIN,
     TRANSPORT_DIRECT,
 )
+from .migration import canonical_direct_entities, direct_in_place_journal
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle MQTT discovery for HA Windows Bridge."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}
@@ -47,10 +48,41 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             "protocol": payload.get("protocol", {}),
         }
         await self.async_set_unique_id(device_id)
-        self._abort_if_unique_id_configured(
-            updates=self._data,
-            reload_on_update=True,
-        )
+        configured = [entry for entry in self.hass.config_entries.async_entries(DOMAIN)
+                      if entry.data.get(CONF_DEVICE_ID) == device_id]
+        canonical = next((entry for entry in configured if entry.unique_id == device_id), None)
+        # An old Direct-only entry becomes the MQTT owner in place. Its old popup
+        # remains registered until the new canonical popup is live.
+        if canonical is None and len(configured) == 1 and configured[0].data.get(CONF_TRANSPORT) == TRANSPORT_DIRECT:
+            canonical = configured[0]
+            self._data["migration_journal"] = direct_in_place_journal(self.hass, canonical)
+            self._data["direct_popup_enabled"] = True
+            self._data[CONF_DEVICE] = {**device, "name": canonical.data[CONF_DEVICE]["name"]}
+        elif canonical:
+            if "migration_journal" in canonical.data:
+                self._data["migration_journal"] = canonical.data["migration_journal"]
+            if canonical.data.get("direct_popup_enabled"):
+                self._data["direct_popup_enabled"] = True
+        if not any(item.get("platform") == "notify" and
+                   item.get("unique_id") == f"{device_id}_windows_overlay"
+                   for item in self._data[CONF_ENTITIES]):
+            has_direct_fallback = any(
+                entry.data.get(CONF_TRANSPORT) == TRANSPORT_DIRECT
+                or entry.data.get("direct_popup_enabled") or any(
+                    item.get("platform") == "notify" and
+                    str(item.get("command_topic", "")).startswith("direct://")
+                    for item in entry.data.get(CONF_ENTITIES, ()))
+                for entry in configured)
+            if has_direct_fallback:
+                self._data[CONF_ENTITIES] = [*self._data[CONF_ENTITIES],
+                                             *canonical_direct_entities(device_id)]
+        if canonical:
+            self.hass.config_entries.async_update_entry(
+                canonical, data=self._data, unique_id=device_id,
+                title=canonical.title if canonical.data.get(CONF_TRANSPORT) == TRANSPORT_DIRECT else self._title,
+                version=self.VERSION)
+            await self.hass.config_entries.async_reload(canonical.entry_id)
+            return self.async_abort(reason="already_configured")
         if not entities and not media_player.get("enabled", False):
             return self.async_abort(reason="no_entities")
 
@@ -103,8 +135,25 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
         device_id = str(user_input[CONF_DEVICE_ID]).strip()
         name = str(user_input["name"]).strip() or "Windows PC"
-        await self.async_set_unique_id(f"{device_id}_direct")
-        self._abort_if_unique_id_configured()
+        await self.async_set_unique_id(device_id)
+        configured = [entry for entry in self.hass.config_entries.async_entries(DOMAIN)
+                      if entry.data.get(CONF_DEVICE_ID) == device_id]
+        if len(configured) == 1 and configured[0].unique_id == device_id:
+            existing = configured[0]
+            has_popup = any(item.get("platform") == "notify" and
+                            item.get("unique_id") == f"{device_id}_windows_overlay"
+                            for item in existing.data.get(CONF_ENTITIES, ()))
+            if not existing.data.get("direct_popup_enabled") or not has_popup:
+                data = {**existing.data, "direct_popup_enabled": True}
+                if not has_popup:
+                    data[CONF_ENTITIES] = [*existing.data.get(CONF_ENTITIES, ()),
+                                           *canonical_direct_entities(device_id)]
+                self.hass.config_entries.async_update_entry(existing, data=data)
+                if not has_popup:
+                    await self.hass.config_entries.async_reload(existing.entry_id)
+            return self.async_abort(reason="already_configured")
+        if configured:
+            return self.async_abort(reason="already_configured")
         return self.async_create_entry(
             title=name,
             data={
@@ -116,14 +165,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "model": "Direct overlay bridge",
                     "sw_version": "",
                 },
-                CONF_ENTITIES: [
-                    {
-                        "platform": "notify",
-                        "unique_id": f"{device_id}_overlay",
-                        "name": "Overlay",
-                        "command_topic": f"direct://{device_id}/overlay",
-                    }
-                ],
+                CONF_ENTITIES: canonical_direct_entities(device_id),
                 CONF_MEDIA_PLAYER: {"enabled": False},
+                "direct_popup_enabled": True,
             },
         )

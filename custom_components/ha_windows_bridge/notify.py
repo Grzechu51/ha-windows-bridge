@@ -6,11 +6,11 @@ from typing import Any
 from homeassistant.components.notify import NotifyEntity, NotifyEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_DEVICE_ID, CONF_TRANSPORT, TRANSPORT_DIRECT, direct_overlay_event
+from .const import CONF_DEVICE_ID, direct_overlay_event
 from .entity import BridgeMqttEntity, bridge_device_info, entity_definitions
+from .errors import invalid
 
 MAX_NOTIFICATION_TITLE = 128
 MAX_NOTIFICATION_MESSAGE = 2048
@@ -21,8 +21,11 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    entity_type = BridgeDirectNotify if entry.data.get(CONF_TRANSPORT) == TRANSPORT_DIRECT else BridgeWindowsNotify
-    async_add_entities([entity_type(entry, definition) for definition in entity_definitions(entry, "notify")])
+    async_add_entities([
+        (BridgeDirectNotify if str(definition.get("command_topic", "")).startswith("direct://")
+         else BridgeWindowsNotify)(entry, definition)
+        for definition in entity_definitions(entry, "notify")
+    ])
 
 
 class BridgeDirectNotify(NotifyEntity):
@@ -39,10 +42,18 @@ class BridgeDirectNotify(NotifyEntity):
         self._event_type = direct_overlay_event(str(entry.data[CONF_DEVICE_ID]))
 
     async def async_added_to_hass(self):
-        await super().async_added_to_hass()
-        runtime = self._entry.runtime_data
-        runtime.listeners.add(self.async_write_ha_state)
-        self.async_on_remove(lambda: runtime.listeners.discard(self.async_write_ha_state))
+        try:
+            await super().async_added_to_hass()
+            runtime = self._entry.runtime_data
+            runtime.listeners.add(self.async_write_ha_state)
+            self.async_on_remove(lambda: runtime.listeners.discard(self.async_write_ha_state))
+        except BaseException:
+            self._entry.runtime_data.setup_failed = True
+            hass, entity_id = self.hass, self.entity_id
+            self.add_to_platform_abort()
+            if entity_id and hass.states.get(entity_id) is None:
+                hass.states.async_remove(entity_id)
+            raise
 
     @property
     def available(self):
@@ -52,9 +63,9 @@ class BridgeDirectNotify(NotifyEntity):
         clean_message = message.strip()
         clean_title = (title or "Home Assistant").strip()
         if not clean_message:
-            raise HomeAssistantError("Notification message cannot be empty")
+            raise invalid("notification_empty", "Notification message cannot be empty")
         if len(clean_message) > MAX_NOTIFICATION_MESSAGE or len(clean_title) > MAX_NOTIFICATION_TITLE:
-            raise HomeAssistantError("Notification content is too long")
+            raise invalid("notification_too_long", "Notification content is too long")
         await self._entry.runtime_data.send(
             "", json.dumps({"title": clean_title, "message": clean_message, "data": {}}), direct=True,
         )
@@ -68,10 +79,14 @@ class BridgeWindowsNotify(BridgeMqttEntity, NotifyEntity):
         self._command_topic = str(definition["command_topic"])
 
     async def async_added_to_hass(self):
-        await super().async_added_to_hass()
-        runtime = self._entry.runtime_data
-        runtime.listeners.add(self._update_availability)
-        self.async_on_remove(lambda: runtime.listeners.discard(self._update_availability))
+        try:
+            await super().async_added_to_hass()
+            runtime = self._entry.runtime_data
+            runtime.listeners.add(self._update_availability)
+            self.async_on_remove(lambda: runtime.listeners.discard(self._update_availability))
+        except BaseException:
+            self._abort_failed_setup()
+            raise
 
     @callback
     def _update_availability(self):
@@ -86,11 +101,11 @@ class BridgeWindowsNotify(BridgeMqttEntity, NotifyEntity):
         clean_message = message.strip()
         clean_title = (title or "Home Assistant").strip()
         if not clean_message:
-            raise HomeAssistantError("Notification message cannot be empty")
+            raise invalid("notification_empty", "Notification message cannot be empty")
         if len(clean_message) > MAX_NOTIFICATION_MESSAGE:
-            raise HomeAssistantError("Notification message is too long")
+            raise invalid("notification_too_long", "Notification message is too long")
         if len(clean_title) > MAX_NOTIFICATION_TITLE:
-            raise HomeAssistantError("Notification title is too long")
+            raise invalid("notification_title_too_long", "Notification title is too long")
         await self._async_publish(
             self._command_topic,
             json.dumps(

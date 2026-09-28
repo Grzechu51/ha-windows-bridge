@@ -161,6 +161,14 @@
         "close_on_click": {"name": "Close on card click"},
         "pause_on_hover": {"name": "Pause while hovered"},
         "show_lifetime": {"name": "Lifetime bar"}
+      ,
+        "image": {"name": "Image"},
+        "qr": {"name": "QR code"},
+        "duration": {"name": "Display duration"},
+        "duration_entity": {"name": "Duration entity"},
+        "duration_attribute": {"name": "Duration attribute"},
+        "corner": {"name": "Screen position"},
+        "monitor": {"name": "Monitor"}
       }
     },
     "remove_overlay": {
@@ -171,6 +179,135 @@
     "clear_overlay": {
       "name": "Clear Windows overlays",
       "description": "Closes all current and queued Windows overlay cards."
+    }
+  },
+  "exceptions": {
+    "not_authorized_control": {
+      "message": "You are not allowed to control this overlay."
+    },
+    "popup_required": {
+      "message": "Select an enabled HA Windows Bridge popup entity."
+    },
+    "number_must_be_finite": {
+      "message": "{field} must be a finite number."
+    },
+    "not_authorized_read_source": {
+      "message": "You are not allowed to read the source entity."
+    },
+    "source_unavailable": {
+      "message": "The source entity is unavailable."
+    },
+    "source_not_numeric": {
+      "message": "The source entity does not contain a numeric value."
+    },
+    "progress_range_invalid": {
+      "message": "The progress range must be finite, with the maximum greater than the minimum."
+    },
+    "camera_or_image_required": {
+      "message": "Select a camera or image entity."
+    },
+    "not_authorized_image": {
+      "message": "You are not allowed to read the selected image entity."
+    },
+    "image_entity_unsupported": {
+      "message": "The selected camera or image entity did not return a supported image."
+    },
+    "image_url_unsupported": {
+      "message": "The image URL did not return a supported image."
+    },
+    "media_player_required": {
+      "message": "Select a media player entity."
+    },
+    "not_authorized_media_player": {
+      "message": "You are not allowed to read the selected media player."
+    },
+    "media_player_unavailable": {
+      "message": "The selected media player is unavailable."
+    },
+    "content_required": {
+      "message": "Provide content, select a Home Assistant media player, or enable current Windows media."
+    },
+    "payload_too_large": {
+      "message": "The overlay payload is too large."
+    },
+    "targets_unconfirmed": {
+      "message": "{count} Windows Bridge target(s) did not confirm the command."
+    },
+    "notification_empty": {
+      "message": "The notification message cannot be empty."
+    },
+    "notification_too_long": {
+      "message": "The notification content is too long."
+    },
+    "notification_title_too_long": {
+      "message": "The notification title is too long."
+    },
+    "invalid_legacy_payload": {
+      "message": "The legacy command payload is invalid."
+    },
+    "bridge_busy": {
+      "message": "The Windows Bridge is already connected or unloading."
+    },
+    "bridge_unloading": {
+      "message": "The Windows Bridge integration is unloading."
+    },
+    "bridge_unloaded": {
+      "message": "The Windows Bridge integration has unloaded."
+    },
+    "command_too_large": {
+      "message": "The command exceeds the size limit."
+    },
+    "too_many_pending": {
+      "message": "Too many Windows Bridge commands are pending."
+    },
+    "bridge_offline": {
+      "message": "The Windows Bridge is offline."
+    },
+    "command_not_allowed": {
+      "message": "This command is not allowed by the Windows Bridge."
+    },
+    "command_rejected": {
+      "message": "The Windows Bridge rejected or failed the command."
+    },
+    "command_timeout": {
+      "message": "The Windows Bridge did not acknowledge the command in time."
+    },
+    "bridge_disconnected": {
+      "message": "The Windows Bridge disconnected."
+    },
+    "capability_unavailable": {
+      "message": "This capability is unavailable on the selected transport."
+    },
+    "invalid_protocol_session": {
+      "message": "The Windows Bridge protocol session is invalid."
+    },
+    "invalid_command_content": {
+      "message": "The command content is invalid."
+    },
+    "session_changed": {
+      "message": "The Windows Bridge session changed."
+    },
+    "mqtt_required": {
+      "message": "Configure and enable the Home Assistant MQTT integration first."
+    },
+    "entity_setup_failed": {
+      "message": "Windows Bridge entity setup did not complete."
+    },
+    "migration_conflict": {
+      "message": "Windows Bridge identity migration needs manual review."
+    },
+    "migration_cleanup_pending": {
+      "message": "Windows Bridge identity cleanup is pending; reload the entry to retry."
+    }
+  },
+  "issues": {
+    "migration_conflict": {
+      "title": "{name}: Windows Bridge identity migration needs review",
+      "description": "Multiple legacy Direct endpoints or unexpected registry records prevent safe consolidation. Review duplicate bridge entries and registry ownership, then reload this integration. Automatic cleanup has paused pending review."
+    },
+    "migration_cleanup_pending": {
+      "title": "{name}: Windows Bridge legacy cleanup is incomplete",
+      "description": "The canonical bridge is working, but removal of the old Direct entry or its records did not finish. Reload this integration to retry cleanup. If the issue returns, review the Home Assistant log before removing entries manually."
     }
   }
 }
