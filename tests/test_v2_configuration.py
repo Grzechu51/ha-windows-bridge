@@ -43,3 +43,23 @@ def test_strict_v2_configuration_rejects_ambiguous_or_secret_values(value):
 def test_bad_credentials_are_reported_instead_of_silently_cleared():
     with pytest.raises(ValueError, match="odszyfrować"):
         SecretStore(TestCipher()).unseal("YmFk")
+
+
+def test_partial_profile_never_uses_or_overwrites_an_uncommitted_temp_file(tmp_path):
+    store = ConfigurationStore(SecretStore(TestCipher()), tmp_path)
+    store.save(AppConfig(theme="dark"))
+    committed = store.config_path.read_bytes()
+    temporary = store.config_path.with_suffix(".json.tmp")
+
+    temporary.write_bytes(b'{"format": 2, "settings":')
+    assert store.load().theme == "dark"
+    assert store.config_path.read_bytes() == committed
+    assert temporary.exists()
+
+    store.config_path.write_bytes(b'{"format": 2, "settings":')
+    damaged = store.config_path.read_bytes()
+    temporary.write_bytes(committed)
+    with pytest.raises(ValueError):
+        store.load()
+    assert store.config_path.read_bytes() == damaged
+    assert temporary.read_bytes() == committed

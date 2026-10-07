@@ -136,9 +136,34 @@ if ($UnexpectedRuntimeFiles.Count -gt 0) {
     throw "Unexpected system/runtime DLLs were bundled: $($UnexpectedRuntimeFiles.FullName -join ', ')."
 }
 
-$SmokeTest = Start-Process -FilePath $BuiltExe -ArgumentList "--smoke-test" -Wait -PassThru -WindowStyle Hidden
-if ($SmokeTest.ExitCode -ne 0) {
-    throw "Packaged application smoke test failed (exit code $($SmokeTest.ExitCode))."
+$SmokeRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+$SmokeDirectory = [System.IO.Path]::GetFullPath((Join-Path $SmokeRoot ("hawb-smoke-" + [System.Guid]::NewGuid().ToString("N"))))
+if (-not $SmokeDirectory.StartsWith($SmokeRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to use a smoke directory outside the temp root: $SmokeDirectory"
+}
+$OriginalPythonPath = $env:PYTHONPATH
+$OriginalPythonHome = $env:PYTHONHOME
+$SmokeTest = $null
+try {
+    [System.IO.Directory]::CreateDirectory($SmokeDirectory) | Out-Null
+    Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+    Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue
+    $SmokeTest = Start-Process -FilePath $BuiltExe -ArgumentList "--smoke-test" -WorkingDirectory $SmokeDirectory -PassThru -WindowStyle Hidden
+    if (-not $SmokeTest.WaitForExit(30000)) {
+        Stop-Process -Id $SmokeTest.Id -Force -ErrorAction SilentlyContinue
+        throw "Packaged application smoke test timed out after 30 seconds."
+    }
+    if ($SmokeTest.ExitCode -ne 0) {
+        throw "Packaged application smoke test failed (exit code $($SmokeTest.ExitCode))."
+    }
+}
+finally {
+    if ($SmokeTest) { $SmokeTest.Dispose() }
+    $env:PYTHONPATH = $OriginalPythonPath
+    $env:PYTHONHOME = $OriginalPythonHome
+    if (Test-Path -LiteralPath $SmokeDirectory) {
+        Remove-Item -LiteralPath $SmokeDirectory -Recurse -Force
+    }
 }
 $BuiltVersion = (Get-Item -LiteralPath $BuiltExe).VersionInfo.ProductVersion.Trim()
 if ($BuiltVersion -ne $AppVersion) {
@@ -152,7 +177,20 @@ Invoke-CodeSigning -Path $BuiltExe
 
 $AppDist = Join-Path $ProjectRoot "dist\HA Windows Bridge"
 Copy-Item -LiteralPath (Join-Path $ProjectRoot "LICENSE") -Destination (Join-Path $AppDist "LICENSE") -Force
-Copy-Item -LiteralPath (Join-Path $ProjectRoot "docs\V2_QUICKSTART.md") -Destination (Join-Path $AppDist "START.md") -Force
+$DocsSource = [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot "docs"))
+$DocsDestination = Join-Path $AppDist "docs"
+Get-ChildItem -LiteralPath $DocsSource -Recurse -File -Filter "*.md" | ForEach-Object {
+    $RelativePath = $_.FullName.Substring($DocsSource.Length).TrimStart('\')
+    $Destination = Join-Path $DocsDestination $RelativePath
+    [System.IO.Directory]::CreateDirectory((Split-Path -Parent $Destination)) | Out-Null
+    Copy-Item -LiteralPath $_.FullName -Destination $Destination -Force
+}
+[System.IO.File]::WriteAllLines(
+    (Join-Path $AppDist "START.md"),
+    @("# HA Windows Bridge", "", "[Quickstart](docs/V2_QUICKSTART.md)",
+      "[Release, recovery and uninstall guide](docs/RELEASE_GUIDE.md)"),
+    [System.Text.UTF8Encoding]::new($false)
+)
 $PortableZip = Join-Path $ProjectRoot "dist\HA-Windows-Bridge-$AppVersion-win64.zip"
 Compress-Archive -Path (Join-Path $AppDist "*") -DestinationPath $PortableZip -CompressionLevel Optimal -Force
 
@@ -192,11 +230,11 @@ if ($Installer) {
     Invoke-CodeSigning -Path $InstallerPath
 }
 
-$ReleaseArtifacts = @(
-    $PortableZip,
-    $IntegrationZip,
-    (Join-Path $ProjectRoot "dist\HA-Windows-Bridge-Setup-$AppVersion.exe")
-) | Where-Object { Test-Path -LiteralPath $_ }
+$ReleaseArtifacts = @($PortableZip, $IntegrationZip)
+if ($Installer) { $ReleaseArtifacts += $InstallerPath }
+$ReleaseArtifacts | ForEach-Object {
+    if (-not (Test-Path -LiteralPath $_)) { throw "Release artifact was not built: $_" }
+}
 $ChecksumPath = Join-Path $ProjectRoot "dist\SHA256SUMS-$AppVersion.txt"
 $ChecksumLines = $ReleaseArtifacts | ForEach-Object {
     $Hash = Get-FileHash -Algorithm SHA256 -LiteralPath $_

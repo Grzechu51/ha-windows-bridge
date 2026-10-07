@@ -11,6 +11,7 @@ from functools import partial
 from ..audio import AudioOutputDevice, AudioSessionSnapshot
 from ..communication.protocol import TopicProtocol
 from ..config import AudioAppConfig
+from ..core.provider_errors import ProviderNotReady
 from ..discovery import (
     active_app_topic,
     active_volume_topics,
@@ -196,6 +197,8 @@ class TelemetryService:
         if self.config.publish_windows_health:
             try:
                 health = self.system.windows_health()
+            except ProviderNotReady:
+                raise
             except ProviderUnavailable:
                 health = None
             if health is not None:
@@ -229,6 +232,8 @@ class TelemetryService:
                     hardware_metrics.add("disk_health")
                 if disks.temperature is not None:
                     hardware_metrics.add("disk_temperature")
+            except ProviderNotReady:
+                raise
             except ProviderUnavailable:
                 pass
         payload = integration_announcement_payload(
@@ -288,7 +293,7 @@ class TelemetryService:
                 scheduler.run("master_audio_enhancements", 0, self._monitor_master_enhancements)
             if names or self.config.control_active_app:
                 snapshot = scheduler.run("audio_sessions", 0, lambda: self.audio.session_snapshot(names), {})
-                running = scheduler.run("processes", 2, lambda: self.system.running_process_names(names), set())
+                running = scheduler.run("processes", 2, lambda: self.system.running_process_names(names))
                 scheduler.run("applications", 0, partial(self._monitor_apps, enabled, snapshot, running))
                 if self.config.control_active_app:
                     scheduler.run("active_application", 0, partial(self._monitor_active, snapshot))
@@ -335,12 +340,14 @@ class TelemetryService:
         snapshot: dict[str, AudioSessionSnapshot],
         running_processes: set[str] | None = None,
     ) -> None:
-        running_processes = running_processes or set()
         self.events.emit("audio.snapshot", snapshot)
         for app in enabled:
             state = snapshot.get(app.process_name.lower())
-            running = state is not None or app.process_name.casefold() in running_processes
-            if self._last_running.get(app.slug) is not running:
+            running = state is not None or (
+                running_processes is not None
+                and app.process_name.casefold() in running_processes
+            )
+            if (state is not None or running_processes is not None) and self._last_running.get(app.slug) is not running:
                 self._publish_running(app, running)
                 self._last_running[app.slug] = running
             if state is None:
@@ -604,6 +611,8 @@ class TelemetryService:
     def _monitor_devices(self) -> None:
         try:
             present = self.system.present_device_ids()
+        except ProviderNotReady:
+            raise
         except ProviderUnavailable:
             self.events.emit("provider.health", {"source": "devices", "errors": ("unavailable",)})
             for device in self.config.tracked_devices:

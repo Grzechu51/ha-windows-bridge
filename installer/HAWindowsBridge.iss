@@ -1,9 +1,9 @@
 #define MyAppName "HA Windows Bridge"
 #ifndef MyAppVersion
-#define MyAppVersion "2.0.0-alpha.8"
+#define MyAppVersion "2.0.0-alpha.10"
 #endif
 #ifndef MyAppNumericVersion
-#define MyAppNumericVersion "2.0.0.6"
+#define MyAppNumericVersion "2.0.0.10"
 #endif
 #define MyAppPublisher "HA Windows Bridge"
 #define MyAppExeName "HA Windows Bridge.exe"
@@ -73,4 +73,25 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Uruchom {#MyAppName}"; Flags: n
 function ExistingDesktopShortcut(): Boolean;
 begin
   Result := FileExists(ExpandConstant('{autodesktop}\{#MyAppName}.lnk'));
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Command, ExePath: String;
+begin
+  if CurUninstallStep <> usUninstall then
+    Exit;
+
+  if not RegQueryStringValue(HKCU,
+      'Software\Microsoft\Windows\CurrentVersion\Run',
+      'HAWindowsBridge', Command) then
+    Exit;
+
+  ExePath := ExpandConstant('{app}\{#MyAppExeName}');
+  { Preserve autostart if a portable copy has replaced the installed command. }
+  if (CompareText(Command, '"' + ExePath + '" --autostart') = 0) or
+     (CompareText(Command, ExePath + ' --autostart') = 0) then
+    RegDeleteValue(HKCU,
+      'Software\Microsoft\Windows\CurrentVersion\Run',
+      'HAWindowsBridge');
 end;

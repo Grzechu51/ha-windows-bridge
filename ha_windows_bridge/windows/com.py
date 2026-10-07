@@ -8,9 +8,7 @@ from types import SimpleNamespace
 
 import pythoncom
 
-
-class ProviderUnavailable(RuntimeError):
-    """A provider failed, as distinct from a successful empty enumeration."""
+from ..core.provider_errors import ProviderUnavailable as ProviderUnavailable
 
 
 @contextmanager

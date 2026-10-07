@@ -4,10 +4,10 @@
 
 <h1 align="center">HA Windows Bridge</h1>
 
-> Ta gałąź zawiera przygotowywaną **2.0.0-alpha.8**: natywnie zaokrąglona i rozmyta pierwsza klatka animacji, wyraźniejszy Liquid Glass oraz odtwarzacz o stałym rozmiarze.
-> Ostatnie opublikowane wydanie: [2.0.0-alpha.4](https://github.com/Grzechu51/ha-windows-bridge/releases/tag/v2.0.0-alpha.4).
-> Zacznij od [instrukcji 2.0](docs/V2_QUICKSTART.md) i [raportu przebudowy](docs/V2_REBUILD.md).
-> Instrukcje instalacji opublikowanych wydań poniżej dotyczą wcześniejszej linii 0.x.
+> Ta gałąź zawiera kandydat **2.0.0-alpha.10**, w trakcie Phase 7 — release, soak i polish. Finalny PASS i publikacja są jeszcze przed nami.
+> Aktualne procedury: [instalacja, upgrade, recovery, uninstall i soak](docs/RELEASE_GUIDE.md), [instrukcja 2.0](docs/V2_QUICKSTART.md) oraz [stan walidacji Phase 7](docs/audit-2026-09-05/PHASE7.md).
+> Aktualizacja integracji obejmuje [breaking migration rejestru HA](docs/HOME_ASSISTANT_COMPATIBILITY.md); wykonaj kopię zapasową i sprawdź odwołania do encji.
+> Instrukcje instalacji 0.x poniżej są historyczne i nie służą walidacji bieżącego kandydata.
 
 <p align="center">Sterowanie komputerem z Windows w Home Assistant przez lokalne MQTT.</p>
 
@@ -36,7 +36,7 @@ Wszystkie funkcje dodatkowe są domyślnie wyłączone.
 Nie wystawiaj niezabezpieczonego brokera MQTT do Internetu. Poza siecią lokalną użyj
 VPN albo poprawnie skonfigurowanego TLS.
 
-## Instalacja
+## Instalacja — archiwalne wydania 0.x
 
 ### 1. Integracja Home Assistant
 

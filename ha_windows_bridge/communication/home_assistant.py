@@ -61,7 +61,7 @@ def response_error(response):
         return HomeAssistantConnectionError("protocol_mismatch", configuration=True)
     if code in ("bridge_not_configured", "popup_unavailable", "protocol_mismatch"):
         return HomeAssistantConnectionError(code, configuration=True)
-    if code in ("bridge_busy", "bridge_not_ready"):
+    if code in ("bridge_busy", "bridge_not_ready", "session_expired"):
         return HomeAssistantConnectionError(code)
     # Recognise the explicit errors sent by alpha.1–3 without logging remote text.
     if code == "home_assistant_error":

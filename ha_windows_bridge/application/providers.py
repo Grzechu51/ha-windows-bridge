@@ -16,6 +16,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from ..core.provider_errors import ProviderNotReady
 from ..core.state import ComputerStateStore, StateQuality
 from ..media import MediaSnapshot
 from ..system_monitor import (
@@ -123,6 +124,7 @@ class AdaptiveProvider:
             self._epoch += 1
             self._cleanup_ok = True
             self._current_interval = self.interval
+            self.state.register_provider(self.source, generation=self.generation)
             self._thread = threading.Thread(
                 target=self._run,
                 name=f"provider-{self.source}-{self.generation}",
@@ -536,14 +538,21 @@ class SystemProviderView:
         self._stale_after = max(0.0, float(stale_after))
 
     def _sample(self, source: str, *, require_fresh: bool = False):
-        sample = self.state.snapshot(
+        current = self.state.snapshot(
             stale_after=self._stale_after if require_fresh else None
-        ).provider(source)
+        )
+        sample = current.provider(source)
         if sample is None:
-            raise ProviderUnavailable(f"{source} has no successful observation")
+            health = current.health_for(source)
+            if health is not None and health.awaiting_first_observation:
+                raise ProviderNotReady(f"{source} is awaiting its first observation")
+            raise ProviderUnavailable(
+                health.detail if health is not None and health.detail
+                else f"{source} has no successful observation"
+            )
         return sample
 
-    def _value(self, source: str, default: object) -> object:
+    def _value(self, source: str) -> object:
         sample = self._sample(source)
         if sample.quality != StateQuality.GOOD:
             raise ProviderUnavailable(
@@ -566,10 +575,10 @@ class SystemProviderView:
         return sample.value, ()
 
     def context_snapshot(self) -> PcContext:
-        return self._value("desktop_context", PcContext())  # type: ignore[return-value]
+        return self._value("desktop_context")  # type: ignore[return-value]
 
     def running_process_names(self, names: list[str]) -> set[str]:
-        running = self._value("processes", frozenset())
+        running = self._value("processes")
         requested = {name.casefold() for name in names}
         return set(running) & requested  # type: ignore[arg-type]
 
@@ -646,7 +655,7 @@ class SystemProviderView:
         )
 
     def windows_health(self) -> WindowsHealth:
-        health = self._value("windows_health", WindowsHealth())
+        health = self._value("windows_health")
         try:
             update_sample = self._sample("windows_update")
         except ProviderUnavailable:
@@ -660,11 +669,11 @@ class SystemProviderView:
         return health
 
     def list_disk_volumes(self) -> list[DiskVolume]:
-        storage = self._value("storage", StorageSnapshot())
+        storage = self._value("storage")
         return list(storage.volumes)  # type: ignore[union-attr]
 
     def disk_metrics(self, _mounts: list[str] | None = None) -> DiskMetrics:
-        storage = self._value("storage", StorageSnapshot())
+        storage = self._value("storage")
         return storage.metrics  # type: ignore[union-attr,return-value]
 
     def list_pnp_devices(self, include_disconnected: bool = False) -> list[PnpDevice]:

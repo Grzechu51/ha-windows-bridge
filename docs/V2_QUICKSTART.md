@@ -1,11 +1,11 @@
-# Uruchomienie 2.0.0-alpha.8
+# Uruchomienie 2.0.0-alpha.10
 
-To wydanie przedpremierowe. Przed aktualizacją integracji wykonaj kopię zapasową Home Assistant. Nie uruchamiaj dwóch wersji Bridge jednocześnie.
+To kandydat przedpremierowy w trakcie Phase 7, bez finalnego PASS. Procedury instalacji, upgrade, recovery, uninstall i soak zawiera [release guide](RELEASE_GUIDE.md). Przed aktualizacją integracji wykonaj kopię zapasową Home Assistant. Nie uruchamiaj dwóch wersji Bridge jednocześnie.
 
 ## Aplikacja Windows
 
-Alpha.6 jest przygotowana do lokalnych testów. Ostatnie opublikowane [wydanie na GitHubie to alpha.4](https://github.com/Grzechu51/ha-windows-bridge/releases/tag/v2.0.0-alpha.4).
-Zamknij działającą wersję Bridge z zasobnika. Uruchom otrzymany instalator `HA-Windows-Bridge-Setup-2.0.0-alpha.8.exe` albo rozpakuj **cały** ZIP `win64` do osobnego folderu i otwórz `HA Windows Bridge.exe`. Nie przenoś samego EXE bez folderu `_internal`.
+Używaj aplikacji i integracji z tego samego bieżącego builda; starsze opublikowane alpha nie zastępują kandydata Phase 7.
+Zamknij działającą wersję Bridge z zasobnika. Uruchom otrzymany instalator `HA-Windows-Bridge-Setup-2.0.0-alpha.10.exe` albo rozpakuj **cały** ZIP `win64` do osobnego folderu i otwórz `HA Windows Bridge.exe`. Nie przenoś samego EXE bez folderu `_internal`.
 
 Dla uruchomienia z kodu, w PowerShell:
 
@@ -37,13 +37,11 @@ Na stronie **Aplikacje** program automatycznie wykrywa aktywne sesje audio i ich
 
 W **Diagnostyce** znajdziesz aktualne CPU, RAM i liczbę wątków Bridge. CPU jest liczone względem całego procesora; pierwsza próbka pojawia się po około 2 sekundach. Odczyty zatrzymują się po ukryciu okna.
 
-## Aktualizacja integracji przez HACS
+## Instalacja integracji kandydata
 
-W HACS przy HA Windows Bridge wybierz **⋮ → Pobierz ponownie (Redownload) → Potrzebujesz innej wersji? (Need a different version?)** i wskaż `v2.0.0-alpha.4`. Po pobraniu uruchom HA ponownie. Jeśli wersji nie widać, użyj **⋮ → Aktualizuj informacje (Update information)**. W HACS 2 dostęp do aktualizacji beta kontroluje też encja przełącznika wersji przedpremierowych dla danego repozytorium. W razie potrzeby dodaj `Grzechu51/ha-windows-bridge` jako repozytorium niestandardowe typu **Integracja**.
+Do walidacji Phase 7 zainstaluj ręcznie `custom_components/ha_windows_bridge` z pakietu `HA-Integration` tego samego builda i uruchom testowy HA ponownie. Publikacja kandydata przez HACS jest osobnym krokiem release. Minimalna wersja HA to 2026.9.0. Migracja rejestru jest breaking: stare identyfikatory encji i historia mogą się zmienić; sprawdź Repairs, automatyzacje i dashboardy według [dokumentacji zgodności](HOME_ASSISTANT_COMPATIBILITY.md).
 
-Opis opcji: [wybór wersji w HACS](https://hacs.xyz/docs/use/repositories/dashboard/#downloading-a-specific-version-of-a-repository), [przełącznik wersji przedpremierowych](https://hacs.xyz/docs/use/entities/switch/).
-
-Pakiet `HA-Integration` w wydaniu służy instalacji ręcznej; przy HACS nie trzeba go rozpakowywać ani kopiować folderów.
+Po publikacji zatwierdzonego wydania można użyć HACS. Nie wybieraj starszej alpha jako zamiennika nieopublikowanego kandydata.
 
 ## MQTT
 
@@ -62,7 +60,7 @@ Nie instaluj alpha nad produkcyjną integracją bez kopii zapasowej HA. Stare wy
 
 Kanał Direct 2.0 służy nakładkom. Audio i sensory korzystają z MQTT. Nie wpisuj tokenu do automatyzacji ani w adresie URL. Po zmianie danych logowania użyj **Połącz ponownie**.
 
-Jeśli używasz obu połączeń, istniejący popup MQTT korzysta z dostępnej sesji Direct, a po jej rozłączeniu wraca do MQTT. Oddzielne wpisy Direct nadal działają. Status odróżnia błędny token, brak uprawnień, niewłączoną encję i brak konfiguracji. **Poprawka połączenia wymaga również aktualizacji integracji HA do alpha.4**, nie tylko aplikacji Windows.
+Jeśli używasz obu połączeń, popup korzysta z dostępnej sesji Direct, a po jej rozłączeniu wraca do MQTT. Bieżąca integracja konsoliduje wpisy Direct/MQTT w jeden model komputera. Konflikty migracji pojawiają się w Repairs. Status odróżnia błędny token, brak uprawnień, niewłączoną encję i brak konfiguracji. Aktualizuj integrację HA razem z aplikacją Windows.
 
 ## Automatyzacja HA
 

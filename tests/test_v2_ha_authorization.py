@@ -45,7 +45,10 @@ def test_another_socket_cannot_complete_command_or_extend_lease():
     source = Path(__file__).parents[1] / "custom_components/ha_windows_bridge/websocket.py"
     tree = ast.parse(source.read_text(encoding="utf-8"))
     runtime = SimpleNamespace(owner=object())
-    namespace = {"authorized_runtime": lambda *args: runtime, "Unauthorized": PermissionError}
+    namespace = {"authorized_runtime": lambda *args: runtime, "Unauthorized": PermissionError,
+                 "HomeAssistantError": RuntimeError}
+    load_function("websocket.py", "BridgeConnectionError", namespace)
+    load_function("websocket.py", "_owned_runtime", namespace)
     for name in ("result", "heartbeat"):
         node = next(item for item in tree.body if getattr(item, "name", None) == name)
         node.decorator_list = []

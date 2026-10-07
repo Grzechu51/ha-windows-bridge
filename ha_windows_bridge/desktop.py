@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -13,6 +14,7 @@ from .audio import WindowsAudioService
 from .config import AppConfig
 from .core.configuration import ConfigurationStore
 from .core.secrets import SecretStore
+from .core.soak_telemetry import SoakTelemetry
 from .media import WindowsMediaService
 from .overlays.service import OverlayService
 from .single_instance import SingleInstance
@@ -32,7 +34,10 @@ def main(argv=None):
     parser.add_argument("--minimized", action="store_true")
     parser.add_argument("--autostart", action="store_true")
     parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument("--soak-telemetry", type=Path, metavar="ABSOLUTE_JSON_PATH")
     args = parser.parse_args(argv)
+    if args.soak_telemetry is not None and not args.soak_telemetry.is_absolute():
+        parser.error("--soak-telemetry requires an absolute path")
     enable_per_monitor_v2()
     qt = QApplication.instance() or QApplication([])
     qt.setApplicationName("HA Windows Bridge")
@@ -60,6 +65,14 @@ def main(argv=None):
                           WindowsSystemMonitor(), WindowsMediaService(logging.getLogger("bridge.media")),
                           WindowsPowerActions(),
                           monitors=[f"{i + 1}: {screen.name()}" for i, screen in enumerate(qt.screens())])
+    soak = SoakTelemetry(runtime, args.soak_telemetry) if args.soak_telemetry else None
+    soak_timer = None
+    if soak:
+        soak.write()
+        soak_timer = QTimer(qt)
+        soak_timer.setInterval(5000)
+        soak_timer.timeout.connect(soak.write)
+        soak_timer.start()
     overlays = OverlayService(runtime)
     window = DesktopWindow(runtime)
     native_events = WindowsEventBridge(runtime, int(window.winId()))
@@ -100,7 +113,12 @@ def main(argv=None):
         window.close()
         native_events.close()
         overlays_stopped = overlays.close()
-        return 0 if runtime.shutdown() and overlays_stopped else 1
+        stopped = runtime.shutdown()
+        if soak_timer:
+            soak_timer.stop()
+        if soak:
+            soak.close()
+        return 0 if stopped and overlays_stopped else 1
     if not args.minimized and not (args.autostart and config.start_minimized):
         window.show()
     if config.auto_connect:
@@ -112,6 +130,10 @@ def main(argv=None):
     overlays_stopped = overlays.close()
     window.dispose()
     stopped = runtime.shutdown()
+    if soak_timer:
+        soak_timer.stop()
+    if soak:
+        soak.close()
     instance.close()
     if not overlays_stopped:
         logging.getLogger("bridge").error("Overlay shutdown incomplete")

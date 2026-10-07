@@ -41,6 +41,7 @@ class ProviderHealth:
     checked_at: float
     last_success_at: float | None = None
     detail: str = ""
+    awaiting_first_observation: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +158,7 @@ class ComputerStateStore:
                     now,
                     self._last_success_locked(source),
                     detail,
+                    awaiting_first_observation=detail == "starting",
                 )
                 for source in sorted(sources)
             )
@@ -169,6 +171,35 @@ class ComputerStateStore:
             self._state = current
         self.events.emit("computer_state.changed", current)
         return current
+
+    def register_provider(self, source: str, *, generation: int) -> bool:
+        """Mark a new provider pending without erasing an existing outcome."""
+
+        if not source:
+            raise ValueError("Provider source is required")
+        with self._lock:
+            if generation != self._state.generation:
+                return False
+            if self._state.health_for(source) is not None:
+                return True
+            now = self._wall_clock()
+            current = replace(
+                self._state,
+                revision=self._state.revision + 1,
+                updated_at=now,
+                health=self._replace_health_locked(
+                    ProviderHealth(
+                        source,
+                        StateQuality.STOPPED,
+                        now,
+                        detail="starting",
+                        awaiting_first_observation=True,
+                    )
+                ),
+            )
+            self._state = current
+        self.events.emit("computer_state.changed", current)
+        return True
 
     def observe_master_audio(
         self,

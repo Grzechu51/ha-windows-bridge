@@ -82,6 +82,7 @@ jobs:
         run: >-
           python -m pip install "homeassistant==${{ matrix.ha }}"
           pytest pytest-asyncio pytest-timeout paho-mqtt "PyTurboJPEG==1.8.3"
+          "websocket-client>=1.9,<2"
       - name: Verify declared minimum and installed HA
         env:
           EXPECTED_HA: ${{ matrix.ha }}

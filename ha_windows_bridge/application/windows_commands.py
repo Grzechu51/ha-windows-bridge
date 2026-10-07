@@ -7,6 +7,7 @@ from dataclasses import replace
 from ..communication.protocol import number
 from ..core.commands import Command, CommandError
 from ..overlays.monitors import monitor_id_from_label, selected_monitor_label
+from ..windows.com import ProviderUnavailable
 
 
 class WindowsCommands:
@@ -188,7 +189,11 @@ class WindowsCommands:
         if command.kind == "overlay.show" and action == "show" and self.notifications_quiet():
             raise CommandError("notifications_quiet")
         if command.kind == "overlay.show" and action in {"show", "update"}:
-            context = self.system.context_snapshot()
+            try:
+                context = self.system.context_snapshot()
+            except ProviderUnavailable as exc:
+                # Unknown privacy state must not allow presentation.
+                raise CommandError("desktop_context_unavailable") from exc
             if context.locked or (context.fullscreen and not self.config.overlay_allow_fullscreen):
                 raise CommandError("presentation_suppressed")
         if data.get("media") and command.kind == "overlay.show":

@@ -16,6 +16,8 @@ class DiagnosticBuffer(logging.Handler):
         self._records: deque[str] = deque(maxlen=capacity)
         self._guard = threading.RLock()
         self._secrets: set[str] = set()
+        self._warning_count = 0
+        self._error_count = 0
         self.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s", "%H:%M:%S"))
 
     def protect(self, *secrets: str) -> None:
@@ -24,6 +26,10 @@ class DiagnosticBuffer(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         with self._guard:
+            if record.levelno >= logging.ERROR:
+                self._error_count += 1
+            elif record.levelno >= logging.WARNING:
+                self._warning_count += 1
             line = redact_text(self.format(record), self._secrets)
             self._records.append(line)
         # No recursion if a diagnostic listener itself fails.
@@ -33,3 +39,8 @@ class DiagnosticBuffer(logging.Handler):
     def snapshot(self) -> tuple[str, ...]:
         with self._guard:
             return tuple(self._records)
+
+    def counts(self) -> dict[str, int]:
+        """Cumulative counters; no diagnostic message contents leave this handler."""
+        with self._guard:
+            return {"warnings": self._warning_count, "errors": self._error_count}

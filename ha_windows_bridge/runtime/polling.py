@@ -5,6 +5,8 @@ import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+from ..core.provider_errors import ProviderNotReady
+
 T = TypeVar("T")
 
 
@@ -25,6 +27,12 @@ class PollScheduler:
         self._next[key] = now + interval
         try:
             value = callback()
+        except ProviderNotReady:
+            # A worker may still be reading when telemetry first polls. Retry
+            # on the next pass; neither defaults nor old cache are observations.
+            self._next.pop(key, None)
+            self._values.pop(key, None)
+            return None
         except Exception:
             if now - self._last_error.get(key, float("-inf")) >= 60:
                 self._log.exception("Windows source failed: %s", key)

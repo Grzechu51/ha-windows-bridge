@@ -1490,6 +1490,9 @@ class DesktopWindow(QMainWindow):
                     awaiting = action == "show" and event.data.status == "succeeded"
                     detail_pl = event.data.code or ("oczekuje na prezentację" if awaiting else "wykonano")
                     detail_en = event.data.code or ("awaiting presentation" if awaiting else "completed")
+                    if event.data.code == "desktop_context_unavailable":
+                        detail_pl = "Nie potwierdzono stanu prywatności pulpitu. Podgląd nie został wyświetlony. Ponów próbę po uzyskaniu gotowego stanu."
+                        detail_en = "Desktop privacy state is not confirmed. Preview was not displayed. Retry when the state is ready."
                     self._set_local_overlay_result(
                         f"{action}: {event.data.status} · {detail_pl}",
                         f"{action}: {event.data.status} · {detail_en}",
