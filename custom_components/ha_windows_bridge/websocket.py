@@ -51,6 +51,20 @@ def authorized_runtime(hass, connection, device_id):
     raise BridgeConnectionError("bridge_not_ready" if pending else "popup_unavailable" if missing_popup else "bridge_not_configured")
 
 
+def _owned_runtime(hass, connection, msg):
+    try:
+        runtime = authorized_runtime(hass, connection, msg["device_id"])
+    except BridgeConnectionError as exc:
+        connection.send_error(msg["id"], exc.code, str(exc))
+        return None
+    if runtime.owner is None:
+        connection.send_error(msg["id"], "session_expired", "Windows Bridge session expired")
+        return None
+    if runtime.owner is not connection:
+        raise Unauthorized()
+    return runtime
+
+
 @callback
 @websocket_api.websocket_command({vol.Required("type"): "ha_windows_bridge/connect",
                                   vol.Required("device_id"): vol.All(str, vol.Length(min=1, max=128)),
@@ -105,9 +119,9 @@ def connect(hass, connection, msg):
 @websocket_api.websocket_command({vol.Required("type"): "ha_windows_bridge/heartbeat",
                                   vol.Required("device_id"): vol.All(str, vol.Length(min=1, max=128))})
 def heartbeat(hass, connection, msg):
-    runtime = authorized_runtime(hass, connection, msg["device_id"])
-    if runtime.owner is not connection:
-        raise Unauthorized()
+    runtime = _owned_runtime(hass, connection, msg)
+    if runtime is None:
+        return
     runtime.heartbeat()
     connection.send_result(msg["id"])
 
@@ -117,9 +131,9 @@ def heartbeat(hass, connection, msg):
                                   vol.Required("device_id"): vol.All(str, vol.Length(min=1, max=128)),
                                   vol.Required("result"): dict})
 def result(hass, connection, msg):
-    runtime = authorized_runtime(hass, connection, msg["device_id"])
-    if runtime.owner is not connection:
-        raise Unauthorized()
+    runtime = _owned_runtime(hass, connection, msg)
+    if runtime is None:
+        return
     try:
         decoded = ResultMessage.decode(json.dumps(msg["result"], allow_nan=False))
     except (ProtocolError, ValueError, TypeError, RecursionError):

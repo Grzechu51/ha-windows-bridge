@@ -77,9 +77,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._data[CONF_ENTITIES] = [*self._data[CONF_ENTITIES],
                                              *canonical_direct_entities(device_id)]
         if canonical:
+            title = canonical.title if canonical.data.get(CONF_TRANSPORT) == TRANSPORT_DIRECT else self._title
+            runtime = getattr(canonical, "runtime_data", None)
+            if (canonical.data == self._data and canonical.unique_id == device_id
+                    and canonical.title == title and canonical.version == self.VERSION
+                    and canonical.state == config_entries.ConfigEntryState.LOADED
+                    and runtime is not None and not getattr(runtime, "migration_incomplete", False)):
+                # A retained reannouncement must not discard a live Direct lease.
+                return self.async_abort(reason="already_configured")
             self.hass.config_entries.async_update_entry(
                 canonical, data=self._data, unique_id=device_id,
-                title=canonical.title if canonical.data.get(CONF_TRANSPORT) == TRANSPORT_DIRECT else self._title,
+                title=title,
                 version=self.VERSION)
             await self.hass.config_entries.async_reload(canonical.entry_id)
             return self.async_abort(reason="already_configured")
