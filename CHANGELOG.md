@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.0.0-alpha.11 - 2026-10-08
+
+- uproszczony interfejs Windows, wskaźnik połączenia i przycisk sprawdzania połączenia;
+- wszystkie głośności w Aplikacjach, wyrównane karty i suwaki oraz poprawione ikony;
+- stabilne kontrolki podczas przerw między odczytami audio i przewijanie eksportu diagnostycznego;
+- zachowana przezroczystość popupów podczas animacji i zaokrąglenia podczas odsłaniania;
+- ciaśniejszy układ odtwarzacza multimediów;
+- trzy układy popupów w HA: Automatyczny, Znacznik i Multimedia;
+- dostępny przełącznik paska czasu do zamknięcia, również dla znaczników;
+- starsze nazwy układów w automatyzacjach nadal są obsługiwane.
+
+Po aktualizacji komponentu uruchom ponownie Home Assistant. Minimum: HA 2026.9.0.
+Aktualizacja zachowuje profil Windows i dane połączeń. Instalator Windows uruchamiaj
+z Eksploratora, aby użyć zwykłego profilu użytkownika zamiast sandboxa Codex.
+
 ## 0.10.0-beta.5 - 2026-09-03
 
 - naprawione znikające ikony i tekst przy pierwszym animowanym wyświetleniu paska

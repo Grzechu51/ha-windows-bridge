@@ -52,7 +52,7 @@
       }
     },
     "overlay_layout": {
-      "options": {"auto": "Automatic", "compact": "Compact", "status": "Status", "badge": "Indicator", "standard": "Standard", "media": "Media", "camera": "Priority camera"}
+      "options": {"auto": "Automatic", "badge": "Indicator", "media": "Media"}
     },
     "overlay_display_mode": {
       "options": {"queue": "Queue", "parallel": "Side by side"}
@@ -85,7 +85,7 @@
         "image_url": {"name": "Image URL", "description": "Uses an HTTP(S) URL or image data URI."},
         "media": {"name": "Current Windows media", "description": "Uses the active media session on the target Windows computer."},
         "media_player_entity": {"name": "Home Assistant media player", "description": "Uses the selected player's title, artist, artwork and playback progress."},
-        "layout": {"name": "Content layout", "description": "Automatic mode selects a layout from the supplied content. Status emphasizes a short value; Indicator creates a small icon, image or value capsule."},
+        "layout": {"name": "Content layout", "description": "Automatic shows a message, image or media content. Indicator is a small capsule with an icon and short text. Media shows a player. Set urgency using Priority."},
         "display_mode": {"name": "Display mode", "description": "Queue shows one card at a time. Side by side keeps up to four cards visible together and wraps them when space is limited."},
         "priority": {"name": "Priority", "description": "Higher-priority cards move ahead of ordinary queued messages."},
         "notification_id": {"name": "Message ID", "description": "Identifier used to update or remove this card later."},

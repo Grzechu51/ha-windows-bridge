@@ -9,7 +9,6 @@ from PySide6.QtCore import (
     QByteArray,
     QIODevice,
     QPoint,
-    QRect,
     QRectF,
     QSize,
     Qt,
@@ -154,6 +153,7 @@ class NotificationWindow(QFrame):
         accent = ACCENTS.get(options["preset"], ACCENTS["default"])
         badge = options["layout"] == "badge"
         media = options["layout"] == "media"
+        self._grid.setAlignment(Qt.AlignmentFlag.AlignTop if media else Qt.AlignmentFlag(0))
         self.title.setWordWrap(not media)
         self.message.setWordWrap(not media)
         self.setStyleSheet("NotificationWindow { background: transparent; border: none; }"
@@ -282,9 +282,6 @@ class NotificationWindow(QFrame):
             self._grid.addWidget(self.close_button, 0, 4)
             self.close_button.show()
         if media:
-            self._grid.setRowMinimumHeight(row, 4)
-            self._grid.setRowStretch(row, 1)
-            row += 1
             self.set_media_position(options["media_position"], options["media_duration"])
             self._grid.addWidget(self.media_time, row, 0, 1, 5)
             self.media_time.setVisible(bool(options["media_duration"]))
@@ -294,7 +291,7 @@ class NotificationWindow(QFrame):
             self._grid.addWidget(self.progress, row, 0, 1, 5)
             self.progress.setVisible(bool(options["media_duration"]) if media else True)
             row += 1
-        if options["show_lifetime"] and not options["pinned"] and not badge:
+        if options["show_lifetime"] and not options["pinned"]:
             self._grid.addWidget(self.lifetime, row, 0, 1, 5)
             self.lifetime.show()
         self.setMinimumHeight(0)
@@ -321,6 +318,15 @@ class NotificationWindow(QFrame):
         path = QPainterPath()
         path.addRoundedRect(QRectF(self.rect()), 14, 14)
         return QRegion(path.toFillPolygon().toPolygon())
+
+    def _reveal_region(self, value, direction):
+        width = max(1, round(self.width() * value))
+        height = max(1, round(self.height() * (.4 + .6 * value)))
+        bounds = QRectF(self.width() - width if direction > 0 else 0,
+                        (self.height() - height) // 2, width, height)
+        path = QPainterPath()
+        path.addRoundedRect(bounds, min(14, width / 2), min(14, height / 2))
+        return self._surface_region().intersected(QRegion(path.toFillPolygon().toPolygon()))
 
     def _apply_surface_mask(self):
         if not self.rect().isEmpty():
@@ -401,6 +407,12 @@ class NotificationWindow(QFrame):
         path = QPainterPath()
         path.addRoundedRect(bounds, 14, 14)
         painter.setClipPath(path)
+        if not self._intro_snapshot.isNull():
+            # The snapshot already contains the translucent surface. Drawing
+            # a second surface beneath it changes alpha during the animation.
+            painter.drawPixmap(0, 0, self._intro_snapshot)
+            painter.end()
+            return
         media = self._options.get("layout") == "media"
         color = QColor(self._media_palette[0]) if media else QColor(24, 28, 31)
         glass = self._options.get("background_effect") in {"blur", "liquid"}
@@ -457,8 +469,6 @@ class NotificationWindow(QFrame):
             painter.setPen(QPen(accent, 1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
-        if not self._intro_snapshot.isNull():
-            painter.drawPixmap(0, 0, self._intro_snapshot)
         painter.end()
 
     def constrain_width(self, maximum):
@@ -506,11 +516,11 @@ class NotificationWindow(QFrame):
         fade = appearing and style == "fade"
         self.setWindowOpacity(0)
         if appearing and style == "reveal":
-            reveal = QRegion(QRect(self.width() - 1 if direction > 0 else 0, self.height() // 2, 1, 1))
-            self.setMask(self._surface_region().intersected(reveal))
+            reveal = self._reveal_region(0, direction)
+            self.setMask(reveal)
         self.show()
         if appearing and style == "reveal":
-            self.setMask(self._surface_region().intersected(reveal))
+            self.setMask(reveal)
         else:
             self._apply_surface_mask()
         def frame(value):
@@ -520,9 +530,7 @@ class NotificationWindow(QFrame):
             if fade:
                 self.setWindowOpacity(value)
             if appearing and style == "reveal":
-                width, height = max(1, round(self.width() * value)), max(1, round(self.height() * (.4 + .6 * value)))
-                reveal = QRegion(QRect(self.width() - width if direction > 0 else 0, (self.height() - height) // 2, width, height))
-                self.setMask(self._surface_region().intersected(reveal))
+                self.setMask(self._reveal_region(value, direction))
         def complete():
             if self._closed or generation != self._motion_generation:
                 return
@@ -540,7 +548,7 @@ class NotificationWindow(QFrame):
             if (not self._closed and generation == self._motion_generation
                     and self._animation is animation):
                 if appearing and style == "reveal":
-                    self._reinforce_surface_mask(self._surface_region().intersected(reveal))
+                    self._reinforce_surface_mask(reveal)
                 else:
                     self._reinforce_surface_mask()
                 if not fade:
@@ -576,9 +584,7 @@ class NotificationWindow(QFrame):
                 distance = MotionSystem.TOKENS["popup_exit"].distance
                 self.move(start + QPoint(round(direction * distance * value), 0))
             elif style == "reveal":
-                width, height = max(1, round(self.width() * (1 - value))), max(1, round(self.height() * (1 - value)))
-                reveal = QRegion(QRect(self.width() - width if direction > 0 else 0, (self.height() - height) // 2, width, height))
-                self.setMask(self._surface_region().intersected(reveal))
+                self.setMask(self._reveal_region(1 - value, direction))
         def complete():
             if not self._closed and generation == self._motion_generation:
                 self.dispose()

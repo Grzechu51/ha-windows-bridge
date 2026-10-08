@@ -376,7 +376,7 @@ def test_overlay_service_form_uses_single_booleans_and_native_icon_selector() ->
     assert "translation_key: overlay_channel" not in services
     assert services.count("image_entity:") == 2
     service_lines = [line.strip() for line in services.splitlines()]
-    assert service_lines.count("- camera") == 4  # Two layout options and two entity filters.
+    assert service_lines.count("- camera") == 2  # Camera entity filters, not a duplicate layout.
     assert service_lines.count("- image") == 2
     assert services.count("image_url:") == 2
     assert (
@@ -420,12 +420,8 @@ def test_overlay_service_form_uses_single_booleans_and_native_icon_selector() ->
     }
     assert set(strings["selector"]["overlay_layout"]["options"]) == {
         "auto",
-        "compact",
-        "status",
         "badge",
-        "standard",
         "media",
-        "camera",
     }
     assert set(strings["selector"]["overlay_display_mode"]["options"]) == {
         "queue",

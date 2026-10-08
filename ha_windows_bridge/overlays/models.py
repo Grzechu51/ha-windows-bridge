@@ -199,16 +199,16 @@ def validated_request(
     except (TypeError, ValueError, OverflowError):
         height = 160
     layout = str(options.get("layout", "default")).strip().lower()
-    if layout == "auto":
+    camera = bool(options.get("camera", False)) or layout == "camera"
+    if layout in {"auto", "default"}:
+        layout = "media" if options.get("media_source") or options.get("media_duration") or options.get("media_controls") else "default"
+    elif layout in {"compact", "status", "standard", "camera"}:
+        # Preserve legacy automations while offering only distinct layouts.
         layout = "default"
     if layout not in {
         "default",
-        "compact",
-        "status",
         "badge",
-        "standard",
         "media",
-        "camera",
     }:
         layout = "default"
     display_mode = str(options.get("display_mode", "queue")).strip().lower()
@@ -273,7 +273,7 @@ def validated_request(
         "height": height,
         "layout": layout,
         "display_mode": display_mode,
-        "camera": bool(options.get("camera", False)) or layout == "camera",
+        "camera": camera,
         "media_source": str(options.get("media_source", "")).strip()[:128],
         "opacity": opacity,
         "background_effect": background_effect,

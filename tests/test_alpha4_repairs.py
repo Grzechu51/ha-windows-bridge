@@ -122,7 +122,7 @@ def test_overview_contains_connections_and_diagnostics_has_history(tmp_path):
         window.resize(1000, 760)
         window.show()
         qt.processEvents()
-        assert window.pages.count() == 7
+        assert window.pages.count() == 6
         assert not any(window.navigation.item(i).text() == "Połączenia" for i in range(window.navigation.count()))
         assert window.pages.widget(Page.SETTINGS).isAncestorOf(window._fields["home_assistant.url"])
         assert "Dodaj ten komputer" in window.summary.text()
@@ -136,7 +136,8 @@ def test_overview_contains_connections_and_diagnostics_has_history(tmp_path):
             qt.processEvents()
         assert "RAM: —" not in window.resource_usage.text()
         assert window.logs.height() >= 180 and window._page_timer.isActive()
-        assert window.diagnostic_status.text()
+        assert not hasattr(window, "diagnostic_status")
+        assert window.diagnostic_preview.toPlainText()
         assert window.grab().save(str(tmp_path / "diagnostics.png"))
     finally:
         window._force_close = True

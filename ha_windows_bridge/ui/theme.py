@@ -135,7 +135,7 @@ QMenu::item { padding: 8px 20px; border-radius: 4px; }
 QMenu::item:selected { background: $selection; }
 QMenu::item:disabled { color: $disabled; }
 QMenu::separator { background: $border; height: 1px; margin: 5px 8px; }
-QToolTip { background: $surface; color: $text; border: 1px solid $border; padding: 6px; }
+QToolTip { background: $surface; color: $text; border: 1px solid $border; padding: 5px 7px; font-family: "Segoe UI"; font-size: 10pt; font-weight: 400; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 4px 0; }
 QScrollBar::handle:vertical { background: $border; border-radius: 4px; min-height: 36px; margin: 0 2px; }
 QScrollBar::handle:vertical:hover { background: $muted; }

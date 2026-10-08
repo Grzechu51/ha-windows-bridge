@@ -52,7 +52,7 @@
       }
     },
     "overlay_layout": {
-      "options": {"auto": "Automatyczny", "compact": "Kompaktowy", "status": "Status", "badge": "Znacznik", "standard": "Standardowy", "media": "Multimedia", "camera": "Kamera priorytetowa"}
+      "options": {"auto": "Automatyczny", "badge": "Znacznik", "media": "Multimedia"}
     },
     "overlay_display_mode": {
       "options": {"queue": "Kolejka", "parallel": "Obok siebie"}
@@ -85,7 +85,7 @@
         "image_url": {"name": "Adres obrazu", "description": "Używa adresu HTTP(S) albo data URI obrazu."},
         "media": {"name": "Bieżące multimedia Windows", "description": "Używa aktywnej sesji multimediów na docelowym komputerze."},
         "media_player_entity": {"name": "Odtwarzacz Home Assistant", "description": "Pobiera tytuł, wykonawcę, okładkę i postęp z wybranego odtwarzacza."},
-        "layout": {"name": "Układ treści", "description": "Tryb automatyczny dobiera układ do treści. Status wyróżnia krótką wartość, a Znacznik tworzy małą kapsułkę z ikoną, obrazem lub wartością."},
+        "layout": {"name": "Układ treści", "description": "Automatyczny pokazuje wiadomość, obraz lub multimedia. Znacznik to mała kapsułka z ikoną i krótkim tekstem. Multimedia pokazują odtwarzacz. Pilność ustaw w polu Priorytet."},
         "display_mode": {"name": "Sposób wyświetlania", "description": "Kolejka pokazuje jedną kartę naraz. Tryb Obok siebie utrzymuje do czterech kart równocześnie i zawija je, gdy brakuje miejsca."},
         "priority": {"name": "Priorytet", "description": "Karty o wyższym priorytecie są wyświetlane przed zwykłymi wiadomościami w kolejce."},
         "notification_id": {"name": "ID wiadomości", "description": "Identyfikator używany do późniejszej aktualizacji lub usunięcia karty."},
@@ -104,7 +104,7 @@
         "show_close_button": {"name": "Przycisk zamknięcia"},
         "close_on_click": {"name": "Zamykanie kliknięciem"},
         "pause_on_hover": {"name": "Wstrzymaj po najechaniu", "description": "Zatrzymuje odliczanie, gdy wskaźnik znajduje się nad kartą."},
-        "show_lifetime": {"name": "Pasek czasu wyświetlania", "description": "Pokazuje u dołu karty czas pozostały do automatycznego zamknięcia."},
+        "show_lifetime": {"name": "Pasek czasu do zamknięcia", "description": "Pokazuje czas pozostały do automatycznego zamknięcia. Nie dotyczy przypiętych powiadomień."},
         "corner": {"name": "Położenie na ekranie"},
         "edge_offset": {"name": "Odstęp od krawędzi", "description": "Odsuwa widoczną kartę od wybranych krawędzi ekranu."},
         "monitor": {"name": "Monitor", "description": "Opcjonalny numer monitora. Brak wartości używa ustawienia z aplikacji Windows."},
@@ -160,7 +160,7 @@
         "show_close_button": {"name": "Przycisk zamknięcia"},
         "close_on_click": {"name": "Zamykanie kliknięciem"},
         "pause_on_hover": {"name": "Wstrzymaj po najechaniu"},
-        "show_lifetime": {"name": "Pasek czasu wyświetlania"}
+        "show_lifetime": {"name": "Pasek czasu do zamknięcia"}
       ,
         "image": {"name": "Obraz"},
         "qr": {"name": "Kod QR"},

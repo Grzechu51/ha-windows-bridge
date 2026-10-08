@@ -1,6 +1,8 @@
 """Versioned 2.0 profile: one atomic transaction for public settings and sealed credentials."""
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import math
 from dataclasses import fields
@@ -90,17 +92,60 @@ class ConfigurationStore:
         self.secrets = secrets
         self.data_dir = directory or default_data_dir()
         self.config_path = self.data_dir / "profile-v2.json"
+        self.load_diagnostic = None
 
     def load(self):
-        if not self.config_path.exists():
+        diagnostic = {}
+
+        def observe(**values):
+            if self.load_diagnostic is not None:
+                diagnostic.update(values)
+                self.load_diagnostic(dict(diagnostic))
+
+        exists = self.config_path.exists()
+        observe(config_path=str(self.config_path), exists=exists)
+        if not exists:
+            observe(branch="missing_profile_fallback")
             return AppConfig(start_with_windows=False, auto_connect=False, theme="system")
         if self.config_path.stat().st_size > MAX_PROFILE_BYTES:
+            observe(branch="parse_error")
             raise ValueError("Profile exceeds size limit")
-        payload = json.loads(self.config_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or payload.get("format") != PROFILE_FORMAT:
-            raise ValueError("Unsupported profile format")
-        config = parse_settings(payload.get("settings"))
-        credentials = self.secrets.unseal(payload.get("credentials", ""))
+        if self.load_diagnostic is not None:
+            raw = self.config_path.read_bytes()
+            observe(branch="profile_read", bytes_read=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+            # Match read_text's UTF-8 decoding and universal newline handling;
+            # fingerprint exactly the bytes supplied to this parser.
+            with io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8") as stream:
+                text = stream.read()
+        else:
+            text = self.config_path.read_text(encoding="utf-8")
+        try:
+            payload = json.loads(text)
+            if isinstance(payload, dict):
+                settings = payload.get("settings")
+                safe_settings = settings if isinstance(settings, dict) else {}
+                mqtt = safe_settings.get("mqtt")
+                ha = safe_settings.get("home_assistant")
+                mqtt = mqtt if isinstance(mqtt, dict) else {}
+                ha = ha if isinstance(ha, dict) else {}
+                format_value = payload.get("format")
+                observe(format=format_value if type(format_value) in (int, bool, type(None)) else "invalid_type",
+                        settings_exists="settings" in payload,
+                        settings_key_count=len(settings) if isinstance(settings, dict) else None,
+                        mqtt_host_present=bool(mqtt.get("host")), ha_url_present=bool(ha.get("url")),
+                        direct_enabled=ha.get("enabled") is True,
+                        auto_connect=safe_settings.get("auto_connect") is True)
+            if not isinstance(payload, dict) or payload.get("format") != PROFILE_FORMAT:
+                raise ValueError("Unsupported profile format")
+            config = parse_settings(payload.get("settings"))
+        except Exception:
+            observe(branch="parse_error")
+            raise
+        try:
+            credentials = self.secrets.unseal(payload.get("credentials", ""))
+        except Exception:
+            observe(branch="secret_error")
+            raise
         config.mqtt.password = credentials.get("mqtt_password", "")
         config.home_assistant.token = credentials.get("ha_token", "")
         return config

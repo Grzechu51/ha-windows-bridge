@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import qtawesome as qta
 from PySide6.QtCore import (
     Property,
@@ -36,6 +39,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLayout,
     QMenu,
     QPushButton,
     QSizePolicy,
@@ -305,6 +309,7 @@ class AppCard(QFrame):
 
         layout = QGridLayout(self)
         self._icon_key = None
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self._icon_path = config.executable_path
         layout.setContentsMargins(14, 10, 12, 10)
         layout.setHorizontalSpacing(12)
@@ -341,13 +346,13 @@ class AppCard(QFrame):
         self.slider.sliderPressed.connect(self._slider_pressed)
         self.slider.sliderReleased.connect(self._slider_released)
         self.slider.valueChanged.connect(self._slider_value_changed)
-        layout.addWidget(self.slider, 2, 1)
+        layout.addWidget(self.slider, 2, 1, Qt.AlignmentFlag.AlignVCenter)
 
         self.percent_label = QLabel("—")
         self.percent_label.setObjectName("volumePercent")
         self.percent_label.setFixedWidth(43)
         self.percent_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(self.percent_label, 2, 2)
+        layout.addWidget(self.percent_label, 2, 2, Qt.AlignmentFlag.AlignVCenter)
 
         self.mute_button = QToolButton()
         self.mute_button.setObjectName("muteButton")
@@ -357,7 +362,7 @@ class AppCard(QFrame):
         self.mute_button.setEnabled(False)
         self.mute_button.setFixedSize(36, 36)
         self.mute_button.toggled.connect(self._mute_toggled)
-        layout.addWidget(self.mute_button, 2, 3)
+        layout.addWidget(self.mute_button, 2, 3, Qt.AlignmentFlag.AlignVCenter)
 
         self.enabled_switch = ToggleSwitch()
         self.enabled_switch.setChecked(config.enabled)
@@ -420,15 +425,24 @@ class AppCard(QFrame):
         self._icon_path = executable_path.strip()
         if update_config:
             self.config.executable_path = self._icon_path
+        self._icon_path = self._resolve_icon_path(self._icon_path)
         file_info = QFileInfo(self._icon_path)
         ratio = self.devicePixelRatioF()
         key = (self._icon_path.casefold(), file_info.lastModified().toMSecsSinceEpoch(), file_info.size(), ratio)
         if key == self._icon_key and not self.avatar.pixmap().isNull():
             return
+        brands = {
+            "discord.exe": ("fa6b.discord", "#5865F2"),
+            "chrome.exe": ("fa6b.chrome", "#4285F4"),
+            "spotify.exe": ("fa6b.spotify", "#1DB954"),
+        }
+        brand = brands.get(self.config.process_name.casefold())
         if self._icon_path and file_info.exists():
-            pixmap = QFileIconProvider().icon(file_info).pixmap(256, 256)
-            if pixmap.isNull():
-                pixmap = self._extract_windows_icon(self._icon_path)
+            # Shell lookup may return a generic file icon for an existing EXE.
+            # Read its embedded resource first; known apps also have brand icons.
+            pixmap = self._extract_windows_icon(self._icon_path)
+            if pixmap.isNull() and not brand:
+                pixmap = QFileIconProvider().icon(file_info).pixmap(256, 256)
             if not pixmap.isNull():
                 pixmap.setDevicePixelRatio(1)
                 pixmap = self._trim_transparent(pixmap)
@@ -444,7 +458,43 @@ class AppCard(QFrame):
                 self.avatar.setPixmap(pixmap)
                 self.avatar.setStyleSheet("background: transparent; border: none;")
                 return
+        if brand:
+            # Bundled brand glyph also works without executable metadata.
+            pixmap = qta.icon(brand[0], color=brand[1]).pixmap(round(46 * ratio), round(46 * ratio))
+            pixmap.setDevicePixelRatio(ratio)
+            self.avatar.setText("")
+            self.avatar.setPixmap(pixmap)
+            self.avatar.setStyleSheet("background: transparent; border: none;")
+            return
         self._show_initials()
+
+    def _resolve_icon_path(self, executable_path: str) -> str:
+        """Resolve Squirrel upgrade locations for display, without granting launch access."""
+        path = Path(executable_path) if executable_path else None
+        if path and path.is_file():
+            return str(path)
+        roots = []
+        if path and path.parent.name.startswith("app-"):
+            roots.append(path.parent.parent)
+        if self.config.process_name.casefold() == "discord.exe":
+            local = os.environ.get("LOCALAPPDATA")
+            if local:
+                roots.extend(Path(local) / name for name in ("Discord", "DiscordPTB", "DiscordCanary"))
+        candidates = []
+        for root in roots:
+            try:
+                candidates.extend(
+                    item for item in root.glob(f"app-*/{self.config.process_name}")
+                    if item.is_file()
+                )
+            except OSError:
+                continue
+        if candidates:
+            try:
+                return str(max(candidates, key=lambda item: item.stat().st_mtime_ns))
+            except OSError:
+                pass
+        return executable_path
 
     def event(self, event):
         result = super().event(event)
@@ -478,9 +528,11 @@ class AppCard(QFrame):
             handles = large_icons or small_icons
             if not handles:
                 return QPixmap()
-            image = QImage.fromHICON(handles[0])
-            for handle in (*large_icons, *small_icons):
-                win32gui.DestroyIcon(handle)
+            try:
+                image = QImage.fromHICON(handles[0])
+            finally:
+                for handle in (*large_icons, *small_icons):
+                    win32gui.DestroyIcon(handle)
             return QPixmap.fromImage(image)
         except Exception:
             return QPixmap()
@@ -601,44 +653,45 @@ class MasterVolumeCard(QFrame):
     mute_requested = Signal(bool)
     feature_toggled = Signal(bool)
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, *, title="Master volume", description="Domyślne urządzenie wyjściowe Windows"):
         super().__init__(parent)
         self.setObjectName("masterVolumeCard")
-        self.setMinimumHeight(82)
+        self.setMinimumHeight(88)
         self._user_adjusting = False
         self._feature_enabled = True
         self._volume_available = False
         self._mute_available = False
         self._source_available = False
+        self._runtime_control_enabled = True
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 10, 18, 10)
-        layout.setSpacing(13)
+        layout = QGridLayout(self)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        layout.setContentsMargins(14, 10, 12, 10)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(4)
 
         self.avatar = QLabel("🔊")
         self.avatar.setObjectName("masterAvatar")
         self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.avatar.setFixedSize(40, 40)
+        self.avatar.setFixedSize(52, 52)
         self.avatar_effect = QGraphicsOpacityEffect(self.avatar)
         self.avatar.setGraphicsEffect(self.avatar_effect)
-        layout.addWidget(self.avatar)
-
-        text = QVBoxLayout()
-        text.setSpacing(2)
-        name = QLabel("Master volume")
+        layout.addWidget(self.avatar, 0, 0, 3, 1)
+        name = self.name_label = QLabel(title)
         name.setObjectName("appName")
+        name.setWordWrap(True)
         name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        process = QLabel("Domyślne urządzenie wyjściowe Windows")
+        process = self.description_label = QLabel(description)
         process.setObjectName("appProcess")
+        process.setWordWrap(True)
         process.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        text.addWidget(name)
-        text.addWidget(process)
-        layout.addLayout(text, 1)
+        layout.addWidget(name, 0, 1, 1, 5)
+        layout.addWidget(process, 1, 1, 1, 5)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(0, 100)
-        self.slider.setMinimumWidth(80)
-        self.slider.setMaximumWidth(190)
+        self.slider.setMinimumWidth(90)
+        self.slider.setFixedHeight(36)
         self.slider.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Fixed,
@@ -647,13 +700,14 @@ class MasterVolumeCard(QFrame):
         self.slider.sliderPressed.connect(self._slider_pressed)
         self.slider.sliderReleased.connect(self._slider_released)
         self.slider.valueChanged.connect(self._slider_value_changed)
-        layout.addWidget(self.slider)
+        layout.addWidget(self.slider, 2, 1, Qt.AlignmentFlag.AlignVCenter)
+        layout.setColumnStretch(1, 1)
 
         self.percent_label = QLabel("—")
         self.percent_label.setObjectName("volumePercent")
         self.percent_label.setFixedWidth(43)
         self.percent_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(self.percent_label)
+        layout.addWidget(self.percent_label, 2, 2, Qt.AlignmentFlag.AlignVCenter)
 
         self.mute_button = QToolButton()
         self.mute_button.setObjectName("muteButton")
@@ -661,15 +715,22 @@ class MasterVolumeCard(QFrame):
         self.mute_button.setToolTip("Wycisz dźwięk Windows")
         self.mute_button.setCheckable(True)
         self.mute_button.setFixedSize(36, 36)
+        policy = self.mute_button.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self.mute_button.setSizePolicy(policy)
         self.mute_button.toggled.connect(self._mute_toggled)
-        layout.addWidget(self.mute_button)
+        layout.addWidget(self.mute_button, 2, 3, Qt.AlignmentFlag.AlignVCenter)
 
         self.enabled_switch = ToggleSwitch()
         self.enabled_switch.setToolTip("Włącz encje głośności systemu w Home Assistant")
         self.enabled_switch.setChecked(True)
         self.enabled_switch.toggled.connect(self.set_feature_enabled)
         self.enabled_switch.toggled.connect(self.feature_toggled)
-        layout.addWidget(self.enabled_switch)
+        layout.addWidget(self.enabled_switch, 2, 4, Qt.AlignmentFlag.AlignVCenter)
+        # Reserve the application menu column so every volume slider aligns.
+        menu_space = QWidget(self)
+        menu_space.setFixedSize(30, 36)
+        layout.addWidget(menu_space, 2, 5, Qt.AlignmentFlag.AlignVCenter)
 
     def set_volume(self, volume: float | None) -> None:
         self._volume_available = volume is not None
@@ -734,18 +795,23 @@ class MasterVolumeCard(QFrame):
         self._apply_feature_state()
 
     def _apply_feature_state(self) -> None:
+        self._feature_enabled = self.enabled_switch.isChecked()
         self.setProperty("featureEnabled", self._feature_enabled)
         self.avatar_effect.setOpacity(1.0 if self._feature_enabled else 0.28)
         self.slider.setEnabled(
-            self._feature_enabled and self._source_available and self._volume_available
+            self._runtime_control_enabled and self._source_available and self._volume_available
         )
         self.mute_button.setEnabled(
-            self._feature_enabled and self._source_available and self._mute_available
+            self._runtime_control_enabled and self._source_available and self._mute_available
         )
         for widget in self.findChildren(QLabel):
             widget.setEnabled(self._feature_enabled)
         self.style().unpolish(self)
         self.style().polish(self)
+
+    def set_runtime_enabled(self, enabled: bool) -> None:
+        self._runtime_control_enabled = bool(enabled)
+        self._apply_feature_state()
 
 
 class MicrophoneCard(QFrame):

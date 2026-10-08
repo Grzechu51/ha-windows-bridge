@@ -4,7 +4,7 @@
 
 <h1 align="center">HA Windows Bridge</h1>
 
-> Ta gałąź zawiera kandydat **2.0.0-alpha.10**, w trakcie Phase 7 — release, soak i polish. Finalny PASS i publikacja są jeszcze przed nami.
+> Aktualne wydanie testowe: **2.0.0-alpha.11** — poprawki interfejsu i popupów. W HACS wybierz to wydanie przedpremierowe. Po aktualizacji integracji uruchom ponownie Home Assistant. Phase 7 pozostaje w trakcie testów.
 > Aktualne procedury: [instalacja, upgrade, recovery, uninstall i soak](docs/RELEASE_GUIDE.md), [instrukcja 2.0](docs/V2_QUICKSTART.md) oraz [stan walidacji Phase 7](docs/audit-2026-09-05/PHASE7.md).
 > Aktualizacja integracji obejmuje [breaking migration rejestru HA](docs/HOME_ASSISTANT_COMPATIBILITY.md); wykonaj kopię zapasową i sprawdź odwołania do encji.
 > Instrukcje instalacji 0.x poniżej są historyczne i nie służą walidacji bieżącego kandydata.

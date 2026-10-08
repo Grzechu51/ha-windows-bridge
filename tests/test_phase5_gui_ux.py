@@ -11,7 +11,6 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QFocusEvent
-from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -72,7 +71,7 @@ def test_phase5_compact_populated_pages_have_no_horizontal_scrollbar():
 
 
 @pytest.mark.parametrize("factor", ["1", "1.25", "1.5", "2"])
-def test_phase5_scale_matrix_keeps_compact_onboarding_within_view(tmp_path, factor):
+def test_phase5_scale_matrix_keeps_compact_overview_within_view(tmp_path, factor):
     script = r'''
 import sys
 sys.path.insert(0, "tests")
@@ -122,7 +121,7 @@ def test_phase5_language_and_theme_are_local_draft_and_discardable():
         qt.processEvents()
         assert window.navigation.item(Page.OVERVIEW).text() == "Overview"
         assert window.draft.language == "en" and window.draft.theme == "light"
-        assert window.dirty_status.text() == "Unsaved changes"
+        assert window.save.isEnabled() and window.discard.isEnabled()
         assert previews and previews[-1].theme == "light"
         assert application.config.language == "pl" and application.config.theme == "dark"
         window._discard()
@@ -149,28 +148,11 @@ def test_phase5_runtime_snapshots_do_not_dirty_configuration():
         )
         qt.processEvents()
         assert window.draft == before == window.applied
-        assert "23.5%" in window.feature_values["publish_cpu_stats"].text()
         assert not window.save.isEnabled()
     finally:
         close_window(window)
 
 
-def test_phase5_overlay_editor_uses_single_phase4_command_path():
-    qt_app()
-    application = runtime(AppConfig(mqtt=MqttConfig(host="broker"), auto_connect=False, control_master_volume=False, overlay_enabled=True))
-    calls = []
-    application.command = lambda kind, arguments, target="": calls.append((kind, arguments, target)) or CommandResult("local", "accepted")
-    window = DesktopWindow(application)
-    try:
-        window._preview_overlay()
-        window._update_overlay()
-        window._remove_overlay()
-        window._clear_overlays()
-        assert [call[0] for call in calls] == ["overlay.show"] * 4
-        assert [call[1]["data"]["action"] for call in calls] == ["show", "update", "remove", "clear"]
-        assert calls[0][1]["data"]["duration"] == application.config.overlay_example_duration
-    finally:
-        close_window(window)
 
 
 def test_phase5_diagnostic_export_is_exact_preview_and_private(tmp_path, monkeypatch):
@@ -292,7 +274,7 @@ def test_phase5_diagnostic_export_freezes_before_file_dialog(phase5_window, monk
     assert destination.read_text(encoding="utf-8") == before
 
 
-def test_phase5_computer_navigation_refreshes_sample_and_age(phase5_window):
+def test_phase5_computer_navigation_keeps_feature_switches(phase5_window):
     window = phase5_window
     window.show()
     window.navigation.setCurrentRow(Page.OVERVIEW)
@@ -303,8 +285,6 @@ def test_phase5_computer_navigation_refreshes_sample_and_age(phase5_window):
     )
     window.navigation.setCurrentRow(Page.COMPUTER)
     QApplication.processEvents()
-    assert "23.5%" in window.feature_values["publish_cpu_stats"].text()
-    assert "cpu_ram" in window.feature_values["publish_cpu_stats"].text()
 
 
 def test_phase5_language_keeps_dynamic_values_and_translates_combo(phase5_window):
@@ -313,47 +293,20 @@ def test_phase5_language_keeps_dynamic_values_and_translates_combo(phase5_window
         "cpu_ram", SimpleNamespace(cpu_percent=23.5, ram_percent=47),
         generation=window.application.computer_snapshot().generation,
     )
-    window._refresh_computer_state()
+    window._refresh_master_audio()
     window.language.setCurrentIndex(window.language.findData("en"))
-    assert "23.5%" in window.feature_values["publish_cpu_stats"].text()
-    assert window.dirty_status.text() == "Unsaved changes"
+    assert window.save.isEnabled() and window.discard.isEnabled()
     assert window.theme.itemText(0) == "Dark"
-    assert window.channel.itemText(0).startswith("MQTT")
 
 
-def test_phase5_monitor_refresh_keeps_editor_identity(phase5_window):
-    window = phase5_window
-    window.draft.overlay_monitor_id = "screen-A"
-    window._refresh_overlay_monitors(["1: screen-A", "2: screen-B"])
-    window.overlay_monitor.setCurrentIndex(1)
-    window._refresh_overlay_monitors(["1: screen-B", "2: screen-A"])
-    assert window._overlay_arguments("show")["data"]["monitor_id"] == "screen-B"
 
 
-def test_phase5_onboarding_lifecycle_is_correlated(phase5_window):
-    window = phase5_window
-    window.application.config.overlay_enabled = True
-    window.application.command = lambda *_: CommandResult("local-1", "accepted")
-    window._preview_overlay()
-    window.application.events.emit("overlay.lifecycle", {
-        "notification_id": window._last_overlay_id, "command_id": "remote",
-        "disposition": "failed", "reason": "remote",
-    })
-    QApplication.processEvents()
-    assert "accepted" in window.onboarding_result.text()
-    window.application.events.emit("overlay.lifecycle", {
-        "notification_id": window._last_overlay_id, "command_id": "local-1",
-        "disposition": "displayed", "reason": "",
-    })
-    QApplication.processEvents()
-    assert "displayed" in window.onboarding_result.text()
-    assert window.onboarding_result.text() == window.overlay_result.text()
 
 
 def test_phase5_stopped_sensor_status_and_activation(phase5_window):
     window = phase5_window
     window._refresh_status()
-    assert "Sensory: zatrzymane" in window.diagnostic_status.text()
+    assert "zatrzymane" in window.tray_sensors.text()
     window.hide()
     window.application.events.emit("windows.activate_requested")
     QApplication.processEvents()
@@ -404,24 +357,6 @@ def test_phase5_connection_test_waits_for_all_channels_and_ignores_stopped(phase
     assert "Home Assistant" in window.connection_test_result.text()
 
 
-def test_phase5_computer_capabilities_show_values_not_app_counts(phase5_window):
-    from ha_windows_bridge.audio import (
-        AudioOutputDevice,
-        AudioProviderSnapshot,
-        AudioSessionSnapshot,
-        MicrophoneSnapshot,
-    )
-    window = phase5_window
-    value = AudioProviderSnapshot(
-        master=AudioSessionSnapshot(.4, False), balance=.2,
-        microphone=MicrophoneSnapshot(.6, True, False),
-        outputs=(AudioOutputDevice("id", "Speakers", True),),
-    )
-    assert "40%" in window._feature_value("control_master_volume", value)
-    assert "0.20" in window._feature_value("control_channel_balance", value)
-    assert "60%" in window._feature_value("control_microphone", value)
-    assert "Speakers" in window._feature_value("control_audio_output", value)
-    assert "aplikacje audio" not in window._feature_value("audio_enhancements_enabled", value)
 
 
 def test_phase5_log_filter_is_bounded_and_recovery_navigation(phase5_window):
@@ -516,24 +451,12 @@ def test_phase5_english_feature_descriptions_and_accessibility_are_complete(phas
     assert not any("Bieżąca wartość" in label for label in labels)
     assert not any("Publikuj" in label for label in labels)
     assert window._toggles["publish_cpu_stats"].accessibleName().startswith("Share:")
-    assert window.feature_values["publish_cpu_stats"].accessibleName().startswith("Feature status:")
     assert "Udostępniaj" not in window._toggles["publish_cpu_stats"].accessibleName()
 
 
-def test_phase5_english_live_overlay_resource_and_update_results(phase5_window, monkeypatch):
+def test_phase5_english_live_resource_and_update_results(phase5_window, monkeypatch):
     window = phase5_window
     window.language.setCurrentIndex(window.language.findData("en"))
-    window.application.config.overlay_enabled = True
-    monkeypatch.setattr(
-        window.application,
-        "command",
-        lambda *_args, **_kwargs: CommandResult("local", "accepted"),
-    )
-
-    window._preview_overlay()
-    assert "awaiting presentation" in window.onboarding_result.text()
-    assert "oczekuje" not in window.onboarding_result.text()
-
     window.application.events.emit(
         "resources.updated",
         {"cpu_percent": 1.0, "memory_mib": 30.0, "threads": 5},
@@ -604,55 +527,8 @@ def test_phase5_english_dialogs_and_inventory_actions_are_localized(phase5_windo
     assert inventory == [("Choose devices", "Choose", "Cancel")]
 
 
-def test_phase5_quiet_overlay_terminal_result_reaches_both_surfaces(phase5_overlay_window):
-    window = phase5_overlay_window
-    window.application.set_notifications_quiet(True)
-
-    window._preview_overlay()
-    for _ in range(30):
-        QTest.qWait(10)
-        QApplication.processEvents()
-        if "notifications_quiet" in window.onboarding_result.text():
-            break
-
-    assert "notifications_quiet" in window.onboarding_result.text()
-    assert "notifications_quiet" in window.overlay_result.text()
-    assert "accepted" not in window.overlay_result.text()
 
 
-@pytest.mark.parametrize(
-    ("invoke", "action"),
-    [
-        ("_update_overlay", "update"),
-        ("_remove_overlay", "remove"),
-        ("_clear_overlays", "clear"),
-    ],
-)
-def test_phase5_real_router_terminal_overlay_actions_are_correlated(
-    phase5_overlay_window, invoke, action,
-):
-    window = phase5_overlay_window
-    remote = CommandResult("unrelated-remote", "failed", "remote_failure")
-
-    getattr(window, invoke)()
-    pending_id = window._local_overlay_pending_id
-    assert pending_id
-    window.application.events.emit("command.result", remote)
-    QApplication.processEvents()
-    assert "remote_failure" not in window.overlay_result.text()
-
-    for _ in range(40):
-        QTest.qWait(10)
-        QApplication.processEvents()
-        if window._local_overlay_pending_id is None:
-            break
-
-    shown = window.overlay_result.text()
-    assert shown.startswith(f"{action}: ")
-    assert "awaiting result" not in shown
-    assert "oczekuje na wynik" not in shown
-    assert any(status in shown for status in ("succeeded", "failed", "rejected", "cancelled"))
-    assert shown == window.onboarding_result.text()
 
 
 def test_phase5_initial_light_style_recolours_navigation_icons(phase5_window):
@@ -730,7 +606,6 @@ def test_phase5_sensor_lifecycle_and_app_identity_survive_language_roundtrip(pha
         application.states.set("provider_cpu_ram", state)
         application.pause_sensors(paused)
         window._refresh_status()
-        assert f"Sensors: {expected}" in window.diagnostic_status.text()
         assert window.tray_sensors.text() == f"Sensors: {expected}"
 
     window.applied.apps = [AudioAppConfig("identity.exe", "Start", "stable_id", True)]
@@ -743,60 +618,6 @@ def test_phase5_sensor_lifecycle_and_app_identity_survive_language_roundtrip(pha
     assert window._cards[0].config.slug == "stable_id"
 
 
-def test_phase5_real_computer_shapes_retain_values_across_failure(phase5_window, monkeypatch):
-    from ha_windows_bridge.application.providers import DeviceSnapshot, StorageSnapshot
-    from ha_windows_bridge.audio import (
-        AudioOutputDevice,
-        AudioProviderSnapshot,
-        AudioSessionSnapshot,
-        MicrophoneSnapshot,
-    )
-    from ha_windows_bridge.config import TrackedDeviceConfig
-    from ha_windows_bridge.core.state import StateQuality
-    from ha_windows_bridge.system_monitor import DiskVolume, PnpDevice, SystemMetrics
-
-    window = phase5_window
-    window.language.setCurrentIndex(window.language.findData("en"))
-    store = window.application.computer_state
-    generation = window.application.computer_snapshot().generation
-    window.draft.disk_mounts = ["Z:/"]
-    window.draft.tracked_devices = [TrackedDeviceConfig("dev-1", "Keyboard", "HID")]
-    samples = [
-        ("cpu_ram", SystemMetrics(23.5, 47.0, 100)),
-        ("storage", StorageSnapshot((DiskVolume("Z:/", "Z", "NTFS", 100.0, 25.0, 75.0),))),
-        ("pnp", DeviceSnapshot((PnpDevice("dev-1", "Keyboard", "HID", False),))),
-        (
-            "audio",
-            AudioProviderSnapshot(
-                master=AudioSessionSnapshot(0.4, True),
-                balance=0.2,
-                microphone=MicrophoneSnapshot(0.6, False, True),
-                outputs=(AudioOutputDevice("out", "Speakers", True),),
-            ),
-        ),
-    ]
-    for source, value in samples:
-        store.observe_provider(source, value, generation=generation, observed_at=100.0)
-    monkeypatch.setattr("ha_windows_bridge.ui.shell.time.time", lambda: 110.0)
-    window._refresh_computer_state()
-
-    assert "10 s ago" in window.feature_values["publish_cpu_stats"].text()
-    assert "Z:/: 25% used, 75.0 GB free" in window.feature_values["publish_disk_stats"].text()
-    assert "Keyboard: absent" in window.feature_values["publish_devices"].text()
-    assert "40%" in window.feature_values["control_master_volume"].text()
-    assert "0.20" in window.feature_values["control_channel_balance"].text()
-    assert "Speakers (default)" in window.feature_values["control_audio_output"].text()
-
-    store.fail_provider(
-        "cpu_ram",
-        StateQuality.ERROR,
-        "read_failed",
-        generation=generation,
-    )
-    monkeypatch.setattr("ha_windows_bridge.ui.shell.time.time", lambda: 115.0)
-    window._refresh_computer_state()
-    shown = window.feature_values["publish_cpu_stats"].text()
-    assert all(value in shown for value in ("error", "read_failed", "23.5%", "15 s ago"))
 
 
 

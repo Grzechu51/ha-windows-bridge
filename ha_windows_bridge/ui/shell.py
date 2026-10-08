@@ -10,6 +10,7 @@ from pathlib import Path
 
 import qtawesome as qta
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -18,8 +19,10 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -29,9 +32,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSpinBox,
     QSystemTrayIcon,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -42,7 +45,6 @@ from ..communication.status import CONNECTION_NAMES, connection_text
 from ..config import AppConfig, AudioAppConfig, TrackedDeviceConfig, slugify
 from ..core.configuration import ConfigurationStore
 from ..i18n import set_active_language, translate
-from ..overlays.monitors import monitor_id_from_label
 from ..ui_components import AppCard, MasterVolumeCard, SettingControlRow, SettingRow
 from .inputs import SettingsWheelGuard
 from .navigation import PageStack
@@ -59,18 +61,17 @@ FEATURES = (
     ("publish_audio_sessions", "Liczba sesji audio"), ("allow_power_actions", "Zdalne zasilanie komputera"),
     ("enable_windows_notifications", "Powiadomienia Windows"),
 )
-PAGES = ("Start", "Przegląd", "Komputer", "Aplikacje", "Powiadomienia", "Ustawienia", "Diagnostyka")
+PAGES = ("Przegląd", "Komputer", "Aplikacje", "Powiadomienia", "Ustawienia", "Diagnostyka")
 
 
 class Page(IntEnum):
-    ONBOARDING = 0
-    OVERVIEW = 1
-    COMPUTER = 2
-    FEATURES = 2
-    APPLICATIONS = 3
-    OVERLAYS = 4
-    SETTINGS = 5
-    DIAGNOSTICS = 6
+    OVERVIEW = 0
+    COMPUTER = 1
+    FEATURES = 1
+    APPLICATIONS = 2
+    OVERLAYS = 3
+    SETTINGS = 4
+    DIAGNOSTICS = 5
 
 
 class UiEvents(QObject):
@@ -114,12 +115,6 @@ class DesktopWindow(QMainWindow):
         self._cards = []
         self._dismissed_apps = set()
         self._connection_states = {item["transport"]: ConnectionStatus(**item) for item in application.connection_snapshot()}
-        self._last_overlay_id = "phase5-local-preview"
-        self._local_overlay_command_id = None
-        self._local_overlay_pending_id = None
-        self._local_overlay_pending_action = None
-        self._local_overlay_presented = False
-        self._last_overlay_render = None
         self._last_resource_usage = None
         self._local_app_commands = {}
         self._connection_test_pending = False
@@ -140,7 +135,6 @@ class DesktopWindow(QMainWindow):
         self._refresh_logs()
         self._translate_static(self.draft.language)
         self._refresh_master_audio()
-        self._refresh_computer_state()
         self._refresh_status()
 
     def _build(self):
@@ -155,7 +149,7 @@ class DesktopWindow(QMainWindow):
         self.navigation.addItems(PAGES)
         self.navigation.setFixedWidth(176)
         self.navigation.setIconSize(QSize(20, 20))
-        icons = ("rocket-launch-outline", "view-dashboard-outline", "monitor-dashboard", "apps",
+        icons = ("view-dashboard-outline", "monitor-dashboard", "apps",
                  "message-badge-outline", "cog-outline", "text-box-search-outline")
         self._navigation_icons = icons
         self._refresh_navigation_icons()
@@ -168,6 +162,7 @@ class DesktopWindow(QMainWindow):
         for title in PAGES:
             page = QWidget()
             content = QVBoxLayout(page)
+            content.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
             content.setContentsMargins(18, 18, 18, 18)
             content.setSpacing(12)
             header = QLabel(title)
@@ -180,19 +175,25 @@ class DesktopWindow(QMainWindow):
             scroll.setWidget(page)
             self.pages.addWidget(scroll)
         self.navigation.currentRowChanged.connect(self.pages.setCurrentIndex)
-        self.navigation.setCurrentRow(Page.ONBOARDING)
+        self.navigation.setCurrentRow(Page.OVERVIEW)
         body.addWidget(sidebar)
-        body.addWidget(self.pages, 1)
-        layout.addLayout(body, 1)
-        footer = QHBoxLayout()
-        footer.setContentsMargins(16, 8, 16, 10)
-        self.dirty_status = QLabel("Brak niezapisanych zmian")
-        self.dirty_status.setObjectName("statusBadge")
-        self.dirty_status.setAccessibleName("Stan zmian ustawień")
-        footer.addWidget(self.dirty_status)
-        self.status = QLabel("Gotowy")
-        self.status.setWordWrap(True)
-        footer.addWidget(self.status, 1)
+        main = QVBoxLayout()
+        main.setContentsMargins(0, 0, 0, 0)
+        main.setSpacing(0)
+        main.addWidget(self.pages, 1)
+        footer_frame = QFrame()
+        footer_frame.setObjectName("footer")
+        footer = QHBoxLayout(footer_frame)
+        footer.setContentsMargins(18, 10, 18, 12)
+        self.connection_indicator = QLabel("●")
+        self.connection_indicator.setObjectName("connectionIndicator")
+        QToolTip.setFont(QFont("Segoe UI", 10))
+        self.connection_indicator.setFixedSize(20, 20)
+        self.connection_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sidebar_layout.addWidget(self.connection_indicator, 0, Qt.AlignmentFlag.AlignLeft)
+        self.status = QLabel(self)
+        self.status.hide()
+        footer.addStretch()
         self.discard = self._button("Odrzuć", self._discard)
         self.discard.setAccessibleName("Odrzuć niezapisane zmiany")
         footer.addWidget(self.discard)
@@ -200,10 +201,12 @@ class DesktopWindow(QMainWindow):
         self.save.setObjectName("primaryButton")
         self.save.setAccessibleName("Zastosuj ustawienia")
         footer.addWidget(self.save)
-        layout.addLayout(footer)
+        main.addWidget(footer_frame)
+        body.addLayout(main, 1)
+        body.setSpacing(0)
+        layout.addLayout(body, 1)
         self.setCentralWidget(root)
 
-        self._onboarding()
         self._dashboard()
         self._computer()
         self._applications()
@@ -217,12 +220,6 @@ class DesktopWindow(QMainWindow):
         self.resource_usage.setWordWrap(True)
         resource_layout.addWidget(self.resource_usage)
         self._content(Page.DIAGNOSTICS).addWidget(resources)
-        diagnostics, diagnostic_layout = self._card("Stan runtime", f"Wersja {__version__}")
-        self.diagnostic_status = QLabel()
-        self.diagnostic_status.setWordWrap(True)
-        self.diagnostic_status.setTextFormat(Qt.TextFormat.PlainText)
-        diagnostic_layout.addWidget(self.diagnostic_status)
-        self._content(Page.DIAGNOSTICS).addWidget(diagnostics)
         preview, preview_layout = self._card("Podgląd bezpiecznego eksportu", "Dokładnie te dane trafią do pliku. Treść logów, hosty, użytkownicy, ścieżki i dane aplikacji są pomijane.")
         self.diagnostic_preview = QPlainTextEdit()
         self.diagnostic_preview.setReadOnly(True)
@@ -283,58 +280,6 @@ class DesktopWindow(QMainWindow):
             description.deleteLater()
         return card, layout
 
-    def _onboarding(self):
-        layout = self._content(Page.ONBOARDING)
-        intro, inner = self._card("Połącz komputer w 3 krokach", "Możesz skonfigurować wszystko lokalnie i przetestować powiadomienie przed połączeniem z Home Assistant.")
-        self.channel = QComboBox()
-        self.channel.setAccessibleName("Kanał połączenia")
-        self.channel.setMaximumWidth(480)
-        self.channel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        self.channel.addItem("MQTT — pełny produkt: sensory, audio i sterowanie", "mqtt")
-        self.channel.addItem("Direct — tylko powiadomienia ekranowe", "direct")
-        self.channel.addItem("Lokalnie — konfiguracja bez połączenia", "local")
-        initial = "mqtt" if self.draft.mqtt.host else "direct" if self.draft.home_assistant.enabled else "local"
-        self.channel.setCurrentIndex(self.channel.findData(initial))
-        inner.addWidget(QLabel("1. Wybierz kanał"))
-        inner.addWidget(self.channel)
-        steps = QLabel("2. Uzupełnij połączenie w Ustawieniach.  3. Wybierz dane i uprawnienia na stronie Komputer.")
-        steps.setWordWrap(True)
-        inner.addWidget(steps)
-        actions = QHBoxLayout()
-        actions.addWidget(self._button("Połączenie", lambda: self.navigation.setCurrentRow(Page.SETTINGS)))
-        actions.addWidget(self._button("Funkcje", lambda: self.navigation.setCurrentRow(Page.COMPUTER)))
-        self.onboarding_test = self._button("Test lokalny", self._preview_overlay)
-        self.onboarding_test.setAccessibleName("Wyświetl lokalne powiadomienie testowe")
-        actions.addWidget(self.onboarding_test)
-        self.connection_test = self._button("Test połączenia", self._test_connection)
-        self.connection_test.setAccessibleName("Test zastosowanego połączenia")
-        actions.addWidget(self.connection_test)
-        inner.addLayout(actions)
-        self.onboarding_result = QLabel("Test wymaga zastosowanej opcji Wiadomości na ekranie.")
-        self.onboarding_result.setWordWrap(True)
-        self.onboarding_result.setAccessibleName("Wynik testu lokalnego")
-        inner.addWidget(self.onboarding_result)
-        self.connection_test_result = QLabel("Test używa zastosowanej konfiguracji.")
-        self.connection_test_result.setWordWrap(True)
-        self.connection_test_result.setAccessibleName("Wynik testu połączenia")
-        inner.addWidget(self.connection_test_result)
-        layout.addWidget(intro)
-        layout.addStretch()
-        self.channel.currentIndexChanged.connect(self._channel_changed)
-
-    def _channel_changed(self):
-        channel = self.channel.currentData()
-        if channel == "mqtt":
-            self.draft.home_assistant.enabled = False
-        elif channel == "direct":
-            self.draft.home_assistant.enabled = True
-            self.draft.overlay_enabled = True
-        else:
-            self.draft.home_assistant.enabled = False
-            self.draft.mqtt.host = ""
-        self._refresh_fields()
-        self._update_dirty()
-
     def _test_connection(self):
         if self._pending_apply is not None:
             self.connection_test_result.setText(self._localized("Poczekaj na wynik stosowania ustawień.", "Wait for the settings apply result."))
@@ -385,23 +330,22 @@ class DesktopWindow(QMainWindow):
         self.summary.setTextFormat(Qt.TextFormat.RichText)
         self.summary.setAccessibleName("Stan kanałów połączenia")
         hero_layout.addWidget(self.summary)
-        actions = QHBoxLayout()
-        actions.addWidget(self._button("Uruchom", self.application.start))
-        actions.addWidget(self._button("Zatrzymaj", self.application.stop))
-        actions.addWidget(self._button("Połącz ponownie", self.application.reconnect))
-        hero_layout.addLayout(actions)
+        self._overview_action_layout = QGridLayout()
+        self.connection_test = self._button("Sprawdź połączenie", self._test_connection)
+        self.connection_test.setAccessibleName("Sprawdź połączenie")
+        self._overview_actions = (
+            self._button("Uruchom", self.application.start),
+            self._button("Zatrzymaj", self.application.stop),
+            self._button("Połącz ponownie", self.application.reconnect),
+            self.connection_test,
+        )
+        self._layout_overview_actions()
+        hero_layout.addLayout(self._overview_action_layout)
+        self.connection_test_result = QLabel()
+        self.connection_test_result.setWordWrap(True)
+        self.connection_test_result.setAccessibleName("Wynik testu połączenia")
+        hero_layout.addWidget(self.connection_test_result)
         layout.addWidget(hero)
-        health, health_layout = self._card("Zdrowie i świeżość", "Stan lokalnych danych i czas ostatniej aktualizacji.")
-        self.overview_health = QLabel()
-        self.overview_health.setWordWrap(True)
-        self.overview_health.setTextFormat(Qt.TextFormat.PlainText)
-        health_layout.addWidget(self.overview_health)
-        layout.addWidget(health)
-        capabilities, capability_layout = self._card("Skonfigurowane funkcje", "Pokazuje ustawienia zastosowane w działającej aplikacji.")
-        self.capability_summary = QLabel()
-        self.capability_summary.setWordWrap(True)
-        capability_layout.addWidget(self.capability_summary)
-        layout.addWidget(capabilities)
         error, error_layout = self._card("Ostatni problem")
         self.last_error = QLabel("Brak zarejestrowanych błędów.")
         self.last_error.setWordWrap(True)
@@ -414,17 +358,15 @@ class DesktopWindow(QMainWindow):
         layout.addStretch()
         self.connections = self.summary
 
+    def _layout_overview_actions(self):
+        columns = 2 if self.width() < 900 else 4
+        for button in self._overview_actions:
+            self._overview_action_layout.removeWidget(button)
+        for index, button in enumerate(self._overview_actions):
+            self._overview_action_layout.addWidget(button, index // columns, index % columns)
+
     def _computer(self):
         content = self._content(Page.COMPUTER)
-        self.master_audio = MasterVolumeCard()
-        self.master_audio.setAccessibleName("Głośność systemu Windows")
-        self.master_audio.volume_requested.connect(
-            lambda value: self.application.command("audio.master.volume", {"value": value / 100})
-        )
-        self.master_audio.mute_requested.connect(
-            lambda muted: self.application.command("audio.master.mute", {"value": muted})
-        )
-        content.addWidget(self.master_audio)
         groups = {
             "System": {"publish_cpu_stats", "publish_ram_stats", "publish_gpu_stats", "publish_windows_health", "publish_disk_stats"},
             "Obecność i prywatność": {"publish_activity", "publish_idle", "publish_session_lock"},
@@ -432,22 +374,15 @@ class DesktopWindow(QMainWindow):
             "Audio i sterowanie": {key for key, _title in FEATURES} - {"publish_cpu_stats", "publish_ram_stats", "publish_gpu_stats", "publish_windows_health", "publish_disk_stats", "publish_activity", "publish_idle", "publish_session_lock", "publish_devices"},
         }
         by_key = dict(FEATURES)
-        self.feature_values = {}
         for title, keys in groups.items():
             card, inner = self._card(title)
-            for key in (key for key, _label in FEATURES if key in keys):
+            for key in (key for key, _label in FEATURES if key in keys and key not in {"control_master_volume", "control_active_app"}):
                 row = SettingRow(by_key[key], self._feature_detail(key))
                 row.switch.setChecked(bool(self._get(key)))
                 row.switch.setAccessibleName(f"Udostępniaj: {by_key[key]}")
                 row.switch.toggled.connect(lambda _checked=False, selected=key: self._feature_changed(selected))
                 self._toggles[key] = row.switch
                 inner.addWidget(row)
-                value = QLabel()
-                value.setObjectName("dataLabel")
-                value.setWordWrap(True)
-                value.setAccessibleName(f"Stan funkcji: {by_key[key]}")
-                self.feature_values[key] = value
-                inner.addWidget(value)
                 if key in {"publish_disk_stats", "publish_devices"}:
                     kind = "disks" if key == "publish_disk_stats" else "devices"
                     inner.addWidget(self._button("Wybierz dyski…" if kind == "disks" else "Wybierz urządzenia…", lambda _checked=False, selected=kind: self.application.request_inventory(selected)))
@@ -460,7 +395,7 @@ class DesktopWindow(QMainWindow):
             return "Prywatność: może ujawniać nazwę aktywnej aplikacji i okna."
         if key in {"allow_power_actions", "enable_windows_notifications"}:
             return "Jawne uprawnienie dla zdalnej akcji Home Assistant."
-        return "Bieżąca wartość, źródło i czas ostatniej aktualizacji są pokazane poniżej."
+        return ""
 
     def _feature_changed(self, key):
         self._set(key, self._toggles[key].isChecked())
@@ -538,14 +473,31 @@ class DesktopWindow(QMainWindow):
 
     def _applications(self):
         content = self._content(Page.APPLICATIONS)
+        self.master_audio = MasterVolumeCard(title="Głośność Windows")
+        self.master_audio.setAccessibleName("Głośność systemu Windows")
+        self.master_audio.volume_requested.connect(
+            lambda value: self.application.command("audio.master.volume", {"value": value / 100})
+        )
+        self.master_audio.mute_requested.connect(
+            lambda muted: self.application.command("audio.master.mute", {"value": muted})
+        )
+        self.active_audio = MasterVolumeCard(title="Głośność aktywnej aplikacji", description="")
+        self.active_audio.setAccessibleName("Głośność aktywnej aplikacji")
+        self.active_audio.mute_button.hide()
+        self.active_audio.enabled_switch.setToolTip("Głośność aktywnej aplikacji")
+        self.active_audio.volume_requested.connect(
+            lambda value: self.application.command("audio.active.volume", {"value": value / 100})
+        )
+        for key, card in (("control_master_volume", self.master_audio), ("control_active_app", self.active_audio)):
+            card.set_feature_enabled(self._get(key))
+            card.set_runtime_enabled(bool(getattr(self.applied, key)))
+            self._toggles[key] = card.enabled_switch
+            card.feature_toggled.connect(self._update_dirty)
+            content.addWidget(card)
         actions = QHBoxLayout()
         actions.addWidget(self._button("Dodaj program…", self._add_app))
         actions.addWidget(self._button("Wykryj aktywne", lambda: self.application.request_inventory("applications")))
         content.addLayout(actions)
-        self.app_state = QLabel("Stan sesji audio oczekuje na pierwszy lokalny snapshot.")
-        self.app_state.setWordWrap(True)
-        self.app_state.setAccessibleName("Stan źródła aplikacji audio")
-        content.addWidget(self.app_state)
         self._apps_container = QVBoxLayout()
         content.addLayout(self._apps_container)
         for config in self.draft.apps:
@@ -570,6 +522,7 @@ class DesktopWindow(QMainWindow):
         card.local_result.setWordWrap(True)
         card.local_result.setAccessibleName("Wynik lokalnego polecenia aplikacji")
         card.layout().addWidget(card.local_result, 3, 1, 1, 5)
+        card.local_result.hide()
         self._sync_app_actions(card)
         self._translate_card(card, self.draft.language)
         card.volume_requested.connect(
@@ -596,6 +549,7 @@ class DesktopWindow(QMainWindow):
         card.local_close_action.setToolTip(self._localized("Wymaga zastosowanego uprawnienia zamykania.", "Requires applied close permission.") if not can_close else applied.process_name)
 
     def _local_app_command(self, card, kind):
+        card.local_result.show()
         applied = self._applied_app(card.config.process_name)
         if applied is None or (kind == "application.start" and not (applied.allow_remote_start and applied.executable_path)) or (kind == "application.close" and not applied.allow_remote_close):
             card.local_result.setText(self._localized("Zastosuj ścieżkę programu i uprawnienia przed poleceniem.", "Apply the program path and permissions before this command."))
@@ -626,20 +580,16 @@ class DesktopWindow(QMainWindow):
         if not self.isVisible():
             return
         self._refresh_visible_page()
-        if self.navigation.currentRow() in {Page.DIAGNOSTICS, Page.COMPUTER, Page.OVERVIEW}:
+        if self.navigation.currentRow() in {Page.DIAGNOSTICS, Page.APPLICATIONS, Page.OVERVIEW}:
             self._page_timer.start(2000)
 
     def _refresh_timed_state(self):
         self._refresh_master_audio()
-        if self.isVisible() and self.navigation.currentRow() == Page.COMPUTER:
-            self._refresh_computer_state()
 
     def _refresh_visible_page(self):
         if self._disposed or not self.isVisible():
             return
-        if self.navigation.currentRow() == Page.COMPUTER:
-            self._refresh_computer_state()
-        elif self.navigation.currentRow() == Page.OVERVIEW:
+        if self.navigation.currentRow() == Page.OVERVIEW:
             self._refresh_status()
         elif self.navigation.currentRow() == Page.APPLICATIONS:
             self._update_applications_from_state()
@@ -650,15 +600,11 @@ class DesktopWindow(QMainWindow):
     def _update_applications_from_state(self):
         sample = self.application.computer_snapshot().provider("audio")
         if sample is None:
-            self.app_state.setText(self._localized("Źródło audio nie jest uruchomione lub nie ma jeszcze próbki.", "Audio source is stopped or has no sample yet."))
             self._update_applications([], discover=False)
             return
-        age = max(0, round(time.time() - sample.observed_at))
-        if sample.quality.value != "good":
-            self.app_state.setText(self._localized(f"Źródło audio: {sample.quality.value}, ostatnia próbka {age} s temu.", f"Audio source: {sample.quality.value}, last sample {age} s ago."))
+        if not self._display_sample_available(sample):
             self._update_applications([], discover=False)
             return
-        self.app_state.setText(self._localized(f"Aktualny lokalny snapshot audio · {age} s temu. Brak sesji jest poprawnym stanem.", f"Current local audio sample · {age} s ago. Zero sessions is valid."))
         self._update_applications(list(sample.value.applications), discover=False)
     def _update_applications(self, items, *, discover=True):
         if self._pending_apply is not None and discover:
@@ -702,59 +648,6 @@ class DesktopWindow(QMainWindow):
         content = self._content(Page.OVERLAYS)
         self._toggle(Page.OVERLAYS, "overlay_enabled", "Wiadomości na ekranie")
         self._toggle(Page.OVERLAYS, "overlay_allow_fullscreen", "Zezwalaj nad pełnym ekranem")
-        editor, inner = self._card("Lokalny edytor", "Podgląd korzysta z tej samej kolejki i tych samych zasad co polecenia z Home Assistant. Działa bez sieci, gdy nakładki są zastosowane w runtime.")
-        form = QFormLayout()
-        self.overlay_title = QLineEdit("Test HA Windows Bridge")
-        self.overlay_message = QLineEdit("Lokalny podgląd powiadomienia")
-        self.overlay_layout = QComboBox()
-        for label, value in (("Kompaktowy", "compact"), ("Standardowy", "standard"), ("Status", "status"), ("Badge", "badge"), ("Media", "media"), ("Kamera", "camera")):
-            self.overlay_layout.addItem(label, value)
-        self.overlay_monitor = QComboBox()
-        for index, label in enumerate(self.application.monitors):
-            self.overlay_monitor.addItem(label, index)
-        initial_monitor = next(
-            (index for index, label in enumerate(self.application.monitors)
-             if monitor_id_from_label(label) == self.draft.overlay_monitor_id),
-            min(self.applied.overlay_monitor, max(0, self.overlay_monitor.count() - 1)),
-        )
-        self.overlay_monitor.setCurrentIndex(initial_monitor)
-        for label, widget in (("Tytuł", self.overlay_title), ("Wiadomość", self.overlay_message), ("Układ", self.overlay_layout), ("Monitor", self.overlay_monitor)):
-            widget.setAccessibleName(label)
-            field_label = QLabel(label)
-            field_label.setBuddy(widget)
-            form.addRow(field_label, widget)
-        inner.addLayout(form)
-        advanced = QVBoxLayout()
-        self.overlay_pinned = SettingRow("Przypięte", "Bez automatycznego zamknięcia")
-        self.overlay_close = SettingRow("Przycisk zamknięcia", "Pozwala zamknąć myszą")
-        self.overlay_hover = SettingRow("Pauza po najechaniu", "Zatrzymuje czas życia")
-        advanced.addWidget(self.overlay_pinned)
-        advanced.addWidget(self.overlay_close)
-        advanced.addWidget(self.overlay_hover)
-        inner.addLayout(advanced)
-        actions = QHBoxLayout()
-        actions.addWidget(self._button("Podgląd", self._preview_overlay))
-        actions.addWidget(self._button("Aktualizuj", self._update_overlay))
-        actions.addWidget(self._button("Usuń", self._remove_overlay))
-        actions.addWidget(self._button("Wyczyść wszystkie", self._clear_overlays))
-        inner.addLayout(actions)
-        self.overlay_result = QLabel("Brak lokalnego wyniku cyklu życia.")
-        self.overlay_result.setWordWrap(True)
-        self.overlay_result.setAccessibleName("Wynik kolejki powiadomień")
-        inner.addWidget(self.overlay_result)
-        content.addWidget(editor)
-        for key, title, choices in (
-            ("overlay_animation", "Animacja", (("Przesunięcie", "slide"), ("Przenikanie", "fade"), ("Rozwinięcie", "reveal"), ("Brak", "none"))),
-            ("overlay_background_effect", "Tło", (("Jednolite", "none"), ("Rozmycie", "blur"), ("Liquid Glass", "liquid"))),
-        ):
-            combo = QComboBox()
-            for label, value in choices:
-                combo.addItem(label, value)
-            combo.setCurrentIndex(max(0, combo.findData(self._get(key))))
-            combo.setAccessibleName(title)
-            combo.currentIndexChanged.connect(self._update_dirty)
-            self._fields[key] = combo
-            content.addWidget(SettingControlRow(title, combo))
         spin = QSpinBox()
         spin.setRange(80, 1000)
         spin.setSuffix(" ms")
@@ -763,77 +656,11 @@ class DesktopWindow(QMainWindow):
         spin.valueChanged.connect(self._update_dirty)
         self._fields["overlay_animation_duration"] = spin
         content.addWidget(SettingControlRow("Czas animacji", spin))
-        duration = QSpinBox()
-        duration.setRange(2, 60)
-        duration.setSuffix(" s")
-        duration.setValue(self._get("overlay_example_duration"))
-        duration.setAccessibleName("Czas lokalnego przykładu")
-        duration.valueChanged.connect(self._update_dirty)
-        self._fields["overlay_example_duration"] = duration
-        content.addWidget(SettingControlRow("Czas lokalnego przykładu", duration))
         content.addStretch()
 
-    def _refresh_overlay_monitors(self, labels):
-        selected_id = monitor_id_from_label(self.overlay_monitor.currentText()) or self.draft.overlay_monitor_id
-        self.overlay_monitor.blockSignals(True)
-        self.overlay_monitor.clear()
-        for index, label in enumerate(labels):
-            self.overlay_monitor.addItem(label, index)
-        selected = next((index for index, label in enumerate(labels) if monitor_id_from_label(label) == selected_id), 0)
-        self.overlay_monitor.setCurrentIndex(selected)
-        self.overlay_monitor.blockSignals(False)
-    def _overlay_arguments(self, action):
-        data = {"action": action, "id": self._last_overlay_id}
-        if action in {"show", "update"}:
-            data.update(
-                layout=self.overlay_layout.currentData(),
-                monitor=self.overlay_monitor.currentData() or 0,
-                duration=self.application.config.overlay_example_duration,
-                monitor_id=monitor_id_from_label(self.overlay_monitor.currentText()),
-                pinned=self.overlay_pinned.switch.isChecked(),
-                show_close_button=self.overlay_close.switch.isChecked(),
-                pause_on_hover=self.overlay_hover.switch.isChecked(),
-            )
-        value = {"data": data}
-        if action in {"show", "update"}:
-            value.update(title=self.overlay_title.text(), message=self.overlay_message.text())
-        return value
-
-    def _set_local_overlay_result(self, polish, english):
-        self._last_overlay_render = (polish, english)
-        message = self._localized(polish, english)
-        self.overlay_result.setText(message)
-        self.onboarding_result.setText(message)
-
-    def _overlay_command(self, action):
-        result = self.application.command("overlay.show", self._overlay_arguments(action))
-        accepted = result.status in {"accepted", "pending"}
-        self._local_overlay_pending_id = result.id if accepted else None
-        self._local_overlay_pending_action = action if accepted else None
-        self._local_overlay_command_id = result.id if action == "show" and accepted else None
-        self._local_overlay_presented = False
-        waiting_pl = "oczekuje na prezentację" if action == "show" else "oczekuje na wynik"
-        waiting_en = "awaiting presentation" if action == "show" else "awaiting result"
-        self._set_local_overlay_result(
-            f"{action}: {result.status} · {result.code or waiting_pl}",
-            f"{action}: {result.status} · {result.code or waiting_en}",
-        )
-
-    def _preview_overlay(self):
-        if not self.application.config.overlay_enabled:
-            self._last_overlay_render = None
-            self.onboarding_result.setText(self._localized("Włącz Wiadomości na ekranie, zastosuj ustawienia i ponów test.", "Enable on-screen messages, apply settings and retry the test."))
-            return
-        self._overlay_command("show")
-
-    def _update_overlay(self):
-        self._overlay_command("update")
-
-    def _remove_overlay(self):
-        self._overlay_command("remove")
-
     def _clear_overlays(self):
-        self._overlay_command("clear")
+        self.application.command("overlay.show", {"data": {"action": "clear"}})
+
     def _settings(self):
         content = self._content(Page.SETTINGS)
         for key, label in (("auto_connect", "Łącz automatycznie"), ("start_with_windows", "Uruchamiaj z Windows"),
@@ -879,7 +706,6 @@ class DesktopWindow(QMainWindow):
             return
         self._collect()
         dirty = self.draft != self.applied
-        self.dirty_status.setText(translate("Niezapisane zmiany" if dirty else "Brak niezapisanych zmian", self.draft.language))
         self.save.setEnabled(dirty and self._pending_apply is None)
         self.discard.setEnabled(dirty and self._pending_apply is None)
 
@@ -902,11 +728,10 @@ class DesktopWindow(QMainWindow):
         set_active_language(language)
         for index, source in enumerate(PAGES):
             self.navigation.item(index).setText(translate(source, language))
-        dynamic = set(self.feature_values.values()) | {
-            self.status, self.dirty_status, self.summary, self.overview_health,
-            self.capability_summary, self.last_error, self.app_state,
-            self.onboarding_result, self.connection_test_result, self.overlay_result, self.resource_usage,
-            self.diagnostic_status,
+        dynamic = {
+            self.status, self.summary, self.connection_indicator, self.last_error,
+            self.active_audio.description_label,
+            self.connection_test_result, self.resource_usage,
         }
         for widget in dynamic:
             localized = translate(widget.text(), language)
@@ -924,8 +749,6 @@ class DesktopWindow(QMainWindow):
             else:
                 widget.setText(translate(source, language))
         for combo in self.findChildren(QComboBox):
-            if combo is self.overlay_monitor:
-                continue
             for index in range(combo.count()):
                 source = combo.itemData(index, Qt.ItemDataRole.UserRole + 1)
                 if source is None:
@@ -949,9 +772,6 @@ class DesktopWindow(QMainWindow):
             self._toggles[key].setAccessibleName(
                 f"{translate('Udostępniaj', language)}: {name}"
             )
-            self.feature_values[key].setAccessibleName(
-                f"{translate('Stan funkcji', language)}: {name}"
-            )
         for card in self._cards:
             self._translate_card(card, language)
         if hasattr(self, "tray"):
@@ -963,14 +783,9 @@ class DesktopWindow(QMainWindow):
                     source = action.text()
                     action.setProperty("bridgePolishText", source)
                 action.setText(translate(source, language))
-        if self._last_overlay_render is not None:
-            polish, english = self._last_overlay_render
-            message = self._localized(polish, english)
-            self.overlay_result.setText(message)
-            self.onboarding_result.setText(message)
         self._refresh_navigation_icons()
-        self._refresh_computer_state()
         self._refresh_resource_usage()
+        self._refresh_master_audio()
 
     @staticmethod
     def _translate_card(card, language):
@@ -1209,38 +1024,16 @@ class DesktopWindow(QMainWindow):
         text = "\n".join(lines)
         self.connections.setText("<br>".join(rich_lines))
         self.connections.setAccessibleName(text)
-        state = self.application.computer_snapshot()
-        health_lines = []
-        for item in state.health:
-            age = max(0, round(time.time() - item.checked_at))
-            last = self._localized("brak udanej próbki", "no successful sample") if item.last_success_at is None else self._localized(
-                f"ostatni sukces {max(0, round(time.time() - item.last_success_at))} s temu",
-                f"last success {max(0, round(time.time() - item.last_success_at))} s ago",
-            )
-            checked = self._localized(f"sprawdzono {age} s temu", f"checked {age} s ago")
-            health_lines.append(f"{item.source}: {item.quality.value} · {checked} · {last}" + (f" · {item.detail}" if item.detail else ""))
-        self.overview_health.setText("\n".join(health_lines) or self._localized(
-            "Brak aktywnych providerów. Włącz funkcje na stronie Komputer i zastosuj zmiany.",
-            "No active providers. Enable features on Computer and apply changes.",
-        ))
-        active = [translate(title, self.draft.language) for key, title in FEATURES if bool(getattr(config, key))]
-        caption = self._localized(f"{len(active)} skonfigurowanych do udostępniania: ", f"{len(active)} configured to share: ")
-        self.capability_summary.setText(caption + (", ".join(active) if active else self._localized("brak", "none")))
-        service_lines = [f"{item.name}: {item.state.value}" for item in self.application.states.snapshot()]
         preview = self.application.diagnostic_preview()
-        queue = preview["notifications"]
-        diagnostic = [*lines, *service_lines,
-                      self._localized(
-                           f"Kolejka: widoczne {queue['visible']}, oczekujące {queue['pending']}, zamykane {queue['retiring']}",
-                           f"Queue: visible {queue['visible']}, pending {queue['pending']}, retiring {queue['retiring']}",
-                       ),
-                       f"{self._localized('Sensory', 'Sensors')}: {self._sensor_state_text()}",
-                      self._localized(
-                           f"Powiadomienia: {'wyciszone' if queue['quiet'] else 'aktywne'}",
-                           f"Notifications: {'quiet' if queue['quiet'] else 'active'}",
-                       )]
-        self.diagnostic_status.setText("\n".join(diagnostic))
-        self.diagnostic_preview.setPlainText(json.dumps(preview, ensure_ascii=False, indent=2))
+        report = json.dumps(preview, ensure_ascii=False, indent=2)
+        if report != self.diagnostic_preview.toPlainText():
+            vertical = self.diagnostic_preview.verticalScrollBar().value()
+            horizontal = self.diagnostic_preview.horizontalScrollBar().value()
+            cursor = self.diagnostic_preview.textCursor()
+            self.diagnostic_preview.setPlainText(report)
+            self.diagnostic_preview.setTextCursor(cursor)
+            self.diagnostic_preview.verticalScrollBar().setValue(vertical)
+            self.diagnostic_preview.horizontalScrollBar().setValue(horizontal)
         self.tray.setToolTip("HA Windows Bridge 2.0\n" + text)
         self.tray_status.setText(text.replace("\n", " · "))
         self.tray_sensors.setText(f"{self._localized('Sensory', 'Sensors')}: {self._sensor_state_text()}")
@@ -1250,6 +1043,21 @@ class DesktopWindow(QMainWindow):
         values = {getattr(item.state, "value", item.state) for name, item in self._connection_states.items() if name in active_transports}
         color = "#ef8794" if values & {"auth_error", "configuration_error"} else "#efc261" if values & {"connecting", "retry_wait"} else "#69d7a0" if "connected" in values else "#a4adb2"
         self.tray.setIcon(qta.icon("mdi6.lan-connect", color=color))
+        failed = bool(values & {"auth_error", "configuration_error"}) or any(
+            item.state.value == "error" for item in self.application.states.snapshot()
+        )
+        connected = bool(active_transports) and values == {"connected"} and len(
+            [name for name in active_transports if name in self._connection_states]
+        ) == len(active_transports)
+        indicator_color = "#e06c75" if failed else "#43c982" if connected else "#899297"
+        indicator_text = self._localized("Awaria", "Failure") if failed else self._localized(
+            "Połączono", "Connected"
+        ) if connected else self._localized("Brak połączenia", "Disconnected")
+        self.connection_indicator.setStyleSheet(
+            f"QLabel#connectionIndicator {{ color: {indicator_color}; font-size: 18px; }}"
+        )
+        self.connection_indicator.setToolTip(indicator_text)
+        self.connection_indicator.setAccessibleName(indicator_text)
 
     def _sensor_state_text(self):
         statuses = self.application.states.snapshot()
@@ -1260,95 +1068,16 @@ class DesktopWindow(QMainWindow):
             return self._localized("zatrzymane", "stopped")
         return self._localized("wstrzymane", "paused") if self.application.sensors_paused else self._localized("działają", "running")
 
-    def _refresh_computer_state(self):
-        state = self.application.computer_snapshot()
-        source_for = {
-            "publish_cpu_stats": "cpu_ram", "publish_ram_stats": "cpu_ram",
-            "publish_gpu_stats": "gpu", "publish_windows_health": "windows_health",
-            "publish_disk_stats": "storage", "publish_devices": "pnp",
-            "publish_activity": "desktop_context", "publish_idle": "desktop_context",
-            "publish_session_lock": "desktop_context", "control_master_volume": "audio",
-            "control_microphone": "audio", "control_audio_output": "audio",
-            "control_active_app": "audio", "audio_enhancements_enabled": "audio",
-            "control_channel_balance": "audio", "publish_audio_sessions": "audio",
-            "media_player_enabled": "media",
-        }
-        for key, label in self.feature_values.items():
-            source = source_for.get(key)
-            if source is None:
-                enabled = bool(getattr(self.application.config, key))
-                label.setText(self._localized(
-                    f"runtime: {'dozwolone' if enabled else 'wyłączone'} · lokalna polityka",
-                    f"runtime: {'allowed' if enabled else 'disabled'} · local policy",
-                ))
-                continue
-            sample = state.provider(source)
-            health = state.health_for(source)
-            if sample is None:
-                quality = health.quality.value if health else "unavailable"
-                detail = f" · {health.detail}" if health and health.detail else ""
-                label.setText(f"{source}: {quality} · {self._localized('brak próbki', 'no sample')}{detail}")
-                continue
-            age = max(0, round(time.time() - sample.observed_at))
-            detail = f" · {health.detail}" if health and health.detail else ""
-            age_text = self._localized(f"{age} s temu", f"{age} s ago")
-            label.setText(f"{source}: {sample.quality.value} · {age_text} · {self._feature_value(key, sample.value)}{detail}")
 
-    def _feature_value(self, key, value):
-        if key == "publish_cpu_stats":
-            return f"CPU {getattr(value, 'cpu_percent', 0):.1f}%"
-        if key == "publish_ram_stats":
-            return f"RAM {getattr(value, 'ram_percent', 0):.1f}%"
-        if key == "publish_gpu_stats":
-            percent = getattr(value, "gpu_percent", None)
-            return "GPU —" if percent is None else f"GPU {percent:.1f}%"
-        if key == "publish_windows_health":
-            pending = getattr(value, "pending_restart", False)
-            return self._localized(f"restart: {'wymagany' if pending else 'nie'}",
-                                   f"restart: {'required' if pending else 'no'}")
-        if key == "publish_disk_stats":
-            selected = [v for v in getattr(value, "volumes", ()) if getattr(v, "mountpoint", "") in self.draft.disk_mounts]
-            return ", ".join(
-                f"{v.mountpoint}: {v.used_percent:.0f}% {self._localized('zajęte', 'used')}, {v.free_gb:.1f} GB {self._localized('wolne', 'free')}"
-                for v in selected
-            ) if selected else self._localized("brak wybranych dysków w próbce", "no selected disks in sample")
-        if key == "publish_devices":
-            selected = {item.instance_id for item in self.draft.tracked_devices if item.enabled}
-            found = [v for v in getattr(value, "devices", ()) if getattr(v, "instance_id", "") in selected]
-            return ", ".join(f"{v.display_name}: {self._localized('obecne', 'present') if v.present else self._localized('nieobecne', 'absent')}" for v in found) if found else self._localized("brak wybranych urządzeń w próbce", "no selected devices in sample")
-        if key == "publish_activity":
-            return f"{self._localized('aktywna aplikacja', 'active application')}: {getattr(value, 'process_name', '') or self._localized('brak', 'none')}"
-        if key == "publish_idle":
-            return f"{self._localized('bezczynność', 'idle')}: {getattr(value, 'idle_seconds', 0)} s"
-        if key == "publish_session_lock":
-            return self._localized("sesja zablokowana", "session locked") if getattr(value, "locked", False) else self._localized("sesja odblokowana", "session unlocked")
-        if key == "control_microphone":
-            microphone = getattr(value, "microphone", None)
-            if microphone is None:
-                return self._localized("mikrofon niedostępny", "microphone unavailable")
-            state = self._localized("wyciszony", "muted") if microphone.muted else self._localized("aktywny", "active")
-            return f"{self._localized('mikrofon', 'microphone')} {microphone.volume * 100:.0f}% · {state}"
-        if key == "control_audio_output":
-            outputs = getattr(value, "outputs", ())
-            return ", ".join(f"{v.name}{self._localized(' (domyślne)', ' (default)') if v.is_default else ''}" for v in outputs) or self._localized("brak wyjść audio", "no audio outputs")
-        if key == "control_active_app":
-            return f"{self._localized('cel', 'target')}: {getattr(value, 'active_process', '') or self._localized('brak', 'none')}"
-        if key == "publish_audio_sessions":
-            return f"{self._localized('sesje', 'sessions')}: {len(getattr(value, 'sessions', ()))}"
-        if key == "media_player_enabled":
-            return f"{self._localized('odtwarzanie', 'playback')}: {getattr(value, 'state', 'unavailable')}"
-        if key == "control_master_volume":
-            master = getattr(value, "master", None)
-            if master is None:
-                return self._localized("głośność główna niedostępna", "master volume unavailable")
-            state = self._localized("wyciszona", "muted") if master.muted else self._localized("aktywna", "active")
-            return f"{self._localized('głośność główna', 'master volume')} {master.volume * 100:.0f}% · {state}"
-        if key == "control_channel_balance":
-            balance = getattr(value, "balance", None)
-            return self._localized("balans niedostępny", "balance unavailable") if balance is None else f"{self._localized('balans', 'balance')} L/R {balance:.2f}"
-        if key == "audio_enhancements_enabled":
-            return self._localized("rozszerzenia audio: włączone w konfiguracji", "audio enhancements: enabled in configuration") if self.applied.audio_enhancements_enabled else self._localized("rozszerzenia audio: wyłączone", "audio enhancements: disabled")
-        return self._localized("dane dostępne", "data available")
+    def _display_sample_available(self, sample):
+        # Adaptive polling can wait five seconds between unchanged audio reads.
+        # Retain the last value across that gap, but never hide an actual failure.
+        return sample.quality.value == "good" or (
+            sample.quality.value == "stale"
+            and sample.detail == "freshness_deadline_exceeded"
+            and time.monotonic() - sample.observed_monotonic <= max(10.0, self.applied.poll_interval * 20)
+        )
+
     def _refresh_master_audio(self):
         state = self.application.computer_snapshot()
         master = state.master_audio
@@ -1363,8 +1092,20 @@ class DesktopWindow(QMainWindow):
             self.master_audio.set_muted(master.muted)
             quality = master.quality.value
             detail = master.detail
-        self.master_audio.set_feature_enabled(self.applied.control_master_volume)
+        self.master_audio.set_runtime_enabled(self.applied.control_master_volume)
+        if master is not None and self._display_sample_available(master):
+            quality = "good"
         self.master_audio.set_quality(quality, detail)
+        sample = state.provider("audio")
+        available = sample is not None and self._display_sample_available(sample)
+        value = sample.value if available else None
+        process = getattr(value, "active_process", "")
+        sessions = dict(getattr(value, "sessions", ()))
+        session = next((item for name, item in sessions.items() if name.casefold() == process.casefold()), None) if process else None
+        self.active_audio.description_label.setText(process or self._localized("Brak aktywnej aplikacji audio", "No active audio application"))
+        self.active_audio.set_volume(session.volume if session else None)
+        self.active_audio.set_runtime_enabled(self.applied.control_active_app)
+        self.active_audio.set_quality("good" if available and session else "unavailable")
 
     def _event(self, event):
         if self._disposed:
@@ -1392,10 +1133,9 @@ class DesktopWindow(QMainWindow):
         elif event.topic == "windows.explorer_restarted":
             self.tray.show()
         elif event.topic == "computer_state.changed":
-            if self.isVisible() and self.navigation.currentRow() == Page.COMPUTER:
+            if self.isVisible() and self.navigation.currentRow() in {Page.COMPUTER, Page.APPLICATIONS}:
                 self._refresh_master_audio()
-                self._refresh_computer_state()
-            elif self.isVisible() and self.navigation.currentRow() == Page.APPLICATIONS:
+            if self.isVisible() and self.navigation.currentRow() == Page.APPLICATIONS:
                 self._update_applications_from_state()
             if self.isVisible() and self.navigation.currentRow() in {Page.OVERVIEW, Page.DIAGNOSTICS}:
                 self._refresh_status()
@@ -1478,25 +1218,6 @@ class DesktopWindow(QMainWindow):
             self.last_error.setText(self._last_error)
             self.status.setText(self._last_error)
         elif event.topic == "command.result":
-            if event.data.id == self._local_overlay_pending_id:
-                action = self._local_overlay_pending_action
-                terminal = event.data.status in {"succeeded", "failed", "rejected", "cancelled"}
-                if terminal:
-                    self._local_overlay_pending_id = None
-                    self._local_overlay_pending_action = None
-                if event.data.status in {"failed", "rejected", "cancelled"}:
-                    self._local_overlay_command_id = None
-                if not (action == "show" and event.data.status == "succeeded" and self._local_overlay_presented):
-                    awaiting = action == "show" and event.data.status == "succeeded"
-                    detail_pl = event.data.code or ("oczekuje na prezentację" if awaiting else "wykonano")
-                    detail_en = event.data.code or ("awaiting presentation" if awaiting else "completed")
-                    if event.data.code == "desktop_context_unavailable":
-                        detail_pl = "Nie potwierdzono stanu prywatności pulpitu. Podgląd nie został wyświetlony. Ponów próbę po uzyskaniu gotowego stanu."
-                        detail_en = "Desktop privacy state is not confirmed. Preview was not displayed. Retry when the state is ready."
-                    self._set_local_overlay_result(
-                        f"{action}: {event.data.status} · {detail_pl}",
-                        f"{action}: {event.data.status} · {detail_en}",
-                    )
             card = self._local_app_commands.pop(event.data.id, None)
             if card is not None and card in self._cards:
                 card.local_result.setText(f"{event.data.status} · {event.data.code or self._localized('wykonano', 'completed')}")
@@ -1504,17 +1225,6 @@ class DesktopWindow(QMainWindow):
                 self.status.setText(self._localized(f"Nie wykonano polecenia: {event.data.code}", f"Command failed: {event.data.code}"))
             else:
                 self.status.setText(self._localized(f"Polecenie lokalne: {event.data.status}", f"Local command: {event.data.status}"))
-        elif event.topic == "overlay.monitors_changed":
-            self._refresh_overlay_monitors(event.data)
-        elif event.topic == "overlay.lifecycle":
-            if event.data.get("notification_id") != self._last_overlay_id:
-                return
-            command_id = event.data.get("command_id")
-            if self._local_overlay_command_id is None or (command_id and command_id != self._local_overlay_command_id):
-                return
-            self._local_overlay_presented = True
-            message = f"{event.data['notification_id']}: {event.data['disposition']} · {event.data['reason']}"
-            self._set_local_overlay_result(message, message)
         elif event.topic == "windows.activate_requested":
             self._restore_window()
     def _restore_window(self):
@@ -1589,6 +1299,11 @@ class DesktopWindow(QMainWindow):
         super().showEvent(event)
         if hasattr(self, "_page_timer"):
             self._activate_page()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_overview_actions"):
+            self._layout_overview_actions()
 
     def hideEvent(self, event):
         if hasattr(self, "_page_timer"):

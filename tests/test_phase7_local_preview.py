@@ -1,4 +1,4 @@
-"""Local editor commands fail closed until the cached privacy state is known."""
+"""Overlay commands fail closed until the cached privacy state is known."""
 from __future__ import annotations
 
 import threading
@@ -72,26 +72,23 @@ def observe(preview, context):
     )
 
 
+def submit(preview, action="show"):
+    return preview.app.command("overlay.show", {
+        "title": "Test", "message": "Test",
+        "data": {"action": action, "id": "test-preview", "layout": "standard"},
+    })
+
+
 def click(preview, action="show"):
-    before = len(preview.results)
-    if action == "show":
-        preview.window._preview_overlay()
-    else:
-        preview.window._update_overlay()
-    assert pump(preview.qt, lambda: len(preview.results) > before
-                and preview.window._local_overlay_pending_id is None)
-    return preview.results[-1]
+    result = submit(preview, action)
+    assert pump(preview.qt, lambda: any(item.id == result.id for item in preview.results))
+    return next(item for item in preview.results if item.id == result.id)
 
 
 @pytest.mark.parametrize("action", ["show", "update"])
-@pytest.mark.parametrize("language, text", [
-    ("pl", "Nie potwierdzono stanu prywatności pulpitu"),
-    ("en", "Desktop privacy state is not confirmed"),
-])
 def test_existing_provider_without_observation_reports_readable_local_result(
-    preview, action, language, text,
+    preview, action,
 ):
-    preview.window.draft.language = language
     providers = preview.app._system_providers
     assert any(provider.source == "desktop_context" for provider in providers)
     assert preview.app.computer_state.snapshot().provider("desktop_context") is None
@@ -102,8 +99,6 @@ def test_existing_provider_without_observation_reports_readable_local_result(
 
     assert responsive.is_set()
     assert result.status == "failed" and result.code == "desktop_context_unavailable"
-    assert text in preview.window.overlay_result.text()
-    assert text in preview.window.onboarding_result.text()
     assert not preview.overlays.engine.visible and not preview.overlays.windows
     assert not preview.app.supervisor.active
     assert all(not provider.is_alive for provider in providers)
@@ -199,8 +194,8 @@ def test_close_cancels_queued_preview_and_never_displays_after_late_sample(previ
 
     assert preview.app.router._worker.submit(hold_queue)
     assert entered.wait(2)
-    preview.window._preview_overlay()
-    assert preview.window._local_overlay_pending_id is not None
+    result = submit(preview)
+    assert result.status in {"accepted", "pending"}
     assert not preview.results
     original_generation = preview.app._generation
     shutdown = []

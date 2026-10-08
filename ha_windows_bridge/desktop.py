@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -34,8 +35,19 @@ def main(argv=None):
     parser.add_argument("--minimized", action="store_true")
     parser.add_argument("--autostart", action="store_true")
     parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument("--startup-diagnostic", type=Path, metavar="ABSOLUTE_JSON_PATH")
     parser.add_argument("--soak-telemetry", type=Path, metavar="ABSOLUTE_JSON_PATH")
     args = parser.parse_args(argv)
+    if args.startup_diagnostic is not None and (
+        not args.startup_diagnostic.is_absolute() or args.smoke_test
+    ):
+        parser.error("--startup-diagnostic requires an absolute path and normal profile loading")
+    trace = {"frozen": bool(getattr(sys, "frozen", False)), "executable": sys.executable}
+
+    def checkpoint(stage, **values):
+        if args.startup_diagnostic is not None:
+            trace.update(stage=stage, **values)
+            args.startup_diagnostic.write_text(json.dumps(trace, indent=2), encoding="utf-8")
     if args.soak_telemetry is not None and not args.soak_telemetry.is_absolute():
         parser.error("--soak-telemetry requires an absolute path")
     enable_per_monitor_v2()
@@ -44,27 +56,39 @@ def main(argv=None):
     qt.setQuitOnLastWindowClosed(False)
     qt.setStyle(BridgeProxyStyle(qt.style()))
     store = ConfigurationStore(SecretStore(DpapiCipher()))
+    if args.startup_diagnostic is not None:
+        store.load_diagnostic = lambda values: checkpoint("loader", loader=values)
+    checkpoint("resolved", config_path=str(store.config_path), profile_exists=store.config_path.exists())
     instance = None
     if args.smoke_test:
         config = AppConfig(auto_connect=False, start_with_windows=False, control_master_volume=False)
     else:
-        instance = SingleInstance()
-        if instance.already_running:
-            if not instance.activate_existing():
-                QMessageBox.information(None, "HA Windows Bridge", "Program jest już uruchomiony w zasobniku.")
-            instance.close()
-            return 0
+        if args.startup_diagnostic is None:
+            instance = SingleInstance()
+            if instance.already_running:
+                if not instance.activate_existing():
+                    QMessageBox.information(None, "HA Windows Bridge", "Program jest już uruchomiony w zasobniku.")
+                instance.close()
+                return 0
         try:
             config = store.load()
         except (RuntimeError, ValueError, OSError) as exc:
+            if args.startup_diagnostic is not None:
+                checkpoint("load_failed", error_type=type(exc).__name__)
+                return 1
             QMessageBox.warning(None, "Konfiguracja", str(exc))
             instance.close()
             return 1
+        checkpoint("loaded", mqtt_host_present=bool(config.mqtt.host),
+                   ha_url_present=bool(config.home_assistant.url),
+                   ha_enabled=config.home_assistant.enabled, auto_connect=config.auto_connect)
 
     runtime = Application(config, store, WindowsStartupManager(), WindowsAudioService(),
                           WindowsSystemMonitor(), WindowsMediaService(logging.getLogger("bridge.media")),
                           WindowsPowerActions(),
                           monitors=[f"{i + 1}: {screen.name()}" for i, screen in enumerate(qt.screens())])
+    checkpoint("runtime_created", runtime_matches_loaded=runtime.config == config,
+               services=[item.name for item in runtime.states.snapshot()])
     soak = SoakTelemetry(runtime, args.soak_telemetry) if args.soak_telemetry else None
     soak_timer = None
     if soak:
@@ -102,6 +126,26 @@ def main(argv=None):
         if event.topic in {"configuration.changed", "ui.theme_preview", "windows.theme_changed"} else None
     )
     qt.styleHints().colorSchemeChanged.connect(lambda *_: apply_theme(window.draft))
+    if args.startup_diagnostic is not None:
+        try:
+            checkpoint("gui_created", gui_matches_runtime=window.applied == runtime.config,
+                       draft_matches_loaded=window.draft == config,
+                       fields_match_loaded=all(
+                           window._fields[key].text() == value
+                           for key, value in (
+                               ("mqtt.host", config.mqtt.host),
+                               ("mqtt.username", config.mqtt.username),
+                               ("mqtt.password", config.mqtt.password),
+                               ("home_assistant.url", config.home_assistant.url),
+                               ("home_assistant.token", config.home_assistant.token),
+                           )), services_started=False)
+        finally:
+            window._force_close = True
+            window.close()
+            native_events.close()
+            overlays.close()
+            runtime.shutdown()
+        return 0
     if args.smoke_test:
         window.show()
         qt.processEvents()

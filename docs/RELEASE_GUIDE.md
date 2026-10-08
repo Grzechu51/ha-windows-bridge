@@ -1,6 +1,6 @@
 # Release candidate — installation, recovery and validation
 
-This guide describes the current source candidate, **2.0.0-alpha.10**, undergoing
+This guide describes the current source candidate, **2.0.0-alpha.11**, undergoing
 Phase 7. It is not an announcement of a published or accepted release. See
 [Phase 7 status](audit-2026-09-05/PHASE7.md) for evidence and outstanding gates.
 Use matching Windows and HA artifacts from the accepted build. Do not substitute
@@ -22,10 +22,10 @@ The additional lint/security and independent QA gates are tracked in PHASE7.md.
 
 Expected outputs in `dist`:
 
-- `HA-Windows-Bridge-2.0.0-alpha.10-win64.zip`
-- `HA-Windows-Bridge-Setup-2.0.0-alpha.10.exe`
-- `HA-Windows-Bridge-HA-Integration-2.0.0-alpha.10.zip`
-- `SHA256SUMS-2.0.0-alpha.10.txt`
+- `HA-Windows-Bridge-2.0.0-alpha.11-win64.zip`
+- `HA-Windows-Bridge-Setup-2.0.0-alpha.11.exe`
+- `HA-Windows-Bridge-HA-Integration-2.0.0-alpha.11.zip`
+- `SHA256SUMS-2.0.0-alpha.11.txt`
 
 Record the actual hashes with validation results. Rebuilding changes artifact
 identity and requires repeating affected artifact checks. No signing certificate
