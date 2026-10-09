@@ -11,7 +11,7 @@ CONNECTION_STATES = {
 CONNECTION_ERRORS = {
     "authentication": "Nieprawidłowy lub unieważniony token / dane logowania",
     "unauthorized": "Brak uprawnień do sterowania popupem tego komputera",
-    "integration_missing": "Zaktualizuj integrację HA Windows Bridge i uruchom HA ponownie",
+    "integration_missing": "Integracja HA niedostępna — oczekiwanie na jej uruchomienie",
     "bridge_not_configured": "Dodaj ten komputer w integracji HA Windows Bridge",
     "popup_unavailable": "Włącz encję popupu tego komputera w Home Assistant",
     "bridge_not_ready": "Integracja HA jeszcze się uruchamia",

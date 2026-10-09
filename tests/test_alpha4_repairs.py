@@ -82,7 +82,6 @@ def test_failed_save_restores_running_services_and_keeps_old_settings():
 @pytest.mark.parametrize("code,message,expected,state", [
     ("home_assistant_error", "Configure this Direct Windows Bridge in Home Assistant first", "bridge_not_configured", ConnectionState.CONFIGURATION_ERROR),
     ("unauthorized", "Unauthorized", "unauthorized", ConnectionState.AUTH_ERROR),
-    ("unknown_command", "Unknown command", "integration_missing", ConnectionState.CONFIGURATION_ERROR),
     ("popup_unavailable", "", "popup_unavailable", ConnectionState.CONFIGURATION_ERROR),
 ])
 def test_ha_retains_actual_configuration_error_instead_of_bad_token(code, message, expected, state):
@@ -104,7 +103,7 @@ def test_bad_token_is_distinct_from_bridge_configuration():
     assert transport.machine.status.error == "authentication"
 
 
-@pytest.mark.parametrize("code", ["bridge_busy", "bridge_not_ready", "unknown_error"])
+@pytest.mark.parametrize("code", ["bridge_busy", "bridge_not_ready", "unknown_error", "unknown_command"])
 def test_temporary_ha_failures_remain_retryable(code):
     error = response_error({"error": {"code": code, "message": "untrusted secret text"}})
     assert isinstance(error, HomeAssistantConnectionError)

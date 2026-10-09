@@ -1,11 +1,11 @@
-# Uruchomienie 2.0.0-alpha.11
+# Uruchomienie 2.0.0-alpha.12
 
 To kandydat przedpremierowy w trakcie Phase 7, bez finalnego PASS. Procedury instalacji, upgrade, recovery, uninstall i soak zawiera [release guide](RELEASE_GUIDE.md). Przed aktualizacją integracji wykonaj kopię zapasową Home Assistant. Nie uruchamiaj dwóch wersji Bridge jednocześnie.
 
 ## Aplikacja Windows
 
 Używaj aplikacji i integracji z tego samego bieżącego builda; starsze opublikowane alpha nie zastępują kandydata Phase 7.
-Zamknij działającą wersję Bridge z zasobnika. Uruchom otrzymany instalator `HA-Windows-Bridge-Setup-2.0.0-alpha.11.exe` albo rozpakuj **cały** ZIP `win64` do osobnego folderu i otwórz `HA Windows Bridge.exe`. Nie przenoś samego EXE bez folderu `_internal`.
+Zamknij działającą wersję Bridge z zasobnika. Uruchom otrzymany instalator `HA-Windows-Bridge-Setup-2.0.0-alpha.12.exe` albo rozpakuj **cały** ZIP `win64` do osobnego folderu i otwórz `HA Windows Bridge.exe`. Nie przenoś samego EXE bez folderu `_internal`.
 
 Dla uruchomienia z kodu, w PowerShell:
 

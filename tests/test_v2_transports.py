@@ -160,6 +160,92 @@ def test_p2_r10_old_direct_endpoint_invalid_format_is_permanent_mismatch():
     assert transport.stop()
 
 
+@pytest.mark.parametrize("previously_connected", [False, True])
+def test_direct_recovers_when_ha_registers_commands_late_after_restart(monkeypatch, previously_connected):
+    from ha_windows_bridge.communication.state import Backoff
+
+    monkeypatch.setattr(Backoff, "delay", lambda *_args: .001)
+    recovered = threading.Event()
+    closed = threading.Event()
+    states = []
+    events = EventBus()
+
+    class ReadySocket(Socket):
+        def recv(self):
+            try:
+                return super().recv()
+            except StopIteration:
+                if closed.wait(.02):
+                    raise ConnectionError("closed") from None
+                raise websocket.WebSocketTimeoutException() from None
+
+        def close(self, **kwargs):
+            super().close(**kwargs)
+            closed.set()
+
+    ready = ReadySocket(handshake())
+    missing = [Socket(handshake()[:2] + [{
+        "id": 1, "type": "result", "success": False,
+        "error": {"code": "unknown_command", "message": "Unknown command"},
+    }]) for _ in range(3)]
+    sockets = ([Socket(handshake())] if previously_connected else []) + missing + [ready]
+    attempts = []
+
+    def socket_factory(*_args, **_kwargs):
+        connection = sockets[len(attempts)]
+        attempts.append(connection)
+        return connection
+
+    def changed(event):
+        states.append(event.data)
+        connections = sum(state.state == ConnectionState.CONNECTED for state in states)
+        if connections == (2 if previously_connected else 1):
+            recovered.set()
+
+    events.subscribe("connection.changed", changed)
+    transport = HomeAssistantTransport(
+        AppConfig(home_assistant=HomeAssistantConfig(enabled=True, url="https://ha.local", token="private")),
+        events, lambda _value: None, socket_factory=socket_factory,
+    )
+    try:
+        transport.start()
+        assert recovered.wait(2)
+        assert transport.machine.status.state == ConnectionState.CONNECTED
+        assert len(attempts) == len(sockets)
+        assert all(socket.closed for socket in missing)
+        assert sum(state.error == "integration_missing" and state.state == ConnectionState.RETRY_WAIT for state in states) == 3
+        assert not any(state.state in {ConnectionState.AUTH_ERROR, ConnectionState.CONFIGURATION_ERROR} for state in states)
+        assert len({socket.sent[1]["session"] for socket in sockets}) == 1
+    finally:
+        assert transport.stop()
+    assert len(attempts) == len(sockets)
+    assert transport.machine.status.state == ConnectionState.STOPPED
+
+
+def test_stop_interrupts_retry_while_ha_commands_are_unavailable():
+    unavailable = threading.Event()
+    events = EventBus()
+    events.subscribe("connection.changed", lambda event: unavailable.set()
+                     if event.data.state == ConnectionState.RETRY_WAIT else None)
+    socket = Socket(handshake()[:2] + [{
+        "id": 1, "type": "result", "success": False,
+        "error": {"code": "unknown_command"},
+    }])
+    attempts = []
+    transport = HomeAssistantTransport(
+        AppConfig(home_assistant=HomeAssistantConfig(enabled=True, url="https://ha.local", token="private")),
+        events, lambda _value: None,
+        socket_factory=lambda *_args, **_kwargs: attempts.append(True) or socket,
+    )
+    try:
+        transport.start()
+        assert unavailable.wait(1)
+    finally:
+        assert transport.stop()
+    assert len(attempts) == 1
+    assert transport.machine.status.state == ConnectionState.STOPPED
+
+
 @pytest.mark.parametrize("messages", [[], [{"type": "auth_required"}], [{"type": "auth_required"}, {"type": "auth_invalid"}], handshake()[:2] + [{"id": 1, "success": False}]])
 def test_ha_failed_handshake_closes_socket(messages):
     socket = Socket(messages)

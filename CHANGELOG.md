@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.0-alpha.12 - 2026-10-09
+
+- Direct automatycznie odzyskuje połączenie po restarcie Home Assistant, również
+  gdy WebSocket jest dostępny przed zarejestrowaniem komend integracji;
+- chwilowe `unknown_command` uruchamia ponawianie z rosnącymi odstępami zamiast
+  trwałego błędu konfiguracji wymagającego kliknięcia „Połącz ponownie”;
+- czytelny komunikat oczekiwania na uruchomienie integracji;
+- zatrzymanie klienta przerywa ponawianie; błędny token i niezgodny protokół
+  nadal są zgłaszane jako błędy wymagające poprawienia ustawień.
+
+Poprawka jest po stronie klienta Windows. Komponent HA zachowuje dotychczasowe
+działanie; jego numer wersji został ujednolicony z pakietem Windows.
+
 ## 2.0.0-alpha.11 - 2026-10-08
 
 - uproszczony interfejs Windows, wskaźnik połączenia i przycisk sprawdzania połączenia;

@@ -53,7 +53,10 @@ def response_error(response):
     if code == "unauthorized":
         return HomeAssistantConnectionError("unauthorized", authentication=True)
     if code == "unknown_command":
-        return HomeAssistantConnectionError("integration_missing", configuration=True)
+        # HA may accept WebSocket authentication before custom integrations
+        # have registered their commands after a restart. Keep retrying with
+        # the normal bounded backoff instead of requiring a manual reconnect.
+        return HomeAssistantConnectionError("integration_missing")
     if code == "invalid_format":
         # Old Direct endpoints reject the v3 connect payload before they can
         # return our explicit protocol_mismatch code. This is permanent until

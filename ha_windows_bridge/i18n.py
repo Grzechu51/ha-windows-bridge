@@ -577,6 +577,7 @@ PL_TO_EN.update({
     "Bieżąca wartość, źródło i czas ostatniej aktualizacji są pokazane poniżej.": "Current value, source and time of last update are shown below.",
     "Bieżąca wartość jest pokazana poniżej.": "The current value is shown below.",
     "Sprawdź połączenie": "Check connection",
+    "Integracja HA niedostępna — oczekiwanie na jej uruchomienie": "HA integration unavailable — waiting for it to start",
     "Brak aktywnej aplikacji audio": "No active audio application",
     "Prywatność: może ujawniać nazwę aktywnej aplikacji i okna.": "Privacy: may expose the active application and window name.",
     "Jawne uprawnienie dla zdalnej akcji Home Assistant.": "Explicit permission for a remote Home Assistant action.",
