@@ -454,7 +454,6 @@ class MediaProvider(AdaptiveProvider):
         logger: logging.Logger | None = None,
     ) -> None:
         self.adapter = adapter
-        self._stale_after = max(2.0, float(interval) * 3.0)
         try:
             execute_parameters = inspect.signature(adapter.execute).parameters
         except (AttributeError, TypeError, ValueError):
@@ -475,6 +474,10 @@ class MediaProvider(AdaptiveProvider):
             stop_timeout=4.0,
             logger=logger,
         )
+        # Paused sessions stop changing, so adaptive polling can reach its
+        # maximum interval. Allow that wait plus the bounded WinRT read;
+        # otherwise a healthy paused player flickers to unavailable.
+        self._stale_after = self.maximum_interval + self.command_timeout
 
     def snapshot(self) -> MediaSnapshot:
         current = self.state.snapshot(stale_after=self._stale_after)

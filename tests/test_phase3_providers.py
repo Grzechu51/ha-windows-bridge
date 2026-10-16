@@ -4,7 +4,10 @@ import asyncio
 import queue
 import threading
 from ctypes import addressof, wintypes
+from dataclasses import replace
 from types import SimpleNamespace
+
+import pytest
 
 from ha_windows_bridge.application.application import Application
 from ha_windows_bridge.application.master_audio import MasterAudioProvider
@@ -544,6 +547,46 @@ def test_media_events_track_session_change_disappearance_and_target_commands():
         assert provider.execute("play") is False
     finally:
         assert provider.stop()
+
+
+@pytest.mark.parametrize("interval", [0.25, 1.0, 5.0])
+@pytest.mark.parametrize("playback_state", ["paused", "idle"])
+def test_media_remains_available_between_adaptive_reads(interval, playback_state):
+    now = [0.0]
+    state = ComputerStateStore(EventBus(), monotonic_clock=lambda: now[0])
+    state.begin_generation(1)
+    adapter = FakeMediaOwner()
+    provider = MediaProvider(adapter, state, 1, interval=interval)
+    provider._stopping = False
+    assert provider._sample(0)
+    adapter.current = replace(adapter.current, state=playback_state, position=42)
+
+    # Pausing stops position changes, so unchanged reads gradually back off.
+    # Check the entire wait and a slow WinRT read, rather than sleeping in tests.
+    for _ in range(12):
+        assert provider._sample(0)
+        now[0] += provider._current_interval + 2.9
+        assert provider.snapshot() == adapter.current
+    assert provider._current_interval == provider.maximum_interval
+
+    # A missing owner/read must still expire instead of retaining data forever.
+    now[0] += 10
+    assert provider.snapshot().supported is False
+    assert provider.snapshot().error == "freshness_deadline_exceeded"
+
+    adapter.current = replace(adapter.current, state="playing", position=43)
+    assert provider._sample(0)
+    assert provider.snapshot() == adapter.current
+    assert provider._current_interval == provider.interval
+
+    # Explicit failures and actual session removal take effect immediately.
+    adapter.current = MediaSnapshot(supported=False, error="WinRT lost")
+    assert provider._sample(0)
+    assert provider.snapshot().supported is False
+    assert provider.snapshot().error == "WinRT lost"
+    adapter.current = MediaSnapshot()
+    assert provider._sample(0)
+    assert provider.snapshot() == MediaSnapshot()
 
 
 def test_provider_freshness_is_derived_without_mutating_observed_snapshot():

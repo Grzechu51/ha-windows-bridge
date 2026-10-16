@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.0 - 2026-10-16
+
+- First stable 2.0 release with Windows volume, app controls, media and PC status in Home Assistant.
+- Paused and stopped media keep their track details visible between updates.
+- Automatic direct reconnection after Home Assistant restarts.
+- Simplified Windows interface and English setup guides.
+- Popups remain a work in progress; layouts and animations are still being refined.
+
 ## 2.0.0-alpha.12 - 2026-10-09
 
 - Direct automatycznie odzyskuje połączenie po restarcie Home Assistant, również

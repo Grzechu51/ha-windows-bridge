@@ -179,11 +179,10 @@ $AppDist = Join-Path $ProjectRoot "dist\HA Windows Bridge"
 Copy-Item -LiteralPath (Join-Path $ProjectRoot "LICENSE") -Destination (Join-Path $AppDist "LICENSE") -Force
 $DocsSource = [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot "docs"))
 $DocsDestination = Join-Path $AppDist "docs"
-Get-ChildItem -LiteralPath $DocsSource -Recurse -File -Filter "*.md" | ForEach-Object {
-    $RelativePath = $_.FullName.Substring($DocsSource.Length).TrimStart('\')
-    $Destination = Join-Path $DocsDestination $RelativePath
-    [System.IO.Directory]::CreateDirectory((Split-Path -Parent $Destination)) | Out-Null
-    Copy-Item -LiteralPath $_.FullName -Destination $Destination -Force
+foreach ($DocumentName in @("V2_QUICKSTART.md", "RELEASE_GUIDE.md", "HOME_ASSISTANT_COMPATIBILITY.md")) {
+    $Destination = Join-Path $DocsDestination $DocumentName
+    [System.IO.Directory]::CreateDirectory($DocsDestination) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $DocsSource $DocumentName) -Destination $Destination -Force
 }
 [System.IO.File]::WriteAllLines(
     (Join-Path $AppDist "START.md"),

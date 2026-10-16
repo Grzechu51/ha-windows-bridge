@@ -1,112 +1,26 @@
-> Minimum Home Assistant: **2026.9.0**. Current supported version: **2026.9.1**.
-> Phase 0 adds real runtime tests for both versions in `.github/workflows/validate.yml`
-> (`ha-runtime`, Ubuntu, Python 3.14). These tests require Linux CI; Windows tests
-> alone do not verify compatibility. The previous 2025.1.0 declaration was invalid
-> because the integration imports `homeassistant.helpers.target`.
+# Home Assistant integration
 
-# Integracja HA Windows Bridge
+Connect your Windows PC to Home Assistant with HA Windows Bridge **2.0.0**.
 
-Integracja dodaje do Home Assistant funkcje włączone w aplikacji Windows. Korzysta z
-istniejącej integracji MQTT i nie przechowuje hasła do brokera.
+## Install
 
-## Instalacja
+1. In HACS, add `Grzechu51/ha-windows-bridge` as an **Integration**.
+2. Install **HA Windows Bridge 2.0.0** and restart Home Assistant.
+3. Install the matching Windows app and enter your MQTT connection details.
+4. Enable the features you want to share and add the discovered PC in Home Assistant.
 
-1. W HACS otwórz **⋮ → Custom repositories**.
-2. Dodaj `https://github.com/Grzechu51/ha-windows-bridge` jako **Integration**.
-3. Pobierz **HA Windows Bridge** i uruchom Home Assistant ponownie.
-4. Uruchom połączenie MQTT w aplikacji Windows.
-5. Potwierdź wykryty komputer w **Ustawienia → Urządzenia i usługi**.
+For a manual install, copy `custom_components/ha_windows_bridge` from the **HA-Integration** ZIP into Home Assistant's `config/custom_components/` directory and restart Home Assistant.
 
-Przy instalacji ręcznej skopiuj `custom_components/ha_windows_bridge` do
-`config/custom_components/ha_windows_bridge` i uruchom HA ponownie.
+You need Home Assistant **2026.9.0 or newer**, a broker and the MQTT integration for volume controls, media and sensors.
 
-## Dostępne funkcje
+## Popups
 
-- głośność, wyciszenie, stan i osobny Media Player każdego wybranego programu;
-- Media Player aktywnej sesji Windows;
-- stan Windows, CPU, RAM, GPU i wybrane dyski;
-- wybrane urządzenia Windows;
-- wybór wyjścia audio;
-- bezpieczne akcje komputera;
-- powiadomienia i nakładka ekranowa.
+Enable screen messages in the Windows app, then use **HA Windows Bridge: Show Windows overlay** in a Home Assistant automation to display messages, images and media cards on your PC. Popups can also use a direct Home Assistant connection.
 
-Wyłączenie funkcji w aplikacji usuwa odpowiadające jej encje po zapisaniu ustawień.
+**Popups are still a work in progress.** Layouts and animations are being refined.
 
-## Nakładka
+## Update
 
-W aplikacji włącz **Funkcje → Nakładka → Wiadomości na ekranie** i wybierz monitor.
-Przycisk **Pokaż przykład** pozwala sprawdzić wiadomości, statusy, kamerę i Media Player
-bez połączenia z HA.
+Use matching Windows app and integration versions. Restart Home Assistant after updating the integration. Before upgrading from an older integration, take a backup and check your dashboards and automations: entity IDs can change during migration.
 
-W automatyzacji dodaj **HA Windows Bridge: Wyświetl nakładkę** i wybierz encję nakładki
-komputera jako cel. Treść i wygląd zapisują się w tej automatyzacji. Sekcja **Encje i obrazy**
-pozwala wskazać źródła tytułu i wiadomości, kamerę, encję obrazu albo adres grafiki.
-Postęp, czas i odtwarzacz mają własne pola wyboru.
-
-```yaml
-action: ha_windows_bridge.show_overlay
-target:
-  entity_id: notify.pc_windows_overlay
-data:
-  title: Pralka
-  message_entity: sensor.pralka_pozostaly_czas
-  progress_entity: sensor.pralka_postep
-  icon: mdi:washing-machine
-  size_mode: auto
-```
-
-Encje dostarczają stan w momencie wywołania akcji. Aby zmienić już widoczny popup,
-użyj `update_overlay` z jego `notification_id`.
-
-Aktualne multimedia wyświetlisz poleceniem:
-
-```yaml
-action: ha_windows_bridge.show_overlay
-target:
-  entity_id: notify.pc_windows_overlay
-data:
-  notification_id: now_playing
-  media: true
-  pinned: true
-  show_close_button: true
-  size_mode: auto
-  background_effect: liquid
-  edge_offset: 16
-```
-
-Pole **Odtwarzacz Home Assistant** pozwala wskazać dowolną dostępną encję
-`media_player`. Nakładka pokazuje nazwę odtwarzacza, tytuł, wykonawcę, postęp oraz
-okładkę po prawej stronie. Kolory powierzchni i tekstu są dobierane z grafiki z
-zachowaniem kontrastu. Bez wyboru encji opcja bieżących multimediów używa sesji z
-komputera docelowego. Tryb automatyczny dopasowuje kartę do treści i ignoruje pola
-`width` oraz `height`. Pole efektu tła oferuje powierzchnię jednolitą, standardowe
-rozmycie **Acrylic** i **Liquid Glass**.
-`edge_offset` odsuwa kartę od wybranych krawędzi ekranu. Ikonę wybiera się z biblioteki
-MDI HA. Priorytet porządkuje kolejkę, `show_lifetime` pokazuje pozostały czas, a
-`pause_on_hover` wstrzymuje zamknięcie po najechaniu.
-
-Układ `status` z opcją `display_mode: parallel` pokazuje jednocześnie do czterech
-niezależnych kart, na przykład baterię, CPU i RAM. Każda karta musi mieć własne
-`notification_id`; przy braku miejsca karty automatycznie przechodzą do kolejnego rzędu.
-Układ `badge` jest jeszcze mniejszy i tworzy kapsułkę z ikoną, miniaturą lub krótką
-wartością. Kilka znaczników z `display_mode: parallel` może utworzyć pasek wskaźników
-podobny do interfejsu telewizora.
-
-`update_overlay` aktualizuje wiadomość o tym samym ID, `remove_overlay` ją usuwa, a
-`clear_overlay` czyści kolejkę.
-
-Nakładkę można też dodać ręcznie jako bezpośredni endpoint WebSocket. W konfiguracji
-integracji podaj ID urządzenia widoczne w aplikacji Windows, a w aplikacji skonfiguruj
-adres Home Assistant i długoterminowy token. Tryb bezpośredni obsługuje nakładki oraz
-powiadomienia. Pozostałe encje używają MQTT.
-
-Po restarcie HA dodaj integrację ręcznie, wybierz jej encję `notify` jako cel akcji
-`ha_windows_bridge.show_overlay`, a następnie uruchom usługę w aplikacji Windows.
-Połączenie jest inicjowane wychodząco przez komputer do `/api/websocket`; nie wymaga
-otwierania portu przychodzącego na komputerze.
-
-## Usuwanie
-
-1. W aplikacji wybierz **Wyczyść dane MQTT**.
-2. Usuń wpis HA Windows Bridge w **Ustawienia → Urządzenia i usługi**.
-3. Usuń integrację w HACS i uruchom Home Assistant ponownie.
+[Setup guide](https://github.com/Grzechu51/ha-windows-bridge/blob/v2.0.0/docs/V2_QUICKSTART.md) · [Downloads](https://github.com/Grzechu51/ha-windows-bridge/releases/latest) · [Report a problem](https://github.com/Grzechu51/ha-windows-bridge/issues)

@@ -1,87 +1,47 @@
-# Uruchomienie 2.0.0-alpha.12
+# HA Windows Bridge 2.0
 
-To kandydat przedpremierowy w trakcie Phase 7, bez finalnego PASS. Procedury instalacji, upgrade, recovery, uninstall i soak zawiera [release guide](RELEASE_GUIDE.md). Przed aktualizacją integracji wykonaj kopię zapasową Home Assistant. Nie uruchamiaj dwóch wersji Bridge jednocześnie.
+## Install
 
-## Aplikacja Windows
+1. Download **HA-Windows-Bridge-Setup-2.0.0.exe** from the [latest release](https://github.com/Grzechu51/ha-windows-bridge/releases/latest) and run it from Windows Explorer.
+2. In HACS, add `Grzechu51/ha-windows-bridge` as an **Integration**, install version **2.0.0** and restart Home Assistant.
+3. Open the Windows app and enter your MQTT connection details in **Settings**. MQTT is needed for volume controls, media and sensors.
+4. Enable the features you want to share, apply your changes and start the connection from **Overview**.
+5. Add the discovered PC under **Settings → Devices & services** in Home Assistant.
 
-Używaj aplikacji i integracji z tego samego bieżącego builda; starsze opublikowane alpha nie zastępują kandydata Phase 7.
-Zamknij działającą wersję Bridge z zasobnika. Uruchom otrzymany instalator `HA-Windows-Bridge-Setup-2.0.0-alpha.12.exe` albo rozpakuj **cały** ZIP `win64` do osobnego folderu i otwórz `HA Windows Bridge.exe`. Nie przenoś samego EXE bez folderu `_internal`.
+Requirements: Windows 10 or 11 (64-bit), Home Assistant 2026.9.0 or newer, and a broker with the MQTT integration enabled in Home Assistant.
 
-Dla uruchomienia z kodu, w PowerShell:
+The portable Windows ZIP is an alternative to the installer. Extract the whole folder and keep `_internal` beside the EXE. Run only one copy of Bridge at a time.
 
-```powershell
-cd "F:\Codex\HA MQTT PC"
-.\.venv\Scripts\python.exe -m ha_windows_bridge
-```
+## Apps and media
 
-Nowa wersja zapisuje `%LOCALAPPDATA%\HAWindowsBridge\profile-v2.json`. Nie odczytuje automatycznie starego profilu. Sekrety są szyfrowane DPAPI dla bieżącego użytkownika Windows.
+In **Applications**, adjust Windows volume, active app volume and the volume of selected apps. If an app is missing, play some audio in it or add it manually. Enable the apps you want to share with Home Assistant and apply your changes.
 
-1. W **Przeglądzie** podaj broker MQTT albo włącz połączenie bezpośrednie. Statusy i ustawienia są na jednej stronie.
-2. W **Sensory i funkcje** włącz potrzebne opcje; dla dysków i urządzeń użyj przycisku wyboru.
-3. W **Nakładki** możesz wyświetlić lokalne przykłady bez HA.
-4. Wybierz **Zapisz i zastosuj**, a następnie **Przegląd → Uruchom**. Opcjonalnie włącz automatyczne łączenie.
+Enable the media player feature to share the current Windows media session, including playback controls, track details and artwork. Available controls depend on the player. Pausing playback keeps the current track visible.
 
-Zapis zachowuje stan usług: uruchomione wznawia z nowymi ustawieniami, zatrzymanych nie uruchamia. Opcja **Łącz automatycznie** dotyczy startu aplikacji. Test **Odtwarzacz** pokazuje aktualną sesję Windows z okładką i postępem utworu, bez paska czasu do zamknięcia. Gdy sesji nie ma, uruchom odtwarzanie i ponów test.
+## Popups
 
-## Wygląd nakładek
+**Popups are a work in progress.** Their layouts and animations are still being refined.
 
-W **Nakładki** wybierz **Animacja**: Przesunięcie, Przenikanie, Rozwinięcie albo Brak. Ustaw **Czas animacji**, a dla lokalnych testów także **Tło przykładów** i **Czas przykładu**. Kliknij **Zapisz i zastosuj**, następnie pokaż przykład. Wyłączenie animacji w Windows lub opcja ograniczenia animacji mają pierwszeństwo.
+Enable screen messages in **Notifications**, then use the **HA Windows Bridge: Show Windows overlay** action in Home Assistant to send messages, images or media cards to your PC.
 
-Odtwarzacz Windows aktualizuje pauzę, pozycję, tytuł i okładkę podczas wyświetlania nakładki. Sterowanie wymaga włączenia udostępniania multimediów. Pasek pod utworem pokazuje jego postęp, nie czas do zamknięcia. Nakładki innych odtwarzaczy z HA nie są nadpisywane sesją Windows.
+Popups can also use a direct Home Assistant connection:
 
-**Rozmycie** korzysta z przechwytywanego fragmentu pulpitu za nakładką. **Liquid Glass** używa tego samego rozmycia i dodaje delikatne powiększenie oraz refleks. Jeśli przechwytywanie jest niedostępne, aplikacja pokazuje jednolite tło. Przechwycone fragmenty nie są zapisywane ani wysyłane. Po zamknięciu nakładki odświeżanie i przechwytywanie zatrzymują się.
+1. Enter your Home Assistant URL and a long-lived access token in the Windows app. Use the normal server address, without `/api/websocket`.
+2. If your PC is already discovered through MQTT, use that same device. For a direct-only setup, add **HA Windows Bridge** in Home Assistant and use the device ID shown in the Windows app.
+3. Enable the direct connection, apply your changes and start the connection.
 
-## Aplikacje i diagnostyka
+Volume controls, media and sensors still use MQTT. Keep tokens private.
 
-Na stronie **Aplikacje** program automatycznie wykrywa aktywne sesje audio i ich ikony. Nowo wykryte programy nie są automatycznie udostępniane w HA: włącz wybrane przełączniki i zapisz. Jeśli programu nie ma, uruchom w nim dźwięk albo wybierz **Dodaj program…**.
+## Settings and updates
 
-W **Diagnostyce** znajdziesz aktualne CPU, RAM i liczbę wątków Bridge. CPU jest liczone względem całego procesora; pierwsza próbka pojawia się po około 2 sekundach. Odczyty zatrzymują się po ukryciu okna.
+Settings are stored in `%LOCALAPPDATA%\HAWindowsBridge\profile-v2.json`. Updates within version 2 preserve this profile. Credentials are protected for your Windows account.
 
-## Instalacja integracji kandydata
+Use **Settings → Export settings** for a settings copy without passwords or tokens. Importing adds settings to the form; apply your changes to use them. Re-enter credentials if you change the connection details.
 
-Do walidacji Phase 7 zainstaluj ręcznie `custom_components/ha_windows_bridge` z pakietu `HA-Integration` tego samego builda i uruchom testowy HA ponownie. Publikacja kandydata przez HACS jest osobnym krokiem release. Minimalna wersja HA to 2026.9.0. Migracja rejestru jest breaking: stare identyfikatory encji i historia mogą się zmienić; sprawdź Repairs, automatyzacje i dashboardy według [dokumentacji zgodności](HOME_ASSISTANT_COMPATIBILITY.md).
+Before updating, close Bridge from the system tray. Use matching Windows and Home Assistant integration versions, then restart Home Assistant after updating the integration. See the [upgrade guide](RELEASE_GUIDE.md) and [compatibility notes](HOME_ASSISTANT_COMPATIBILITY.md) when moving from an older release.
 
-Po publikacji zatwierdzonego wydania można użyć HACS. Nie wybieraj starszej alpha jako zamiennika nieopublikowanego kandydata.
+## Troubleshooting
 
-## MQTT
+Check connection status in **Overview** and use **Check connection** or **Reconnect**. Home Assistant restarts are handled automatically once the integration is available again.
 
-W HA potrzebne są działający broker i integracja MQTT. Bridge 2.0 publikuje discovery własnej integracji. Zainstaluj folder `custom_components/ha_windows_bridge` z tej samej gałęzi 2.0, zrestartuj HA i dodaj wykryty komputer.
-
-Nie instaluj alpha nad produkcyjną integracją bez kopii zapasowej HA. Stare wydanie 0.x nie realizuje nowego protokołu ACK.
-
-## Bezpośrednie połączenie WebSocket
-
-1. W HA zainstaluj **integrację 2.0** i uruchom HA ponownie.
-2. Jeśli komputer jest już dodany przez MQTT i ma włączoną encję popupu, od alpha.4 nie dodawaj drugiego wpisu Direct. Aktualizacja integracji i **Połącz ponownie** wystarczą.
-3. Gdy nie używasz MQTT: w aplikacji skopiuj **ID urządzenia** z Przeglądu. W HA: **Ustawienia → Urządzenia i usługi → Dodaj integrację → HA Windows Bridge**, wpisz nazwę komputera i to ID.
-4. Utwórz w profilu użytkownika HA długoterminowy token. Użytkownik tokenu musi mieć prawo sterowania encją popupu tego komputera.
-5. W aplikacji wpisz adres, np. `http://192.168.0.60:8123`, oraz token. Nie wpisuj końcówki `/api/websocket` — aplikacja dodaje ją sama.
-6. W **Nakładki** włącz **Wiadomości na ekranie**, a w Przeglądzie połączenie bezpośrednie. Zapisz i uruchom usługi. Gdy nakładki są wyłączone, połączenie Direct pozostaje nieaktywne i aplikacja pokazuje tę przyczynę.
-
-Kanał Direct 2.0 służy nakładkom. Audio i sensory korzystają z MQTT. Nie wpisuj tokenu do automatyzacji ani w adresie URL. Po zmianie danych logowania użyj **Połącz ponownie**.
-
-Jeśli używasz obu połączeń, popup korzysta z dostępnej sesji Direct, a po jej rozłączeniu wraca do MQTT. Bieżąca integracja konsoliduje wpisy Direct/MQTT w jeden model komputera. Konflikty migracji pojawiają się w Repairs. Status odróżnia błędny token, brak uprawnień, niewłączoną encję i brak konfiguracji. Aktualizuj integrację HA razem z aplikacją Windows.
-
-## Automatyzacja HA
-
-Użyj akcji **HA Windows Bridge: Wyświetl nakładkę Windows** i wybierz encję popupu komputera. Pola encji, kamery, obrazu i odtwarzacza są w tej akcji, nie w selektorze zapisanych szablonów. Wersja 2.0 nie zawiera lokalnego konfiguratora zapisanych popupów.
-
-ACK potwierdza obsługę polecenia przez Bridge; nakładka może czekać w kolejce. Pełny ekran lub blokada sesji mogą wstrzymać wyświetlenie zgodnie z ustawieniami.
-
-## Konfiguracja i diagnostyka
-
-- **Ustawienia → Eksportuj ustawienia**: plik bez sekretów.
-- **Importuj ustawienia**: wczytuje profil 2.0 do formularza; dopiero zapis go stosuje. Zmiana serwera wymaga ponownego podania hasła/tokenu.
-- **Przywróć domyślne ustawienia**: zachowuje dane połączeń; zmiana wymaga zapisania.
-- **Diagnostyka → Eksportuj raport**: informacje o wersji, systemie i błędach, bez tokenów i haseł.
-
-## Testy bez uruchamiania usług
-
-```powershell
-.\scripts\test_local.ps1 -SkipBuild
-$env:QT_QPA_PLATFORM = "offscreen"
-.\.venv\Scripts\python.exe main.py --smoke-test
-Remove-Item Env:QT_QPA_PLATFORM
-```
-
-Nie pozostawiaj `QT_QPA_PLATFORM=offscreen`, jeżeli chcesz zobaczyć normalne okno aplikacji.
+For a problem report, export a diagnostic report from **Diagnostics** and describe what happened in a [GitHub issue](https://github.com/Grzechu51/ha-windows-bridge/issues). The diagnostic export excludes passwords and tokens.

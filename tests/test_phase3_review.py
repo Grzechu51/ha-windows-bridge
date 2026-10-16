@@ -1265,6 +1265,9 @@ def test_r6_public_pnp_and_media_facades_reject_stale_samples() -> None:
 
     with pytest.raises(ProviderUnavailable, match="freshness_deadline_exceeded"):
         SystemProviderView(Mock(), state, stale_after=5).present_device_ids()
+    # Media polling can wait ten seconds between unchanged observations,
+    # plus the bounded WinRT read. Only a genuinely overdue sample expires.
+    monotonic[0] = 30.0
     media = MediaProvider(Mock(), state, 1, interval=1).snapshot()
     assert media.supported is False
     assert media.state == "idle"
