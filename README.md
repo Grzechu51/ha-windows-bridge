@@ -19,6 +19,27 @@ Control volume, manage playback and check your PC from Home Assistant. Choose wh
 - Desktop notifications and popups from Home Assistant.
 - Optional PC lock, sleep, restart and shutdown controls.
 
+## Windows app
+
+Manage Windows volume and individual apps from one screen, and choose which controls to share with Home Assistant.
+
+<p align="center">
+  <img src="docs/screenshots/applications.png" alt="Applications screen with Windows volume and separate controls for Chrome, Discord and Spotify" width="900">
+</p>
+
+<details>
+<summary>Explore computer and app settings</summary>
+
+| System sensors | Presence and devices |
+| :---: | :---: |
+| [![System sensor settings](docs/screenshots/computer-system.png)](docs/screenshots/computer-system.png) | [![Presence, privacy and device settings](docs/screenshots/computer-presence.png)](docs/screenshots/computer-presence.png) |
+| **Audio and remote controls** | **App preferences** |
+| [![Audio, media and remote control settings](docs/screenshots/computer-audio.png)](docs/screenshots/computer-audio.png) | [![Startup, theme and language preferences](docs/screenshots/settings.png)](docs/screenshots/settings.png) |
+
+Click a screenshot to view it at full size.
+
+</details>
+
 ## Get started
 
 You need **Windows 10 or 11 (64-bit)** and **Home Assistant 2026.9.0 or newer**. Volume controls, media and sensors require MQTT.
@@ -37,6 +58,12 @@ For a manual integration install, download the **HA-Integration** ZIP from the s
 Send messages, images and media cards to your Windows desktop using the **HA Windows Bridge: Show Windows overlay** action in Home Assistant. Popups can use MQTT or a direct Home Assistant connection.
 
 **This feature is under active development.** Layouts and animations are still being refined.
+
+Choose whether to show on-screen messages over fullscreen apps and adjust their animation duration.
+
+<p align="center">
+  <img src="docs/screenshots/notifications.png" alt="Notifications settings for on-screen messages, fullscreen behaviour and animation duration" width="900">
+</p>
 
 ## Help
 
