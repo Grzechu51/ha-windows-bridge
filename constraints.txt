@@ -9,7 +9,7 @@ pywin32==312
 qrcode==8.2
 QtAwesome==1.4.2
 QtPy==2.4.3
-Pillow==12.3.0
+Pillow==13.0.0
 winrt-Windows.Foundation==3.2.1
 winrt-Windows.Foundation.Collections==3.2.1
 winrt-Windows.Media.Control==3.2.1
