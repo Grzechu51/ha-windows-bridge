@@ -1,7 +1,10 @@
 import json
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
+from ha_windows_bridge import i18n
 from ha_windows_bridge.config import AppConfig, MqttConfig
 from ha_windows_bridge.core.configuration import ConfigurationStore, parse_settings
 from ha_windows_bridge.core.secrets import SecretStore
@@ -14,6 +17,25 @@ class TestCipher:
         if not value.startswith(b"sealed:"):
             raise ValueError()
         return value[7:][::-1]
+
+
+@pytest.mark.parametrize(("langid", "expected"), [(0x0809, "en"), (0x0415, "pl"), (0x0407, "en")])
+def test_profile_uses_windows_display_language_until_a_choice_is_saved(tmp_path, monkeypatch, langid, expected):
+    get_ui_language = Mock(return_value=langid)
+    monkeypatch.setattr(i18n, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(i18n.ctypes, "windll", SimpleNamespace(
+        kernel32=SimpleNamespace(GetUserDefaultUILanguage=get_ui_language)), raising=False)
+    store = ConfigurationStore(SecretStore(TestCipher()), tmp_path)
+
+    assert store.load().language == expected
+    assert parse_settings({"theme": "dark"}).language == expected
+    assert not store.config_path.exists()
+
+    chosen = "pl" if expected == "en" else "en"
+    store.save(AppConfig(language=chosen))
+    get_ui_language.reset_mock()
+    assert store.load().language == chosen
+    get_ui_language.assert_not_called()
 
 
 def test_v2_profile_is_isolated_atomic_and_exports_without_secrets(tmp_path):

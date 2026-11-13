@@ -17,6 +17,7 @@ from ..config import (
     TrackedDeviceConfig,
     default_data_dir,
 )
+from ..i18n import windows_display_language
 from .secrets import SecretStore
 
 PROFILE_FORMAT = 2
@@ -81,6 +82,8 @@ def parse_settings(value: dict) -> AppConfig:
                 raise ValueError(f"Invalid setting: {key}")
             data[key] = item
     try:
+        if "language" not in data:
+            data["language"] = windows_display_language()
         config = AppConfig(**data)
     except (TypeError, AttributeError, OverflowError) as exc:
         raise ValueError("Invalid configuration value") from exc
@@ -106,7 +109,8 @@ class ConfigurationStore:
         observe(config_path=str(self.config_path), exists=exists)
         if not exists:
             observe(branch="missing_profile_fallback")
-            return AppConfig(start_with_windows=False, auto_connect=False, theme="system")
+            return AppConfig(start_with_windows=False, auto_connect=False, theme="system",
+                             language=windows_display_language())
         if self.config_path.stat().st_size > MAX_PROFILE_BYTES:
             observe(branch="parse_error")
             raise ValueError("Profile exceeds size limit")

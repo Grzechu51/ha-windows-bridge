@@ -1,6 +1,6 @@
 # Installation, updates and recovery
 
-Download the Windows app and matching Home Assistant integration from the [latest release](https://github.com/Grzechu51/ha-windows-bridge/releases/latest). The current version is **2.0.0**.
+Download the Windows app and matching Home Assistant integration from the [latest release](https://github.com/Grzechu51/ha-windows-bridge/releases/latest). The current version is **2.0.1**.
 
 ## Choose a download
 

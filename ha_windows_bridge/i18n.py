@@ -1,12 +1,29 @@
 from __future__ import annotations
 
 import copy
+import ctypes
 import logging
+import sys
+
+
+def windows_display_language() -> str:
+    """Use the Windows display language, independently of regional formats."""
+    if sys.platform == "win32":
+        try:
+            get_ui_language = ctypes.windll.kernel32.GetUserDefaultUILanguage
+            get_ui_language.restype = ctypes.c_ushort
+            # PRIMARYLANGID keeps the low 10 bits of a Windows LANGID.
+            if (get_ui_language() & 0x03FF) == 0x15:  # LANG_POLISH
+                return "pl"
+        except (AttributeError, OSError):
+            pass
+    return "en"
 
 # The UI is authored in Polish. Keeping translations in one table makes it
 # possible to retranslate existing widgets at runtime without rebuilding the
 # window or losing unsaved form values.
 PL_TO_EN: dict[str, str] = {
+    "Program jest już uruchomiony w zasobniku.": "The app is already running in the system tray.",
     "Pokaż przykład nakładki": "Show overlay example",
     "Zamknij przykład nakładki": "Close overlay example",
     "Ogranicz animacje": "Reduce motion",

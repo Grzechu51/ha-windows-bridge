@@ -77,7 +77,7 @@ jobs:
         with:
           python-version: "3.14"
       - name: Install HA runtime system dependencies
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y build-essential ffmpeg libturbojpeg
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y build-essential ffmpeg libturbojpeg0
       - name: Install real Home Assistant and test dependencies
         run: >-
           python -m pip install "homeassistant==${{ matrix.ha }}"

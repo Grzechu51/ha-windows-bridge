@@ -2,8 +2,8 @@
 
 ## Install
 
-1. Download **HA-Windows-Bridge-Setup-2.0.0.exe** from the [latest release](https://github.com/Grzechu51/ha-windows-bridge/releases/latest) and run it from Windows Explorer.
-2. In HACS, add `Grzechu51/ha-windows-bridge` as an **Integration**, install version **2.0.0** and restart Home Assistant.
+1. Download **HA-Windows-Bridge-Setup-2.0.1.exe** from the [latest release](https://github.com/Grzechu51/ha-windows-bridge/releases/latest) and run it from Windows Explorer.
+2. In HACS, add `Grzechu51/ha-windows-bridge` as an **Integration**, install version **2.0.1** and restart Home Assistant.
 3. Open the Windows app and enter your MQTT connection details in **Settings**. MQTT is needed for volume controls, media and sensors.
 4. Enable the features you want to share, apply your changes and start the connection from **Overview**.
 5. Add the discovered PC under **Settings → Devices & services** in Home Assistant.

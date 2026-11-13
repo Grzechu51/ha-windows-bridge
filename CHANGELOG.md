@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.1 - 2026-11-13
+
+- On first launch, the Windows app uses Polish on a Polish Windows display language and English otherwise. Saved language choices are preserved.
+- The installer translates its desktop shortcut and launch options in both English and Polish.
+- Updated the bundled Pillow dependency to 13.0.0 for security fixes.
+
 ## 2.0.0 - 2026-10-16
 
 - First stable 2.0 release with Windows volume, app controls, media and PC status in Home Assistant.

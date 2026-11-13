@@ -16,6 +16,7 @@ from .config import AppConfig
 from .core.configuration import ConfigurationStore
 from .core.secrets import SecretStore
 from .core.soak_telemetry import SoakTelemetry
+from .i18n import translate, windows_display_language
 from .media import WindowsMediaService
 from .overlays.service import OverlayService
 from .single_instance import SingleInstance
@@ -61,13 +62,15 @@ def main(argv=None):
     checkpoint("resolved", config_path=str(store.config_path), profile_exists=store.config_path.exists())
     instance = None
     if args.smoke_test:
-        config = AppConfig(auto_connect=False, start_with_windows=False, control_master_volume=False)
+        config = AppConfig(auto_connect=False, start_with_windows=False, control_master_volume=False,
+                           language=windows_display_language())
     else:
         if args.startup_diagnostic is None:
             instance = SingleInstance()
             if instance.already_running:
                 if not instance.activate_existing():
-                    QMessageBox.information(None, "HA Windows Bridge", "Program jest już uruchomiony w zasobniku.")
+                    QMessageBox.information(None, "HA Windows Bridge", translate(
+                        "Program jest już uruchomiony w zasobniku.", windows_display_language()))
                 instance.close()
                 return 0
         try:
@@ -76,7 +79,8 @@ def main(argv=None):
             if args.startup_diagnostic is not None:
                 checkpoint("load_failed", error_type=type(exc).__name__)
                 return 1
-            QMessageBox.warning(None, "Konfiguracja", str(exc))
+            language = windows_display_language()
+            QMessageBox.warning(None, translate("Konfiguracja", language), translate(str(exc), language))
             instance.close()
             return 1
         checkpoint("loaded", mqtt_host_present=bool(config.mqtt.host),

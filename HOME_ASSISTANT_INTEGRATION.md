@@ -1,11 +1,11 @@
 # Home Assistant integration
 
-Connect your Windows PC to Home Assistant with HA Windows Bridge **2.0.0**.
+Connect your Windows PC to Home Assistant with HA Windows Bridge **2.0.1**.
 
 ## Install
 
 1. In HACS, add `Grzechu51/ha-windows-bridge` as an **Integration**.
-2. Install **HA Windows Bridge 2.0.0** and restart Home Assistant.
+2. Install **HA Windows Bridge 2.0.1** and restart Home Assistant.
 3. Install the matching Windows app and enter your MQTT connection details.
 4. Enable the features you want to share and add the discovered PC in Home Assistant.
 
@@ -23,4 +23,4 @@ Enable screen messages in the Windows app, then use **HA Windows Bridge: Show Wi
 
 Use matching Windows app and integration versions. Restart Home Assistant after updating the integration. Before upgrading from an older integration, take a backup and check your dashboards and automations: entity IDs can change during migration.
 
-[Setup guide](https://github.com/Grzechu51/ha-windows-bridge/blob/v2.0.0/docs/V2_QUICKSTART.md) · [Downloads](https://github.com/Grzechu51/ha-windows-bridge/releases/latest) · [Report a problem](https://github.com/Grzechu51/ha-windows-bridge/issues)
+[Setup guide](https://github.com/Grzechu51/ha-windows-bridge/blob/v2.0.1/docs/V2_QUICKSTART.md) · [Downloads](https://github.com/Grzechu51/ha-windows-bridge/releases/latest) · [Report a problem](https://github.com/Grzechu51/ha-windows-bridge/issues)

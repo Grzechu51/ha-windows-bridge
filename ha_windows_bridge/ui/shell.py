@@ -932,7 +932,8 @@ class DesktopWindow(QMainWindow):
         self._collect()
         self.draft = AppConfig(device_name=self.draft.device_name, device_id=self.draft.device_id,
                                mqtt=copy.deepcopy(self.draft.mqtt), home_assistant=copy.deepcopy(self.draft.home_assistant),
-                               start_with_windows=False, auto_connect=False, theme="system")
+                               start_with_windows=False, auto_connect=False, theme="system",
+                               language=self.draft.language)
         self._refresh_fields()
         self.application.events.emit("ui.theme_preview", copy.deepcopy(self.draft))
         self._translate_static(self.draft.language)
